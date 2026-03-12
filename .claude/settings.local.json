@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 --version)",
+      "Bash(python3 -m venv venv)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip install -r requirements.txt)",
+      "Bash(python3 -c \":*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(/usr/bin/python3 -c \"import sys; print\\(sys.version\\); print\\(sys.executable\\)\")",
+      "Bash(pip3 install --user streamlit python-dotenv pandas Pillow requests anthropic)",
+      "Bash(chmod +x \"/Users/singpu03/Documents/Prosper with Claude March 2026/run.sh\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501)",
+      "Bash(pkill -f \"streamlit run\")"
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+Collecting plotly
+  Downloading plotly-6.6.0-py3-none-any.whl (9.9 MB)
+Requirement already satisfied: packaging in /private/tmp/prosper/venv/lib/python3.9/site-packages (from plotly) (25.0)
+Requirement already satisfied: narwhals>=1.15.1 in /private/tmp/prosper/venv/lib/python3.9/site-packages (from plotly) (2.17.0)
+Installing collected packages: plotly
+Successfully installed plotly-6.6.0
+WARNING: You are using pip version 21.2.4; however, version 26.0.1 is available.
+You should consider upgrading via the '/private/tmp/prosper/venv/bin/python3 -m pip install --upgrade pip' command.

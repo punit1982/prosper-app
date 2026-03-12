@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "prosper-app",
+      "runtimeExecutable": "/Users/singpu03/Documents/Prosper with Claude March 2026/venv/bin/python3",
+      "runtimeArgs": ["-m", "streamlit", "run", "/Users/singpu03/Documents/Prosper with Claude March 2026/app.py", "--server.headless", "true", "--server.port", "8501"],
+      "port": 8501
+    }
+  ]
+}

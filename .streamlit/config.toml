@@ -1,0 +1,28 @@
+[theme]
+primaryColor = "#1E88E5"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#FAFAFA"
+font = "sans serif"
+
+[server]
+maxUploadSize = 50
+headless = true
+# Prevent server from dying on unhandled exceptions in threads
+enableCORS = false
+enableXsrfProtection = false
+
+[runner]
+# Magic auto-rerun is disabled — prevents runaway re-runs during heavy fetches
+magicEnabled = false
+# Don't crash on uncaught exceptions from background threads
+fastReruns = true
+
+[browser]
+gatherUsageStats = false
+# Keep server alive even when browser tab is closed
+serverAddress = "localhost"
+
+[global]
+# Suppress deprecation warnings that can clutter stderr and trigger restarts
+suppressDeprecationWarnings = true
