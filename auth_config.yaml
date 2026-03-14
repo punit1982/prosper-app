@@ -1,0 +1,12 @@
+credentials:
+  usernames:
+    admin:
+      email: admin@prosper.local
+      first_name: Admin
+      last_name: User
+      password: $2b$12$x2diND1aUfq8b8Q1beHUF.XKxvFf7L.aE.or4PnC5r1ZKkG3Pxfoi
+      role: admin
+cookie:
+  expiry_days: 30
+  key: prosper_auth_cookie_key_2026
+  name: prosper_auth

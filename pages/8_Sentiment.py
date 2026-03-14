@@ -96,6 +96,10 @@ try:
         if s > -0.3:   return "🟠 Slightly Bearish"
         return "🔴 Bearish"
 
+    def _to_100(v):
+        """Convert -1..+1 score to -100..+100 whole number."""
+        return round(v * 100)
+
     rows = []
     for t in tickers:
         c = composites.get(t, {})
@@ -103,10 +107,10 @@ try:
         rows.append({
             "Ticker":     t,
             "Name":       names.get(t, ""),
-            "Composite":  round(c.get("composite_score", 0), 3),
-            "News":       round(c.get("news", {}).get("score", 0), 3),
-            "StockTwits": round(c.get("stocktwits", {}).get("score", 0), 3),
-            "Reddit":     round(c.get("reddit", {}).get("score", 0), 3),
+            "Composite":  _to_100(c.get("composite_score", 0)),
+            "News":       _to_100(c.get("news", {}).get("score", 0)),
+            "StockTwits": _to_100(c.get("stocktwits", {}).get("score", 0)),
+            "Reddit":     _to_100(c.get("reddit", {}).get("score", 0)),
             "Headlines":  s.get("total_headlines", 0),
             "Signal":     score_label(c.get("composite_score", 0)),
         })
@@ -119,8 +123,8 @@ try:
             x="Composite", y="Ticker", orientation="h",
             color="Composite",
             color_continuous_scale=["#DD2C00", "#FF6D00", "#FFD600", "#64DD17", "#00C853"],
-            range_color=[-1, 1],
-            title="Composite Sentiment Score — All Holdings",
+            range_color=[-100, 100],
+            title="Sentiment Score — All Holdings (-100 to +100)",
             text="Signal",
         )
         fig.update_layout(
@@ -134,9 +138,10 @@ try:
         fig.update_traces(textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
 
-        avg = sdf["Composite"].mean()
+        avg_raw = sdf["Composite"].mean()
+        avg_display = round(avg_raw)
         c1, c2, c3 = st.columns(3)
-        c1.metric("Portfolio Avg Sentiment", f"{avg:+.2f}", delta=score_label(avg))
+        c1.metric("Portfolio Avg Sentiment", f"{avg_display:+d}", delta=score_label(avg_raw / 100))
         c2.metric("Most Bullish", sdf.loc[sdf["Composite"].idxmax(), "Ticker"] if not sdf.empty else "—")
         c3.metric("Most Bearish", sdf.loc[sdf["Composite"].idxmin(), "Ticker"] if not sdf.empty else "—")
 
@@ -165,13 +170,14 @@ try:
 
         comp_score = c.get("composite_score", 0)
         label      = score_label(comp_score)
+        comp_100   = round(comp_score * 100)
 
-        st.markdown(f"### {selected}  ·  {label}  `{comp_score:+.2f}`")
+        st.markdown(f"### {selected}  ·  {label}  `{comp_100:+d}`")
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("📰 News (40%)",         f"{c.get('news', {}).get('score', 0):+.2f}")
-        col2.metric("💬 StockTwits (35%)",   f"{c.get('stocktwits', {}).get('score', 0):+.2f}")
-        col3.metric("📡 Reddit (25%)",       f"{c.get('reddit', {}).get('score', 0):+.2f}")
+        col1.metric("📰 News (40%)",         f"{round(c.get('news', {}).get('score', 0) * 100):+d}")
+        col2.metric("💬 StockTwits (35%)",   f"{round(c.get('stocktwits', {}).get('score', 0) * 100):+d}")
+        col3.metric("📡 Reddit (25%)",       f"{round(c.get('reddit', {}).get('score', 0) * 100):+d}")
 
         # StockTwits messages
         st_data = c.get("stocktwits", {})
@@ -231,7 +237,7 @@ try:
     st.divider()
     st.caption(
         "**Methodology:** News 40% · StockTwits 35% · Reddit 25%  ·  "
-        "Score: −1.0 (very bearish) → +1.0 (very bullish)"
+        "Score: −100 (very bearish) → +100 (very bullish)"
     )
 
 except Exception as _err:

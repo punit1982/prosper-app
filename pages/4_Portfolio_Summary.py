@@ -44,18 +44,95 @@ try:
     t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
 
     # Fetch ticker info for sector/industry/country
+    # Prefer extended_df data if already loaded from Dashboard (avoids duplicate fetch)
     info_key = "summary_info_map"
-    if info_key not in st.session_state:
-        with st.spinner("Loading sector & industry data…"):
-            tickers = enriched[t_col].dropna().tolist()
-            st.session_state[info_key] = get_ticker_info_batch(tickers)
 
-    info_map = st.session_state[info_key]
+    # If extended_df is already loaded from Dashboard, extract sector/industry from it
+    ext_df = st.session_state.get("extended_df")
+    if ext_df is not None and "sector" in ext_df.columns:
+        # Reuse sector/industry/country from the already-loaded extended data
+        ext_t = "ticker_resolved" if "ticker_resolved" in ext_df.columns else "ticker"
+        _ext_sector   = dict(zip(ext_df[ext_t], ext_df.get("sector", "")))
+        _ext_industry = dict(zip(ext_df[ext_t], ext_df.get("industry", "")))
+        _ext_country  = dict(zip(ext_df[ext_t], ext_df.get("country", "")))
+        _ext_mcap     = dict(zip(ext_df[ext_t], ext_df.get("market_cap", 0)))
+        _ext_qt       = dict(zip(ext_df[ext_t], ext_df.get("quote_type", "EQUITY")))
+
+        # Build a lightweight info_map from extended_df
+        info_map = {}
+        for t in enriched[t_col].dropna().tolist():
+            info_map[t] = {
+                "sector": _ext_sector.get(t, ""),
+                "industry": _ext_industry.get(t, ""),
+                "country": _ext_country.get(t, ""),
+                "marketCap": _ext_mcap.get(t, 0),
+                "quoteType": _ext_qt.get(t, "EQUITY"),
+            }
+    else:
+        # Fetch fresh from yfinance
+        if info_key not in st.session_state:
+            with st.spinner("Loading sector & industry data…"):
+                tickers = enriched[t_col].dropna().tolist()
+                st.session_state[info_key] = get_ticker_info_batch(tickers)
+        info_map = st.session_state[info_key]
 
     # Enrich with classification data
-    enriched["sector"]    = enriched[t_col].map(lambda t: info_map.get(t, {}).get("sector", "Unknown"))
-    enriched["industry"]  = enriched[t_col].map(lambda t: info_map.get(t, {}).get("industry", "Unknown"))
-    enriched["country"]   = enriched[t_col].map(lambda t: info_map.get(t, {}).get("country", "Unknown"))
+    def _resolve_sector(t):
+        _inf = info_map.get(t, {})
+        qt = str(_inf.get("quoteType", "EQUITY")).upper()
+        if qt in ("ETF", "MUTUALFUND"):
+            return "Funds & ETFs"
+        sector = _inf.get("sector")
+        if sector and str(sector) not in ("", "None", "nan"):
+            return sector
+        # Fallback: try to infer from ticker name in holdings
+        name_val = enriched.loc[enriched[t_col] == t, "name"].values
+        if len(name_val) > 0 and name_val[0]:
+            n = str(name_val[0]).lower()
+            if any(k in n for k in ("bank", "finance", "capital", "invest")):
+                return "Financial Services"
+            if any(k in n for k in ("tech", "software", "digital", "cyber")):
+                return "Technology"
+            if any(k in n for k in ("energy", "oil", "gas", "petrol")):
+                return "Energy"
+            if any(k in n for k in ("telecom", "communication")):
+                return "Communication Services"
+            if any(k in n for k in ("real estate", "properties", "reit")):
+                return "Real Estate"
+        return "Other"
+
+    def _resolve_industry(t):
+        _inf = info_map.get(t, {})
+        qt = str(_inf.get("quoteType", "EQUITY")).upper()
+        if qt in ("ETF", "MUTUALFUND"):
+            cat = _inf.get("category", "")
+            return cat if cat and str(cat) not in ("", "None", "nan") else "Fund / ETF"
+        industry = _inf.get("industry")
+        return industry if industry and str(industry) not in ("", "None", "nan") else "Other"
+
+    _CURRENCY_COUNTRY = {
+        "AED": "United Arab Emirates", "USD": "United States", "EUR": "Europe",
+        "GBP": "United Kingdom", "INR": "India", "SGD": "Singapore",
+        "HKD": "Hong Kong", "AUD": "Australia", "CAD": "Canada",
+        "JPY": "Japan", "CHF": "Switzerland", "CNY": "China",
+        "SAR": "Saudi Arabia", "ZAR": "South Africa", "KRW": "South Korea",
+        "BRL": "Brazil",
+    }
+
+    def _resolve_country(t):
+        _inf = info_map.get(t, {})
+        country = _inf.get("country")
+        if country and str(country) not in ("", "None", "nan"):
+            return country
+        # Fallback: infer from currency
+        cur = enriched.loc[enriched[t_col] == t, "currency"].values
+        if len(cur) > 0:
+            return _CURRENCY_COUNTRY.get(str(cur[0]), "Unknown")
+        return "Unknown"
+
+    enriched["sector"]    = enriched[t_col].map(_resolve_sector)
+    enriched["industry"]  = enriched[t_col].map(_resolve_industry)
+    enriched["country"]   = enriched[t_col].map(_resolve_country)
     enriched["market_cap_raw"] = enriched[t_col].map(lambda t: info_map.get(t, {}).get("marketCap", 0))
 
     # Market cap size bucket
@@ -81,10 +158,10 @@ try:
     total_val = enriched[weight_col].sum() if weight_col in enriched.columns else 0
     st.metric("Total Portfolio Value", f"{base_currency} {total_val:,.0f}" if total_val else "—")
 
-    # ── Charts ──
+    # ── Charts with drill-down ──
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["By Sector", "By Industry", "By Currency", "By Country", "By Market Cap"])
 
-    def make_pie(df, group_col, value_col, title):
+    def make_pie(df, group_col, value_col, title, tab_key):
         grouped = df.groupby(group_col)[value_col].sum().reset_index()
         grouped.columns = [group_col, "Value"]
         grouped = grouped[grouped["Value"] > 0].sort_values("Value", ascending=False)
@@ -96,32 +173,62 @@ try:
         fig.update_traces(textposition="inside", textinfo="percent+label")
         fig.update_layout(margin=dict(t=40, b=20, l=20, r=20), height=420,
                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun",
+                                key=f"pie_{tab_key}")
 
-        # Also show table
+        # Summary table
         grouped["% of Portfolio"] = (grouped["Value"] / grouped["Value"].sum() * 100).round(1)
         grouped["Value"] = grouped["Value"].apply(lambda x: f"{base_currency} {x:,.0f}")
-        st.dataframe(grouped, hide_index=True, use_container_width=True)
+        from core.data_engine import clean_nan
+        st.dataframe(clean_nan(grouped), hide_index=True, use_container_width=True)
+
+        # Drill-down: show holdings in selected segment
+        selected_segment = None
+        if event and event.get("selection", {}).get("points"):
+            selected_segment = event["selection"]["points"][0].get("label")
+
+        if selected_segment:
+            st.divider()
+            st.subheader(f"Holdings in: {selected_segment}")
+            segment_df = df[df[group_col] == selected_segment].copy()
+            t_col_d = "ticker_resolved" if "ticker_resolved" in segment_df.columns else "ticker"
+            drill = pd.DataFrame()
+            drill["Ticker"] = segment_df[t_col_d].values
+            drill["Name"] = segment_df.get("name", pd.Series(dtype=str)).fillna("").values
+            if "current_price" in segment_df.columns:
+                drill["Price"] = segment_df["current_price"].apply(
+                    lambda v: f"{float(v):,.2f}" if pd.notna(v) and float(v) >= 1 else (f"{float(v):,.4f}" if pd.notna(v) else "")).values
+            if value_col in segment_df.columns:
+                drill[f"Value ({base_currency})"] = segment_df[value_col].apply(
+                    lambda v: f"{float(v):,.0f}" if pd.notna(v) else "").values
+            if "unrealized_pnl" in segment_df.columns:
+                drill["P&L"] = segment_df["unrealized_pnl"].apply(
+                    lambda v: f"{float(v):+,.0f}" if pd.notna(v) else "").values
+            if "unrealized_pnl_pct" in segment_df.columns:
+                drill["Return %"] = segment_df["unrealized_pnl_pct"].apply(
+                    lambda v: f"{float(v):+.1f}%" if pd.notna(v) else "").values
+            from core.data_engine import clean_nan
+            st.dataframe(clean_nan(drill), hide_index=True, use_container_width=True)
 
     with tab1:
         if weight_col in enriched.columns:
-            make_pie(enriched, "sector", weight_col, "Sector Allocation")
+            make_pie(enriched, "sector", weight_col, "Sector Allocation", "sector")
 
     with tab2:
         if weight_col in enriched.columns:
-            make_pie(enriched, "industry", weight_col, "Industry Allocation")
+            make_pie(enriched, "industry", weight_col, "Industry Allocation", "industry")
 
     with tab3:
         if weight_col in enriched.columns:
-            make_pie(enriched, "currency", weight_col, "Currency Exposure")
+            make_pie(enriched, "currency", weight_col, "Currency Exposure", "currency")
 
     with tab4:
         if weight_col in enriched.columns:
-            make_pie(enriched, "country", weight_col, "Country Exposure")
+            make_pie(enriched, "country", weight_col, "Country Exposure", "country")
 
     with tab5:
         if weight_col in enriched.columns:
-            make_pie(enriched, "cap_size", weight_col, "Market Cap Distribution")
+            make_pie(enriched, "cap_size", weight_col, "Market Cap Distribution", "cap_size")
 
     # ── Performance Returns Table ────────────────────────────────────────────────
     st.divider()
@@ -239,7 +346,19 @@ try:
                 "Return": f"{ret:+.2f}%" if ret is not None else "",
                 "CAGR":   f"{cagr*100:+.2f}%" if cagr is not None else "",
             })
-        st.dataframe(pd.DataFrame(perf_rows), hide_index=True, use_container_width=True)
+        perf_df = pd.DataFrame(perf_rows)
+        # Color-code returns
+        def _perf_color(val):
+            if not val or val == "": return ""
+            try:
+                v = float(val.replace("%", "").replace("+", ""))
+                if v > 0: return "color: #1a9e5c; font-weight: 600"
+                if v < 0: return "color: #d63031; font-weight: 600"
+            except ValueError:
+                pass
+            return ""
+        styled_perf = perf_df.style.map(_perf_color, subset=["Return", "CAGR"])
+        st.dataframe(styled_perf, hide_index=True, use_container_width=True)
     elif not perf_tickers or weight_col not in enriched.columns:
         st.caption("Market value data needed — ensure prices are loaded.")
 

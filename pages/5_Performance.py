@@ -214,6 +214,9 @@ try:
 
         # Time-weighted return
         total_return_pct = ((latest_val / first_val) - 1) * 100 if first_val > 0 else 0
+        # Sanity: cap display at ±10,000%
+        if abs(total_return_pct) > 10000:
+            total_return_pct = None
 
         # CAGR
         days_diff = (nav_data["date"].iloc[-1] - nav_data["date"].iloc[0]).days
@@ -226,7 +229,7 @@ try:
         nc3.metric("Drawdown from ATH", f"{drawdown_from_ath:+.1f}%")
         nc4.metric(
             "Total Return",
-            f"{total_return_pct:+.1f}%",
+            f"{total_return_pct:+.1f}%" if total_return_pct is not None else "—",
             delta=f"CAGR: {nav_cagr*100:+.1f}%" if nav_cagr is not None else ""
         )
 

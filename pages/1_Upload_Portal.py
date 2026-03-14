@@ -1,3 +1,10 @@
+"""
+Upload Portal
+=============
+Upload brokerage screenshots, CSVs, Excel files, or PDFs to extract portfolio holdings.
+Supports: PNG/JPG (AI vision), CSV, XLSX, PDF (AI vision).
+"""
+
 import streamlit as st
 import pandas as pd
 from PIL import Image
@@ -5,12 +12,16 @@ from core.screenshot_parser import parse_brokerage_image
 from core.database import save_holdings
 
 st.header("Prosper Portal")
-st.caption("Upload brokerage screenshots to extract your holdings.")
+st.caption("Upload brokerage screenshots, CSVs, Excel files, or PDFs to extract your holdings.")
+
+SUPPORTED_CURRENCIES = [
+    "USD", "AED", "INR", "EUR", "GBP", "CHF", "SGD", "HKD",
+    "JPY", "CNY", "AUD", "CAD", "SAR", "KWD", "QAR",
+    "BHD", "OMR", "ZAR", "MYR", "KRW", "BRL",
+]
 
 # ------------------------------------------------------------------
 # SESSION STATE SETUP
-# Streamlit reruns the whole page on every button click.
-# We use st.session_state to remember parsed holdings across reruns.
 # ------------------------------------------------------------------
 if "parsed_holdings" not in st.session_state:
     st.session_state.parsed_holdings = []
@@ -19,101 +30,258 @@ if "last_uploaded_names" not in st.session_state:
 if "save_done" not in st.session_state:
     st.session_state.save_done = False
 
-# --- Sidebar: Upload Controls ---
-with st.sidebar:
-    st.subheader("Step 1 — Upload")
-    uploaded_files = st.file_uploader(
-        "Drop brokerage screenshots here",
-        type=["png", "jpg", "jpeg"],
-        accept_multiple_files=True,
-        help="You can upload multiple screenshots at once. Max 50MB each.",
-    )
 
-    broker_source = st.selectbox(
-        "Broker (optional)",
-        ["Auto-detect", "IBKR", "Zerodha", "HSBC", "Tiger Brokers", "Other"],
-    )
+# ─────────────────────────────────────────
+# TABULAR FILE PARSERS (CSV / Excel)
+# ─────────────────────────────────────────
 
-    st.divider()
-    st.subheader("Step 2 — Parse")
-    parse_button = st.button(
-        "Parse with AI",
-        type="primary",
-        disabled=not uploaded_files,
-        use_container_width=True,
-    )
+# Common column name mappings brokers use
+_COL_ALIASES = {
+    "ticker":   ["ticker", "symbol", "stock", "instrument", "code", "stock code",
+                 "security", "scrip", "isin", "stock symbol", "asset"],
+    "name":     ["name", "company", "company name", "description", "stock name",
+                 "security name", "instrument name", "holding"],
+    "quantity": ["quantity", "qty", "units", "shares", "position", "no. of shares",
+                 "holdings", "volume", "lot", "nos"],
+    "avg_cost": ["avg_cost", "avg cost", "avg. cost", "average cost", "avg price",
+                 "average price", "buy avg", "buy price", "purchase price", "wac",
+                 "avg unit cost", "cost price", "cost/share", "cost per share",
+                 "average buy price"],
+    "currency": ["currency", "ccy", "cur", "curr"],
+}
 
-    # If new files are uploaded, clear previous results
-    if uploaded_files:
-        current_names = sorted([f.name for f in uploaded_files])
-        if current_names != st.session_state.last_uploaded_names:
-            st.session_state.parsed_holdings = []
-            st.session_state.last_uploaded_names = current_names
-            st.session_state.save_done = False
 
-# --- No files yet ---
-if not uploaded_files:
-    st.info(
-        "**How it works:**\n\n"
-        "1. Upload one or more brokerage screenshots using the sidebar\n"
-        "2. Click **Parse with AI** — Claude reads your screenshot and extracts holdings\n"
-        "3. Review the table, fix anything if needed\n"
-        "4. Click **Save to Portfolio**\n\n"
-        "You can upload multiple screenshots at once (e.g. from different brokers)."
-    )
-    st.stop()
+def _auto_map_columns(df: pd.DataFrame) -> dict:
+    """Try to auto-detect which CSV/Excel columns map to our fields."""
+    mapping = {}
+    cols_lower = {c: c.strip().lower() for c in df.columns}
 
-# --- Files uploaded but not yet parsed ---
-if not parse_button and not st.session_state.parsed_holdings:
-    st.subheader("Ready to Parse")
-    cols = st.columns(min(len(uploaded_files), 3))
-    for i, file in enumerate(uploaded_files):
-        with cols[i % 3]:
-            image = Image.open(file)
-            st.image(image, caption=file.name, width="stretch")
-    st.info("Click **Parse with AI** in the sidebar to extract your holdings.")
-    st.stop()
+    for field, aliases in _COL_ALIASES.items():
+        for orig_col, low_col in cols_lower.items():
+            if low_col in aliases:
+                mapping[field] = orig_col
+                break
 
-# --- Run parsing when button clicked ---
-if parse_button and uploaded_files:
-    st.session_state.parsed_holdings = []
-    st.session_state.save_done = False
-    all_holdings = []
+    return mapping
 
-    for file in uploaded_files:
-        with st.spinner(f"Reading {file.name}..."):
-            file.seek(0)
-            result = parse_brokerage_image(file.getvalue(), file.type)
 
-        if isinstance(result, str):
-            st.error(f"**{file.name}** — {result}")
-        elif isinstance(result, list) and len(result) > 0:
-            st.success(f"✓ Extracted {len(result)} holdings from **{file.name}**")
-            all_holdings.extend(result)
-        else:
-            st.warning(f"No holdings found in **{file.name}**.")
+def _parse_tabular(df: pd.DataFrame, default_currency: str = "USD") -> list:
+    """Parse a DataFrame from CSV/Excel into holdings list."""
+    if df.empty:
+        return []
 
-    st.session_state.parsed_holdings = all_holdings
+    # Clean column names
+    df.columns = df.columns.str.strip()
 
-# --- Show results table (persists across button clicks) ---
-if not st.session_state.parsed_holdings:
-    st.warning("No holdings were extracted. Try uploading a clearer screenshot.")
-    st.stop()
+    # Auto-map columns
+    col_map = _auto_map_columns(df)
 
-# Save success banner
+    holdings = []
+    for _, row in df.iterrows():
+        ticker = str(row.get(col_map.get("ticker", ""), "") or "").strip()
+        if not ticker:
+            continue
+
+        name = str(row.get(col_map.get("name", ""), "") or "").strip()
+        currency = str(row.get(col_map.get("currency", ""), default_currency) or default_currency).strip()
+
+        try:
+            qty = float(str(row.get(col_map.get("quantity", ""), 0) or 0).replace(",", ""))
+        except (ValueError, TypeError):
+            qty = 0
+
+        try:
+            avg_cost = float(str(row.get(col_map.get("avg_cost", ""), 0) or 0).replace(",", ""))
+        except (ValueError, TypeError):
+            avg_cost = 0
+
+        if qty > 0:
+            holdings.append({
+                "ticker": ticker,
+                "name": name,
+                "quantity": qty,
+                "avg_cost": avg_cost,
+                "currency": currency.upper() if currency else default_currency,
+            })
+
+    return holdings
+
+
+# ─────────────────────────────────────────
+# MAIN PAGE LOGIC — Upload in center
+# ─────────────────────────────────────────
+
+# --- Save success banner ---
 if st.session_state.save_done:
     st.success(
-        "✅ Portfolio saved! Go to **Portfolio Dashboard** in the sidebar to view it."
+        "Portfolio saved! Go to **Portfolio Dashboard** in the sidebar to view it."
     )
-    if st.button("Upload More Screenshots", use_container_width=True):
+    if st.button("Upload More Files", use_container_width=True):
         st.session_state.parsed_holdings = []
         st.session_state.last_uploaded_names = []
         st.session_state.save_done = False
         st.rerun()
     st.stop()
 
+# --- Step 1: Upload zone (centered) ---
+if not st.session_state.parsed_holdings:
+    st.markdown("### Step 1 — Upload Files")
+
+    # Central upload area
+    uploaded_files = st.file_uploader(
+        "Drop brokerage files here",
+        type=["png", "jpg", "jpeg", "csv", "xlsx", "xls", "pdf"],
+        accept_multiple_files=True,
+        help="Supported: Screenshots (PNG/JPG), CSV, Excel (XLSX), PDF. Max 50MB each.",
+        label_visibility="collapsed",
+    )
+
+    # Broker + parse controls (inline below uploader)
+    if uploaded_files:
+        col_broker, col_parse = st.columns([2, 1])
+        with col_broker:
+            broker_source = st.selectbox(
+                "Broker (optional)",
+                ["Auto-detect", "IBKR", "Zerodha", "HSBC", "Tiger Brokers", "Saxo", "Swissquote", "Other"],
+            )
+        with col_parse:
+            st.markdown("<br>", unsafe_allow_html=True)
+            parse_button = st.button(
+                "Parse Files",
+                type="primary",
+                use_container_width=True,
+            )
+
+        # Detect new upload
+        current_names = sorted([f.name for f in uploaded_files])
+        if current_names != st.session_state.last_uploaded_names:
+            st.session_state.parsed_holdings = []
+            st.session_state.last_uploaded_names = current_names
+            st.session_state.save_done = False
+    else:
+        broker_source = "Auto-detect"
+        parse_button = False
+
+    # --- No files yet → show instructions ---
+    if not uploaded_files:
+        st.info(
+            "**How it works:**\n\n"
+            "1. Upload one or more files above\n"
+            "   - **Screenshots** (PNG/JPG): AI reads your brokerage screen\n"
+            "   - **CSV / Excel**: Auto-maps columns (Ticker, Qty, Avg Cost, Currency)\n"
+            "   - **PDF**: AI extracts holdings from statements\n"
+            "2. Click **Parse Files** to extract holdings\n"
+            "3. Review the table, fix anything if needed\n"
+            "4. Click **Save to Portfolio**\n\n"
+            "You can upload multiple files at once (e.g. from different brokers)."
+        )
+        st.stop()
+
+    # --- Files uploaded, show previews ---
+    if not parse_button:
+        st.subheader("File Preview")
+        for file in uploaded_files:
+            ext = file.name.rsplit(".", 1)[-1].lower() if "." in file.name else ""
+            if ext in ("png", "jpg", "jpeg"):
+                try:
+                    image = Image.open(file)
+                    st.image(image, caption=file.name, width=400)
+                    file.seek(0)
+                except Exception:
+                    st.caption(f"**{file.name}** (image)")
+            elif ext == "csv":
+                st.caption(f"**{file.name}** (CSV)")
+                try:
+                    preview = pd.read_csv(file, nrows=5)
+                    st.dataframe(preview, use_container_width=True)
+                    file.seek(0)
+                except Exception as e:
+                    st.warning(f"Could not preview: {e}")
+            elif ext in ("xlsx", "xls"):
+                st.caption(f"**{file.name}** (Excel)")
+                try:
+                    preview = pd.read_excel(file, nrows=5)
+                    st.dataframe(preview, use_container_width=True)
+                    file.seek(0)
+                except Exception as e:
+                    st.warning(f"Could not preview: {e}")
+            elif ext == "pdf":
+                st.caption(f"**{file.name}** (PDF — will be parsed by AI)")
+
+        st.info("Click **Parse Files** above to extract your holdings.")
+        st.stop()
+
+    # --- Run parsing ---
+    if parse_button and uploaded_files:
+        st.session_state.parsed_holdings = []
+        st.session_state.save_done = False
+        all_holdings = []
+
+        for file in uploaded_files:
+            ext = file.name.rsplit(".", 1)[-1].lower() if "." in file.name else ""
+
+            if ext == "csv":
+                with st.spinner(f"Reading CSV: {file.name}..."):
+                    try:
+                        file.seek(0)
+                        df = pd.read_csv(file)
+                        parsed = _parse_tabular(df)
+                        if parsed:
+                            st.success(f"Extracted {len(parsed)} holdings from **{file.name}**")
+                            all_holdings.extend(parsed)
+                        else:
+                            st.warning(f"No holdings found in **{file.name}**. Check column names.")
+                    except Exception as e:
+                        st.error(f"**{file.name}** — Error reading CSV: {e}")
+
+            elif ext in ("xlsx", "xls"):
+                with st.spinner(f"Reading Excel: {file.name}..."):
+                    try:
+                        file.seek(0)
+                        df = pd.read_excel(file)
+                        parsed = _parse_tabular(df)
+                        if parsed:
+                            st.success(f"Extracted {len(parsed)} holdings from **{file.name}**")
+                            all_holdings.extend(parsed)
+                        else:
+                            st.warning(f"No holdings found in **{file.name}**. Check column names.")
+                    except Exception as e:
+                        st.error(f"**{file.name}** — Error reading Excel: {e}")
+
+            elif ext == "pdf":
+                with st.spinner(f"AI parsing PDF: {file.name}..."):
+                    file.seek(0)
+                    result = parse_brokerage_image(file.getvalue(), "application/pdf")
+                    if isinstance(result, str):
+                        st.error(f"**{file.name}** — {result}")
+                    elif isinstance(result, list) and len(result) > 0:
+                        st.success(f"Extracted {len(result)} holdings from **{file.name}**")
+                        all_holdings.extend(result)
+                    else:
+                        st.warning(f"No holdings found in **{file.name}**.")
+
+            elif ext in ("png", "jpg", "jpeg"):
+                with st.spinner(f"AI parsing image: {file.name}..."):
+                    file.seek(0)
+                    result = parse_brokerage_image(file.getvalue(), file.type)
+                    if isinstance(result, str):
+                        st.error(f"**{file.name}** — {result}")
+                    elif isinstance(result, list) and len(result) > 0:
+                        st.success(f"Extracted {len(result)} holdings from **{file.name}**")
+                        all_holdings.extend(result)
+                    else:
+                        st.warning(f"No holdings found in **{file.name}**.")
+
+        st.session_state.parsed_holdings = all_holdings
+
+# --- Show results table (persists across clicks) ---
+if not st.session_state.parsed_holdings:
+    if not st.session_state.save_done:
+        st.warning("No holdings were extracted. Try uploading a different file or clearer screenshot.")
+    st.stop()
+
 # --- Editable table ---
-st.subheader("Step 3 — Review & Save")
+st.subheader("Step 2 — Review & Save")
 st.caption(
     "Check the data below. Click any cell to edit. "
     "When everything looks right, click **Save to Portfolio**."
@@ -124,18 +292,36 @@ for col in ["ticker", "name", "quantity", "avg_cost", "currency"]:
     if col not in df.columns:
         df[col] = ""
 
+# Highlight missing critical fields
+missing_currency = df["currency"].isna() | (df["currency"].astype(str).isin(["", "nan"]))
+missing_avg_cost = pd.to_numeric(df["avg_cost"], errors="coerce").fillna(0) == 0
+missing_qty = pd.to_numeric(df["quantity"], errors="coerce").fillna(0) == 0
+
+if missing_currency.any() or missing_avg_cost.any() or missing_qty.any():
+    issues = []
+    if missing_currency.any():
+        issues.append(f"**Currency** missing for {missing_currency.sum()} row(s)")
+    if missing_avg_cost.any():
+        issues.append(f"**Avg Cost** missing for {missing_avg_cost.sum()} row(s)")
+    if missing_qty.any():
+        issues.append(f"**Quantity** missing for {missing_qty.sum()} row(s)")
+    st.warning(
+        "**Missing data detected:** " + " · ".join(issues) + "\n\n"
+        "Please fill in the missing values below before saving."
+    )
+
 edited_df = st.data_editor(
     df[["ticker", "name", "quantity", "avg_cost", "currency"]],
     num_rows="dynamic",
     use_container_width=True,
     column_config={
-        "ticker": st.column_config.TextColumn("Ticker", help="e.g. AAPL, RELIANCE.NS"),
+        "ticker": st.column_config.TextColumn("Ticker", help="e.g. AAPL, RELIANCE.NS, SREN.SW"),
         "name": st.column_config.TextColumn("Company Name"),
         "quantity": st.column_config.NumberColumn("Qty", min_value=0, format="%.4f"),
         "avg_cost": st.column_config.NumberColumn("Avg Cost", min_value=0, format="%.4f"),
         "currency": st.column_config.SelectboxColumn(
             "Currency",
-            options=["USD", "INR", "AED", "EUR", "GBP", "SGD", "HKD", "JPY", "CNY", "AUD"],
+            options=SUPPORTED_CURRENCIES,
             default="USD",
         ),
     },
@@ -144,7 +330,7 @@ edited_df = st.data_editor(
 st.divider()
 broker = broker_source if broker_source != "Auto-detect" else None
 
-if st.button("💾 Save to Portfolio", type="primary", use_container_width=True):
+if st.button("Save to Portfolio", type="primary", use_container_width=True):
     if edited_df.empty:
         st.warning("Nothing to save — the table is empty.")
     else:

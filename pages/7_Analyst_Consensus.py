@@ -108,13 +108,13 @@ try:
     # ── Recommendation Summary ──
     st.subheader("📋 Rating Summary")
 
-    rec_key = info.get("recommendationKey", "—")
-    rec_mean_raw = info.get("recommendationMean")  # yfinance: 1=Strong Buy, 5=Strong Sell
+    rec_key = info.get("recommendationKey") or ""
+    rec_mean_raw = info.get("recommendationMean")
 
     # Invert scale: 1=Strong Sell → 5=Strong Buy (higher = better conviction to buy)
     rec_mean = (6 - rec_mean_raw) if rec_mean_raw else None
 
-    if rec_key and rec_key != "—":
+    if rec_key:
         rec_colors = {"strongBuy": "🟢", "buy": "🟢", "hold": "🟡",
                       "sell": "🔴", "strongSell": "🔴", "underperform": "🔴"}
         emoji = rec_colors.get(rec_key.lower().replace("_","").replace(" ",""), "⚪")
@@ -138,6 +138,9 @@ try:
         st.markdown(f"### {emoji} Consensus: **{rec_key.upper()}**{score_text}")
         if rec_mean:
             st.caption("ℹ️ Scale: 1 = Strong Sell → 5 = Strong Buy. Higher score = stronger buy conviction.")
+    else:
+        st.info(f"No analyst consensus rating available for **{selected}**. "
+                "This may be due to limited analyst coverage for this stock.")
 
     # Recommendations summary chart
     summary = get_recommendations_summary(selected)

@@ -126,6 +126,34 @@ def init_db():
         )
     """)
 
+    # ── Phase 4 tables ──────────────────────────────────────────────────────────
+
+    # Prosper AI Analysis — stores CIO-grade analysis results per ticker
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS prosper_analysis (
+            ticker          TEXT PRIMARY KEY,
+            analysis_date   TEXT NOT NULL,
+            model_used      TEXT DEFAULT 'sonnet',
+            rating          TEXT,
+            score           REAL,
+            archetype       TEXT,
+            archetype_name  TEXT,
+            fair_value_base REAL,
+            fair_value_bear REAL,
+            fair_value_bull REAL,
+            upside_pct      REAL,
+            conviction      TEXT,
+            thesis          TEXT,
+            env_net         TEXT,
+            score_breakdown TEXT,
+            key_risks       TEXT,
+            key_catalysts   TEXT,
+            full_response   TEXT,
+            cost_estimate   REAL,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -160,6 +188,20 @@ def get_all_holdings() -> pd.DataFrame:
     df = pd.read_sql_query("SELECT * FROM holdings ORDER BY ticker ASC", conn)
     conn.close()
     return df
+
+
+def update_holding(holding_id: int, **kwargs):
+    """Update specific fields of a holding by ID. Accepts quantity, avg_cost, currency, country."""
+    allowed = {"quantity", "avg_cost", "currency", "broker_source"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [holding_id]
+    conn = _get_connection()
+    conn.execute(f"UPDATE holdings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
+    conn.commit()
+    conn.close()
 
 
 def delete_holding(holding_id: int):
@@ -324,7 +366,7 @@ def save_failed_tickers(tickers: List[str]) -> None:
     save_price_cache({t: None for t in tickers})
 
 
-FAILED_TICKER_COOLDOWN = 1800  # 30 min — don't retry tickers with no price on any source
+FAILED_TICKER_COOLDOWN = 600  # 10 min — retry sooner (was 30 min)
 
 
 def get_stale_tickers(tickers: List[str], max_age: float = PRICE_CACHE_TTL) -> List[str]:
@@ -744,3 +786,86 @@ def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
     ).fetchone()
     conn.close()
     return row[0] > 0 if row else False
+
+
+# ─────────────────────────────────────────
+# PROSPER AI ANALYSIS  (Phase 4 — CIO-grade equity analysis)
+# ─────────────────────────────────────────
+
+def save_prosper_analysis(ticker: str, data: dict):
+    """Save or update a Prosper AI analysis result for a ticker."""
+    conn = _get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO prosper_analysis
+           (ticker, analysis_date, model_used, rating, score, archetype,
+            archetype_name, fair_value_base, fair_value_bear, fair_value_bull,
+            upside_pct, conviction, thesis, env_net, score_breakdown,
+            key_risks, key_catalysts, full_response, cost_estimate, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            ticker.strip().upper(),
+            data.get("analysis_date", datetime.now().strftime("%Y-%m-%d")),
+            data.get("model_used", "sonnet"),
+            data.get("rating"),
+            data.get("score"),
+            data.get("archetype"),
+            data.get("archetype_name"),
+            data.get("fair_value_base"),
+            data.get("fair_value_bear"),
+            data.get("fair_value_bull"),
+            data.get("upside_pct"),
+            data.get("conviction"),
+            data.get("thesis"),
+            data.get("env_net"),
+            json.dumps(data.get("score_breakdown")) if data.get("score_breakdown") else None,
+            json.dumps(data.get("key_risks")) if data.get("key_risks") else None,
+            json.dumps(data.get("key_catalysts")) if data.get("key_catalysts") else None,
+            json.dumps(data.get("full_response")) if data.get("full_response") else None,
+            data.get("cost_estimate"),
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_prosper_analysis(ticker: str) -> Optional[Dict]:
+    """Retrieve the latest Prosper analysis for a ticker. Returns dict or None."""
+    conn = _get_connection()
+    row = conn.execute(
+        "SELECT * FROM prosper_analysis WHERE ticker = ?",
+        (ticker.strip().upper(),),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    result = dict(row)
+    # Parse JSON fields
+    for field in ("score_breakdown", "key_risks", "key_catalysts", "full_response"):
+        if result.get(field):
+            try:
+                result[field] = json.loads(result[field])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return result
+
+
+def get_all_prosper_analyses() -> pd.DataFrame:
+    """Retrieve all Prosper analyses as a DataFrame."""
+    conn = _get_connection()
+    df = pd.read_sql_query(
+        "SELECT ticker, analysis_date, rating, score, archetype_name, "
+        "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
+        "FROM prosper_analysis ORDER BY score DESC",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def delete_prosper_analysis(ticker: str):
+    """Remove analysis for a ticker."""
+    conn = _get_connection()
+    conn.execute("DELETE FROM prosper_analysis WHERE ticker = ?", (ticker.strip().upper(),))
+    conn.commit()
+    conn.close()

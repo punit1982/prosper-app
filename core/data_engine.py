@@ -51,10 +51,34 @@ TICKER_OVERRIDES: Dict[str, str] = {
     # ETFs/funds stored without exchange suffix — correct tickers with suffix
     "JEPG":          "JEPG.L",    # JPM Global Equity Premium Income UCITS ETF (LSE, USD)
     "IEDY":          "IEDY.L",    # iShares EM Dividend UCITS ETF (LSE, USD)
+    "IEDY.SW":       "IEDY.L",    # Stored with wrong exchange — actually LSE, not SIX
     "GHYC":          "GHYC.SW",   # iShares Global High Yield Corp Bond CHF Hedged ETF (Swiss, CHF)
     "SREN":          "SREN.SW",   # Swiss Re AG (SIX Swiss Exchange, CHF)
     # Franklin Income Fund stored as internal fund code — correct US mutual fund ticker
     "I288654906":    "FKINX",     # Franklin Income Fund Class A1
+    # UAE stocks — ADNOC Drilling (stored without last L)
+    "ADNOCDRIL.AE":  "ADNOCDRILL.AE",  # ADNOC Drilling — ADX client has chart ID
+}
+
+# ─────────────────────────────────────────
+# CRYPTO TICKER MAP
+# ─────────────────────────────────────────
+# Crypto symbols stored without -USD suffix need mapping for yfinance.
+CRYPTO_TICKERS: Dict[str, str] = {
+    "BTC":   "BTC-USD",
+    "ETH":   "ETH-USD",
+    "SOL":   "SOL-USD",
+    "XRP":   "XRP-USD",
+    "ADA":   "ADA-USD",
+    "DOGE":  "DOGE-USD",
+    "DOT":   "DOT-USD",
+    "AVAX":  "AVAX-USD",
+    "MATIC": "MATIC-USD",
+    "LINK":  "LINK-USD",
+    "ATOM":  "ATOM-USD",
+    "UNI":   "UNI-USD",  # Note: UNI7593.DU is Uniper (stock) — only map if no price as stock
+    "LTC":   "LTC-USD",
+    "SHIB":  "SHIB-USD",
 }
 
 # ─────────────────────────────────────────
@@ -163,6 +187,13 @@ def resolve_ticker(ticker: str, currency: str = "USD") -> str:
         resolved = TICKER_OVERRIDES[ticker]
         _cache_set(f"resolved_{ticker}", resolved)
         return resolved
+
+    # ── Crypto tickers — map to -USD suffix for yfinance ─────────────────────
+    upper = ticker.upper()
+    if upper in CRYPTO_TICKERS:
+        crypto_sym = CRYPTO_TICKERS[upper]
+        _cache_set(f"resolved_{ticker}", crypto_sym)
+        return crypto_sym
 
     # ── ADX tickers — resolve immediately, skip yfinance probing (it hangs) ──
     # Prices come from Mubasher (adx_client), not yfinance.
@@ -330,19 +361,20 @@ def get_ticker_info(ticker: str) -> Dict:
 
 
 def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
-    """Fetch info for all tickers in parallel (max 10 workers, 60s total timeout)."""
+    """Fetch info for all tickers in parallel (max 10 workers, scaled timeout)."""
     results = {}
     if not tickers:
         return results
     max_w = min(len(tickers), 10)
+    total_timeout = max(60, len(tickers) * 5)  # Scale timeout with portfolio size
     pool = ThreadPoolExecutor(max_workers=max_w)
     try:
         futures = {pool.submit(get_ticker_info, t): t for t in tickers}
         try:
-            for f in as_completed(futures, timeout=60):
+            for f in as_completed(futures, timeout=total_timeout):
                 t = futures[f]
                 try:
-                    results[t] = f.result(timeout=10)
+                    results[t] = f.result(timeout=15)
                 except Exception:
                     results[t] = {}
         except Exception:
@@ -353,6 +385,74 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
     finally:
         pool.shutdown(wait=False)
     return results
+
+
+# ─────────────────────────────────────────
+# FINNHUB ANALYST DATA (for Prosper AI enrichment)
+# ─────────────────────────────────────────
+
+def get_finnhub_analyst_data(ticker: str) -> Dict:
+    """
+    Fetch analyst consensus + upgrade/downgrade history from Finnhub.
+    Cached 1 hour. Returns dict with 'recommendations' and 'upgrades'.
+    Used by Prosper AI analysis to build high-confidence ratings.
+    """
+    cached = _cache_get(f"fh_analyst_{ticker}", ANALYST_TTL)
+    if cached is not None:
+        return cached
+
+    result = {"recommendations": [], "upgrades": []}
+    try:
+        from core.finnhub_client import recommendation_trends, upgrade_downgrade, is_configured
+        if not is_configured():
+            return result
+
+        # Analyst recommendation trends (buy/hold/sell counts by month)
+        rec = recommendation_trends(ticker) or []
+        result["recommendations"] = rec[:6]  # Last 6 months
+
+        # Upgrade/downgrade history
+        ud = upgrade_downgrade(ticker) or []
+        result["upgrades"] = ud[:10]  # Last 10 events
+
+    except Exception:
+        pass
+
+    _cache_set(f"fh_analyst_{ticker}", result)
+    return result
+
+
+def get_serper_web_context(query: str, count: int = 5) -> List[Dict]:
+    """
+    Fetch web search results via Serper (Google Search).
+    Returns list of {title, snippet, link} for analysis context.
+    """
+    api_key = os.getenv("SERPER_API_KEY", "")
+    if not api_key or "your_" in api_key.lower():
+        return []
+
+    import requests
+    try:
+        resp = requests.post(
+            "https://google.serper.dev/search",
+            json={"q": query, "num": count},
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        results = []
+        for r in data.get("organic", [])[:count]:
+            results.append({
+                "title":   r.get("title", ""),
+                "snippet": r.get("snippet", ""),
+                "link":    r.get("link", ""),
+                "date":    r.get("date", ""),
+            })
+        return results
+    except Exception:
+        return []
 
 
 # ─────────────────────────────────────────
@@ -382,6 +482,49 @@ def _fetch_news_search_api(ticker: str) -> List[Dict]:
             for n in data.get("news", [])
             if n.get("title")
         ]
+    except Exception:
+        return []
+
+
+def _fetch_news_serper(query: str, count: int = 10) -> List[Dict]:
+    """
+    Fetch news via Serper (Google Search API).
+    Configured via SERPER_API_KEY in .env.
+    Returns [] if not configured or on error.
+    """
+    api_key = os.getenv("SERPER_API_KEY", "")
+    if not api_key or "your_" in api_key.lower():
+        return []
+
+    import requests
+    try:
+        resp = requests.post(
+            "https://google.serper.dev/news",
+            json={"q": query, "num": count, "tbs": "qdr:w"},
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        items = []
+        for r in data.get("news", []):
+            ts = 0
+            try:
+                date_str = r.get("date", "")
+                if date_str:
+                    # Serper returns relative dates like "2 hours ago" or ISO dates
+                    from dateutil import parser as _dp
+                    ts = int(_dp.parse(date_str).timestamp())
+            except Exception:
+                pass
+            items.append({
+                "title":               r.get("title", ""),
+                "link":                r.get("link", ""),
+                "publisher":           r.get("source", "Web"),
+                "providerPublishTime": ts,
+            })
+        return items
     except Exception:
         return []
 
@@ -426,7 +569,12 @@ def _fetch_news_rss(ticker: str) -> List[Dict]:
                 })
         # Fallback to search API for non-US tickers (UAE, etc.) when RSS returns nothing
         if not items:
-            return _fetch_news_search_api(ticker)
+            items = _fetch_news_search_api(ticker)
+        # If still nothing, try Brave Search API
+        if not items:
+            # Strip exchange suffix for better search results
+            clean = ticker.split(".")[0] if "." in ticker else ticker
+            items = _fetch_news_serper(f"{clean} stock news", count=10)
         return items
     except Exception:
         return []
@@ -444,7 +592,18 @@ def get_ticker_news(ticker: str) -> List[Dict]:
 
     all_news = _fetch_news_rss(ticker)   # real timeout, always returns
 
-    # Finnhub fallback (free tier returns data for US stocks)
+    # Google News RSS — diverse sources (Reuters, Bloomberg, CNBC, etc.)
+    try:
+        clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+        google_items = _fetch_rss_feed(
+            f"https://news.google.com/rss/search?q={clean_ticker}+stock&hl=en-US&gl=US&ceid=US:en",
+            "Google News", max_items=8,
+        )
+        all_news.extend(google_items)
+    except Exception:
+        pass
+
+    # Finnhub company news (free tier returns data for US stocks)
     try:
         import requests as _req
         from core.finnhub_client import company_news as fh_company_news
@@ -473,9 +632,10 @@ def get_ticker_news(ticker: str) -> List[Dict]:
     return unique
 
 
-def get_portfolio_news(tickers: List[str], limit: int = 50) -> List[Dict]:
+def get_portfolio_news(tickers: List[str], limit: int = 50, names: Optional[Dict[str, str]] = None) -> List[Dict]:
     """
     Aggregate news from portfolio tickers, sorted by date (newest first).
+    Each item is tagged with 'relevance' (HIGH/MEDIUM/LOW) based on headline–ticker match.
 
     Caching (two-tier):
       1. SQLite (1-hour TTL) — survives server restarts and new browser sessions
@@ -483,6 +643,7 @@ def get_portfolio_news(tickers: List[str], limit: int = 50) -> List[Dict]:
 
     Each ticker fetch has a hard 5s HTTP timeout, so this can never hang forever.
     """
+    names = names or {}
     if not tickers:
         return []
 
@@ -531,6 +692,11 @@ def get_portfolio_news(tickers: List[str], limit: int = 50) -> List[Dict]:
         title = item.get("title", "")
         if title not in seen_titles:
             seen_titles.add(title)
+            # Tag relevance based on ticker/company name match in headline
+            rel_ticker = item.get("related_ticker", "")
+            item["relevance"] = score_headline_relevance(
+                title, rel_ticker, names.get(rel_ticker, "")
+            )
             unique_news.append(item)
 
     # Persist to both cache layers
@@ -539,8 +705,77 @@ def get_portfolio_news(tickers: List[str], limit: int = 50) -> List[Dict]:
     return unique_news[:limit]
 
 
+def _fetch_rss_feed(url: str, source_name: str, max_items: int = 15) -> List[Dict]:
+    """Generic RSS feed fetcher — works for any standard RSS 2.0 / Atom feed."""
+    import requests
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    try:
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 (compatible; Prosper/1.0)"})
+        if resp.status_code != 200:
+            return []
+        root = ET.fromstring(resp.content)
+        items = []
+        # Standard RSS 2.0
+        for item in root.findall(".//item")[:max_items]:
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            pub = item.findtext("pubDate", "")
+            ts = 0
+            try:
+                ts = int(parsedate_to_datetime(pub).timestamp()) if pub else 0
+            except Exception:
+                pass
+            if title:
+                items.append({
+                    "title": title,
+                    "link": link,
+                    "publisher": source_name,
+                    "providerPublishTime": ts,
+                    "related_ticker": "Market",
+                })
+        # Atom feeds (e.g. Google News)
+        if not items:
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall(".//atom:entry", ns)[:max_items]:
+                title = (entry.findtext("atom:title", "", ns) or "").strip()
+                link_el = entry.find("atom:link", ns)
+                link = link_el.get("href", "") if link_el is not None else ""
+                pub = entry.findtext("atom:updated", "", ns) or entry.findtext("atom:published", "", ns)
+                ts = 0
+                try:
+                    from datetime import datetime as _dt
+                    ts = int(_dt.fromisoformat(pub.replace("Z", "+00:00")).timestamp()) if pub else 0
+                except Exception:
+                    pass
+                if title:
+                    items.append({
+                        "title": title, "link": link, "publisher": source_name,
+                        "providerPublishTime": ts, "related_ticker": "Market",
+                    })
+        return items
+    except Exception:
+        return []
+
+
+# RSS feeds from credible financial sources
+MARKET_RSS_FEEDS = [
+    ("https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", "CNBC"),
+    ("https://feeds.marketwatch.com/marketwatch/topstories/", "MarketWatch"),
+    ("https://www.fool.com/feeds/index.aspx?id=market-news", "Motley Fool"),
+    ("https://feeds.bloomberg.com/markets/news.rss", "Bloomberg"),
+    ("https://feeds.reuters.com/reuters/businessNews", "Reuters"),
+    ("https://seekingalpha.com/market_currents.xml", "Seeking Alpha"),
+    ("https://news.google.com/rss/search?q=stock+market+today&hl=en-US&gl=US&ceid=US:en", "Google News"),
+    ("https://www.ft.com/rss/home", "Financial Times"),
+    ("https://feeds.feedburner.com/zerohedge/feed", "ZeroHedge"),
+    ("https://www.investing.com/rss/news.rss", "Investing.com"),
+]
+
+
 def get_market_news() -> List[Dict]:
-    """Fetch news for major market indices from yfinance + Finnhub general news."""
+    """Fetch news for major market indices from yfinance + Finnhub + multiple RSS sources."""
     market_tickers = ["^GSPC", "^NDX", "^DJI", "^NSEI", "^BSESN", "^FTSE"]
     yf_news = get_portfolio_news(market_tickers, limit=30)
 
@@ -559,7 +794,26 @@ def get_market_news() -> List[Dict]:
     except Exception:
         pass
 
-    # Deduplicate
+    # Fetch from multiple credible RSS sources in parallel
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_done
+
+        def _fetch_one(feed_url_source):
+            url, source = feed_url_source
+            return _fetch_rss_feed(url, source, max_items=10)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futs = {pool.submit(_fetch_one, f): f for f in MARKET_RSS_FEEDS}
+            for f in _as_done(futs, timeout=15):
+                try:
+                    rss_items = f.result(timeout=10)
+                    yf_news.extend(rss_items)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Deduplicate by title
     seen = set()
     unique = []
     for item in sorted(yf_news, key=lambda x: x.get("providerPublishTime", 0), reverse=True):
@@ -568,7 +822,7 @@ def get_market_news() -> List[Dict]:
             seen.add(title)
             unique.append(item)
 
-    return unique[:50]
+    return unique[:80]
 
 
 # ─────────────────────────────────────────
@@ -963,20 +1217,52 @@ def calculate_headline_sentiment(headlines: List[str]) -> float:
     return round((total_pos - total_neg) / total, 2)
 
 
-def get_ticker_sentiment(ticker: str) -> Dict:
+def get_ticker_sentiment(ticker: str, company_name: str = "") -> Dict:
     """
     Calculate sentiment for a ticker based on recent news headlines.
-    Returns: {score, label, positive_count, negative_count, total_headlines, top_positive, top_negative}
+    Returns: {score, label, positive_count, negative_count, total_headlines,
+              top_positive, top_negative, relevant_count, relevance_breakdown}
+    Headlines in top_positive/top_negative are dicts: {title, date, stale, relevance}
     """
     news = get_ticker_news(ticker)
-    headlines = [n.get("title", "") for n in news if n.get("title")]
+    if not news:
+        return {"score": 0.0, "label": "No Data", "total_headlines": 0,
+                "positive_count": 0, "negative_count": 0,
+                "top_positive": [], "top_negative": [],
+                "relevant_count": 0, "relevance_breakdown": {"HIGH": 0, "MEDIUM": 0, "LOW": 0}}
 
+    headlines = [n.get("title", "") for n in news if n.get("title")]
     if not headlines:
         return {"score": 0.0, "label": "No Data", "total_headlines": 0,
                 "positive_count": 0, "negative_count": 0,
-                "top_positive": [], "top_negative": []}
+                "top_positive": [], "top_negative": [],
+                "relevant_count": 0, "relevance_breakdown": {"HIGH": 0, "MEDIUM": 0, "LOW": 0}}
 
     score = calculate_headline_sentiment(headlines)
+
+    # Build headline → timestamp lookup for date display
+    now_ts = datetime.now().timestamp()
+    stale_cutoff = now_ts - 7 * 86400  # 7 days
+    title_ts = {}
+    for n in news:
+        t = n.get("title", "")
+        ts = n.get("providerPublishTime", 0) or 0
+        if t and ts:
+            title_ts[t] = ts
+
+    def _headline_dict(h):
+        ts = title_ts.get(h, 0)
+        rel = score_headline_relevance(h, ticker, company_name)
+        if ts:
+            date_str = datetime.fromtimestamp(ts).strftime("%b %d, %Y")
+            return {"title": h, "date": date_str, "stale": ts < stale_cutoff, "relevance": rel}
+        return {"title": h, "date": "", "stale": False, "relevance": rel}
+
+    # Relevance breakdown across all headlines
+    relevance_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for h in headlines:
+        rel = score_headline_relevance(h, ticker, company_name)
+        relevance_counts[rel] += 1
 
     # Classify each headline
     positive_headlines = []
@@ -986,9 +1272,9 @@ def get_ticker_sentiment(ticker: str) -> Dict:
         pos = len(words & _POSITIVE_WORDS)
         neg = len(words & _NEGATIVE_WORDS)
         if pos > neg:
-            positive_headlines.append(h)
+            positive_headlines.append(_headline_dict(h))
         elif neg > pos:
-            negative_headlines.append(h)
+            negative_headlines.append(_headline_dict(h))
 
     if score > 0.3:
         label = "Bullish"
@@ -1002,14 +1288,99 @@ def get_ticker_sentiment(ticker: str) -> Dict:
         label = "Neutral"
 
     return {
-        "score":           score,
-        "label":           label,
-        "total_headlines":  len(headlines),
-        "positive_count":   len(positive_headlines),
-        "negative_count":   len(negative_headlines),
-        "top_positive":     positive_headlines[:3],
-        "top_negative":     negative_headlines[:3],
+        "score":              score,
+        "label":              label,
+        "total_headlines":    len(headlines),
+        "positive_count":     len(positive_headlines),
+        "negative_count":     len(negative_headlines),
+        "top_positive":       positive_headlines[:5],
+        "top_negative":       negative_headlines[:5],
+        "relevant_count":     relevance_counts["HIGH"] + relevance_counts["MEDIUM"],
+        "relevance_breakdown": relevance_counts,
     }
+
+
+# ─────────────────────────────────────────
+# NEWS RELEVANCE SCORING
+# ─────────────────────────────────────────
+# Scores how relevant a headline is to a specific ticker/company.
+# HIGH   = ticker symbol or full company name explicitly in title
+# MEDIUM = partial company name match (e.g. "Apple" for "Apple Inc.")
+# LOW    = generic market/sector news fetched via ticker's feed but not specific
+
+def score_headline_relevance(
+    title: str,
+    ticker: str,
+    company_name: str = "",
+) -> str:
+    """
+    Score relevance of a headline to a specific ticker.
+
+    Returns: "HIGH", "MEDIUM", or "LOW"
+
+    HIGH:   Ticker symbol appears (e.g. "AAPL") or full company name match
+    MEDIUM: Key part of company name appears (e.g. "Apple" from "Apple Inc.")
+    LOW:    No direct ticker/company mention — generic market news
+    """
+    if not title:
+        return "LOW"
+
+    title_upper = title.upper()
+    title_lower = title.lower()
+
+    # ── HIGH: ticker symbol appears explicitly ──
+    # Check for ticker as a whole word (not part of another word)
+    clean_ticker = ticker.split(".")[0].upper()  # Remove exchange suffix
+    if len(clean_ticker) >= 2:
+        import re
+        if re.search(rf'\b{re.escape(clean_ticker)}\b', title_upper):
+            return "HIGH"
+
+    # ── HIGH: full company name match ──
+    if company_name:
+        # Strip common suffixes for matching
+        clean_name = company_name.lower()
+        for suffix in (" inc.", " inc", " corp.", " corp", " ltd.", " ltd",
+                       " plc", " ag", " sa", " se", " n.v.", " co.",
+                       " group", " holdings", " limited", " corporation"):
+            clean_name = clean_name.replace(suffix, "")
+        clean_name = clean_name.strip()
+
+        if clean_name and len(clean_name) >= 3 and clean_name in title_lower:
+            return "HIGH"
+
+    # ── MEDIUM: key word from company name ──
+    if company_name:
+        # Take the first significant word (skip very short/common words)
+        _skip = {"the", "a", "an", "and", "of", "for", "in", "on", "at", "to", "by", "no", "new"}
+        name_words = [w for w in company_name.lower().split()
+                      if len(w) >= 3 and w not in _skip]
+        for word in name_words[:2]:  # Check first 2 significant words
+            if word in title_lower:
+                return "MEDIUM"
+
+    return "LOW"
+
+
+def tag_news_relevance(
+    news_items: List[Dict],
+    ticker: str,
+    company_name: str = "",
+) -> List[Dict]:
+    """
+    Tag each news item with a 'relevance' field (HIGH/MEDIUM/LOW).
+    Returns a new list (doesn't mutate input).
+    """
+    tagged = []
+    for item in news_items:
+        item_copy = dict(item)
+        item_copy["relevance"] = score_headline_relevance(
+            item.get("title", ""),
+            ticker,
+            company_name,
+        )
+        tagged.append(item_copy)
+    return tagged
 
 
 # ─────────────────────────────────────────
@@ -1025,7 +1396,13 @@ def apply_global_filter(df: pd.DataFrame) -> pd.DataFrame:
 
 def clean_nan(df: pd.DataFrame) -> pd.DataFrame:
     """Replace all NaN/None/'nan' values with empty strings for clean display."""
-    result = df.fillna("")
+    result = df.copy()
+    # Convert nullable integer/float extension types to object first
+    # to avoid 'Invalid value for dtype Int64' errors on fillna("")
+    for col in result.columns:
+        if pd.api.types.is_extension_array_dtype(result[col].dtype):
+            result[col] = result[col].astype(object)
+    result = result.fillna("")
     # Also catch string 'nan' that can appear after conversion
     result = result.replace("nan", "")
     return result
@@ -1035,10 +1412,17 @@ def clean_nan(df: pd.DataFrame) -> pd.DataFrame:
 # UTILITY: CAGR calculation
 # ─────────────────────────────────────────
 def calc_cagr(start_val: float, end_val: float, years: float) -> Optional[float]:
-    """Compound Annual Growth Rate. Returns None if inputs invalid."""
+    """Compound Annual Growth Rate. Returns None if inputs invalid or result unreasonable."""
     if start_val <= 0 or years <= 0 or end_val <= 0:
         return None
-    return (end_val / start_val) ** (1.0 / years) - 1.0
+    # Guard against extremely short periods yielding absurd annualized rates
+    if years < 0.02:  # less than ~1 week of data
+        return None
+    cagr = (end_val / start_val) ** (1.0 / years) - 1.0
+    # Sanity cap: CAGR beyond ±10,000% is almost certainly a data error
+    if abs(cagr) > 100.0:
+        return None
+    return cagr
 
 
 # ─────────────────────────────────────────
@@ -1165,9 +1549,14 @@ def calc_portfolio_volatility(tickers: list, weights: dict, period: str = "1y") 
 
 
 def fmt_large(val) -> str:
-    """Format a large number: 1.2B, 450M, 12.5K, etc."""
+    """Format a large number: 1.2B, 450M, 12.5K, etc. Returns '' for NaN/None."""
     try:
+        if val is None:
+            return ""
         v = float(val)
+        import math
+        if math.isnan(v) or math.isinf(v):
+            return ""
         if abs(v) >= 1e12:
             return f"{v/1e12:.1f}T"
         elif abs(v) >= 1e9:
@@ -1179,4 +1568,4 @@ def fmt_large(val) -> str:
         else:
             return f"{v:,.2f}"
     except (TypeError, ValueError):
-        return "—"
+        return ""

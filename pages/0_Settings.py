@@ -1,15 +1,15 @@
 """
-Settings
-========
-User preferences for display, data refresh, columns, and API status.
-All changes are saved persistently and survive app restarts.
+Settings & Configuration
+========================
+Consolidated settings page — all preferences in one place.
+Sections: Display, Data, Dashboard, API Keys, Data Management, About.
 """
 
 import os
 import streamlit as st
 from core.settings import SETTINGS, save_user_settings, get_defaults, load_user_settings
 
-st.header("⚙️ Settings")
+st.header("⚙️ Settings & Configuration")
 
 # Reload current saved settings (not the cached import-time snapshot)
 current = load_user_settings()
@@ -18,18 +18,29 @@ defaults = get_defaults()
 # ─────────────────────────────────────────
 # DISPLAY SETTINGS
 # ─────────────────────────────────────────
-st.subheader("🖥️ Display")
+st.subheader("🖥️ Display & Appearance")
 
-currency_options = ["USD", "AED", "EUR", "GBP", "INR", "SGD", "HKD", "AUD", "CAD", "JPY", "CHF"]
-current_base = current.get("base_currency", "USD")
-base_idx = currency_options.index(current_base) if current_base in currency_options else 0
+col_disp1, col_disp2 = st.columns(2)
 
-base_currency = st.selectbox(
-    "Base Currency",
-    currency_options,
-    index=base_idx,
-    help="All portfolio values will be converted and displayed in this currency.",
-)
+with col_disp1:
+    currency_options = ["USD", "AED", "EUR", "GBP", "INR", "SGD", "HKD", "AUD", "CAD", "JPY", "CHF",
+                        "SAR", "KWD", "QAR", "BHD", "OMR", "ZAR", "MYR", "KRW", "BRL"]
+    current_base = current.get("base_currency", "USD")
+    base_idx = currency_options.index(current_base) if current_base in currency_options else 0
+    base_currency = st.selectbox(
+        "Base Currency",
+        currency_options,
+        index=base_idx,
+        help="All portfolio values will be converted and displayed in this currency.",
+    )
+
+with col_disp2:
+    number_format = st.selectbox(
+        "Number Format",
+        ["Compact (1.2M, 45K)", "Full (1,200,000)"],
+        index=0 if current.get("number_format", "compact") == "compact" else 1,
+        help="How large numbers are displayed across the app.",
+    )
 
 st.divider()
 
@@ -38,99 +49,121 @@ st.divider()
 # ─────────────────────────────────────────
 st.subheader("🔄 Data Refresh")
 
-refresh_options = {
-    "1 minute":   60,
-    "2 minutes":  120,
-    "5 minutes":  300,
-    "10 minutes": 600,
-    "15 minutes": 900,
-}
-current_ttl = current.get("price_cache_ttl_seconds", 300)
-# Find closest match
-ttl_labels = list(refresh_options.keys())
-ttl_values = list(refresh_options.values())
-ttl_idx = ttl_values.index(current_ttl) if current_ttl in ttl_values else 2  # default 5 min
+col_r1, col_r2 = st.columns(2)
 
-price_refresh = st.selectbox(
-    "Price Refresh Interval",
-    ttl_labels,
-    index=ttl_idx,
-    help="How often to auto-refresh live stock prices. Lower = more API calls.",
-)
+with col_r1:
+    refresh_options = {
+        "1 minute":   60,
+        "2 minutes":  120,
+        "5 minutes":  300,
+        "10 minutes": 600,
+        "15 minutes": 900,
+    }
+    current_ttl = current.get("price_cache_ttl_seconds", 300)
+    ttl_labels = list(refresh_options.keys())
+    ttl_values = list(refresh_options.values())
+    ttl_idx = ttl_values.index(current_ttl) if current_ttl in ttl_values else 2
+    price_refresh = st.selectbox(
+        "Price Refresh Interval",
+        ttl_labels,
+        index=ttl_idx,
+        help="How often to auto-refresh live stock prices.",
+    )
 
-col1, col2 = st.columns(2)
-with col1:
+with col_r2:
+    parse_ttl = st.slider(
+        "Parse Cache Duration (days)",
+        min_value=7, max_value=365, value=current.get("parse_cache_ttl_days", 90),
+        help="How long to keep cached screenshot parse results.",
+    )
+
+col_c1, col_c2 = st.columns(2)
+with col_c1:
     parse_cache = st.checkbox(
         "Enable Screenshot Parse Cache",
         value=current.get("parse_cache_enabled", True),
         help="Cache AI-parsed screenshots so the same image doesn't cost another API call.",
     )
-with col2:
+with col_c2:
     fetch_metrics = st.checkbox(
-        "Fetch Health Metrics (P/E, ROE, D/E)",
+        "Auto-Fetch Health Metrics (P/E, ROE, D/E)",
         value=current.get("fetch_key_metrics", True),
-        help="Fetches fundamental metrics. Uses extra API calls per stock.",
+        help="Automatically fetch fundamental metrics.",
     )
-
-parse_ttl = st.slider(
-    "Parse Cache Duration (days)",
-    min_value=7, max_value=365, value=current.get("parse_cache_ttl_days", 90),
-    help="How long to keep cached screenshot parse results before re-parsing.",
-)
 
 st.divider()
 
 # ─────────────────────────────────────────
-# COLUMN VISIBILITY
+# DASHBOARD PREFERENCES (consolidated from sidebar)
 # ─────────────────────────────────────────
-st.subheader("📊 Dashboard Column Visibility")
-st.caption("Toggle which columns appear on the Portfolio Dashboard table.")
+st.subheader("📊 Dashboard Preferences")
+st.caption("Toggle which columns and features appear on the Portfolio Dashboard.")
 
-col_a, col_b, col_c = st.columns(3)
+col_d1, col_d2, col_d3 = st.columns(3)
 
-with col_a:
-    st.markdown("**Core Columns**")
-    col_name          = st.checkbox("Company Name",      value=current.get("col_name", True))
-    col_qty           = st.checkbox("Quantity",           value=current.get("col_qty", True))
-    col_avg_cost      = st.checkbox("Avg Buy Price",     value=current.get("col_avg_cost", True))
-    col_current_price = st.checkbox("Current Price",     value=current.get("col_current_price", True))
-    col_currency      = st.checkbox("Currency",          value=current.get("col_currency", True))
+with col_d1:
+    st.markdown("**Table Columns**")
+    show_day_gain   = st.checkbox("Day Gain / Loss",  value=current.get("pref_dash_show_day_gain", True), key="s_day_gain")
+    show_unrealized = st.checkbox("Unrealized P&L",   value=current.get("pref_dash_show_unrealized", True), key="s_unrealized")
+    show_extended   = st.checkbox("Extended Metrics (52W, PE, Target)", value=current.get("pref_dash_show_extended", False), key="s_extended")
+    show_growth     = st.checkbox("Growth & Financials", value=current.get("pref_dash_show_growth", False), key="s_growth")
 
-with col_b:
-    st.markdown("**Performance**")
-    col_day_gain      = st.checkbox("Today's P&L",       value=current.get("col_day_gain", True))
-    col_day_gain_pct  = st.checkbox("Today's P&L %",     value=current.get("col_day_gain_pct", True))
-    col_market_value  = st.checkbox("Market Value",      value=current.get("col_market_value", True))
-    col_unrealized    = st.checkbox("Unrealized P&L",    value=current.get("col_unrealized_pnl", True))
-    col_pnl_pct       = st.checkbox("Return %",          value=current.get("col_pnl_pct", True))
+with col_d2:
+    st.markdown("**Additional Columns**")
+    show_broker     = st.checkbox("Broker Source", value=current.get("pref_dash_show_broker", False), key="s_broker")
+    show_prosper    = st.checkbox("Prosper AI Score", value=current.get("pref_dash_show_prosper", False), key="s_prosper")
+    auto_ext = st.checkbox("Auto-load Extended Metrics", value=current.get("pref_dash_auto_extended", False),
+                            help="Automatically fetch extended data when prices load", key="s_auto_ext")
 
-with col_c:
-    st.markdown("**Fundamentals**")
-    col_pe            = st.checkbox("P/E Ratio",         value=current.get("col_pe_ratio", True))
-    col_roic          = st.checkbox("ROE / ROIC",        value=current.get("col_roic", False))
-    col_de            = st.checkbox("Debt / Equity",     value=current.get("col_debt_equity", False))
-    col_broker        = st.checkbox("Broker Source",     value=current.get("col_broker", False))
+with col_d3:
+    st.markdown("**News & Sentiment**")
+    auto_mkt_summary = st.checkbox("Auto AI Summaries (Market News)",
+                                    value=current.get("pref_mkt_auto_summary", False), key="s_mkt_summary")
+    auto_port_summary = st.checkbox("Auto AI Summaries (Portfolio News)",
+                                     value=current.get("pref_port_auto_summary", False), key="s_port_summary")
 
 st.divider()
 
 # ─────────────────────────────────────────
 # API STATUS
 # ─────────────────────────────────────────
-st.subheader("🔑 API Status")
-st.caption("Shows which API keys are configured in your .env file.")
+st.subheader("🔑 API Keys & Integrations")
+st.caption("Shows which API keys are configured in your .env file. Keys are never displayed for security.")
 
-apis = {
-    "Anthropic (Claude AI)":    os.getenv("ANTHROPIC_API_KEY", ""),
-    "Financial Modeling Prep":  os.getenv("FMP_API_KEY", ""),
-    "Finnhub":                  os.getenv("FINNHUB_API_KEY", ""),
-    "Twelve Data (UAE)":        os.getenv("TWELVE_DATA_API_KEY", ""),
+required_apis = {
+    "Anthropic (Claude AI — required)":     os.getenv("ANTHROPIC_API_KEY", ""),
+}
+optional_apis = {
+    "Finnhub (quotes, analyst data)":       os.getenv("FINNHUB_API_KEY", ""),
+    "Twelve Data (UAE/DFM quotes)":         os.getenv("TWELVE_DATA_API_KEY", ""),
+    "Serper / Google Search (news + analysis)": os.getenv("SERPER_API_KEY", ""),
+    "Financial Modeling Prep":              os.getenv("FMP_API_KEY", ""),
 }
 
-for name, key in apis.items():
+st.markdown("**Required:**")
+for name, key in required_apis.items():
     placeholder = "your_" in key.lower() if key else True
     configured = bool(key) and not placeholder
     icon = "✅" if configured else "❌"
-    st.markdown(f"{icon} **{name}** — {'Configured' if configured else 'Not configured'}")
+    status = "Configured" if configured else "Not configured"
+    st.markdown(f"{icon} **{name}** — {status}")
+
+st.markdown("**Optional (enhance features):**")
+for name, key in optional_apis.items():
+    placeholder = "your_" in key.lower() if key else True
+    configured = bool(key) and not placeholder
+    icon = "✅" if configured else "⚪"
+    status = "Configured" if configured else "Not set (optional)"
+    st.markdown(f"{icon} **{name}** — {status}")
+
+with st.expander("💡 How to add optional API keys"):
+    st.markdown("""
+Add keys to your `.env` file and restart the app:
+- **Finnhub**: Free at [finnhub.io](https://finnhub.io/) — improves analyst data & company news
+- **Twelve Data**: Free at [twelvedata.com](https://twelvedata.com/) — UAE/DFM stock quotes
+- **Serper**: Free (2.5K/month) at [serper.dev](https://serper.dev/) — Google-powered news + analysis context for Prosper AI
+- **FMP**: Free at [financialmodelingprep.com](https://financialmodelingprep.com/) — additional financial data
+    """)
 
 st.divider()
 
@@ -145,15 +178,17 @@ with col_m1:
     if st.button("🗑️ Clear Price Cache", use_container_width=True,
                   help="Forces re-fetching all prices on next load."):
         from core.database import _get_connection
+        from core.cio_engine import clear_failed_tickers
+        clear_failed_tickers()
         conn = _get_connection()
         conn.execute("DELETE FROM price_cache WHERE ticker NOT LIKE 'FX_%'")
+        conn.execute("DELETE FROM ticker_cache")  # Also clear resolution cache
         conn.commit()
         conn.close()
-        # Clear session state price data
         for key in list(st.session_state.keys()):
-            if key.startswith("enriched_") or key in ("last_refresh_time", "extended_df"):
+            if key.startswith("enriched_") or key.startswith("_de_resolved_") or key in ("last_refresh_time", "extended_df", "summary_info_map"):
                 del st.session_state[key]
-        st.success("Price cache cleared!")
+        st.success("Price + ticker resolution cache cleared!")
 
 with col_m2:
     if st.button("🗑️ Clear Parse Cache", use_container_width=True,
@@ -175,33 +210,44 @@ with col_m3:
 st.divider()
 
 # ─────────────────────────────────────────
+# ABOUT
+# ─────────────────────────────────────────
+st.subheader("ℹ️ About Prosper")
+st.markdown("""
+**Prosper** is an AI-native investment operating system for high-net-worth individuals
+and institutional portfolio management.
+
+- **Version:** 5.0 (Phase 5)
+- **Stack:** Python + Streamlit + SQLite + Claude AI
+- **Data:** yfinance, Finnhub, Twelve Data, RSS feeds (CNBC, Reuters, MarketWatch, Motley Fool)
+- **Security:** All financial data stays local on your machine
+- **Storage:** `~/prosper_data/prosper.db`
+""")
+
+st.divider()
+
+# ─────────────────────────────────────────
 # SAVE BUTTON
 # ─────────────────────────────────────────
 if st.button("💾 Save Settings", type="primary", use_container_width=True):
     updates = {
         "base_currency":           base_currency,
+        "number_format":           "compact" if "Compact" in number_format else "full",
         "price_cache_ttl_seconds": refresh_options[price_refresh],
         "parse_cache_enabled":     parse_cache,
         "parse_cache_ttl_days":    parse_ttl,
         "fetch_key_metrics":       fetch_metrics,
-        "col_name":                col_name,
-        "col_qty":                 col_qty,
-        "col_avg_cost":            col_avg_cost,
-        "col_current_price":       col_current_price,
-        "col_day_gain":            col_day_gain,
-        "col_day_gain_pct":        col_day_gain_pct,
-        "col_market_value":        col_market_value,
-        "col_unrealized_pnl":      col_unrealized,
-        "col_pnl_pct":             col_pnl_pct,
-        "col_pe_ratio":            col_pe,
-        "col_roic":                col_roic,
-        "col_debt_equity":         col_de,
-        "col_currency":            col_currency,
-        "col_broker":              col_broker,
+        "pref_dash_show_day_gain":    show_day_gain,
+        "pref_dash_show_unrealized":  show_unrealized,
+        "pref_dash_show_extended":    show_extended,
+        "pref_dash_show_growth":      show_growth,
+        "pref_dash_show_broker":      show_broker,
+        "pref_dash_show_prosper":     show_prosper,
+        "pref_dash_auto_extended":    auto_ext,
+        "pref_mkt_auto_summary":      auto_mkt_summary,
+        "pref_port_auto_summary":     auto_port_summary,
     }
     save_user_settings(updates)
-
-    # Update the live SETTINGS dict so the app reflects changes immediately
     SETTINGS.update(updates)
 
     # Invalidate enriched cache if currency changed
@@ -213,9 +259,6 @@ if st.button("💾 Save Settings", type="primary", use_container_width=True):
     st.success("✅ Settings saved! Changes take effect immediately.")
     st.balloons()
 
-st.divider()
-st.caption("ℹ️ Settings are saved to `~/prosper_data/user_settings.json` and persist across restarts.")
-
 # Reset to defaults button
 if st.button("↩️ Reset to Defaults", type="secondary"):
     import os as _os
@@ -225,3 +268,5 @@ if st.button("↩️ Reset to Defaults", type="secondary"):
     SETTINGS.update(get_defaults())
     st.success("Settings reset to defaults. Refresh the page to see changes.")
     st.rerun()
+
+st.caption("ℹ️ Settings are saved to `~/prosper_data/user_settings.json` and persist across restarts.")

@@ -22,12 +22,12 @@ from core.currency_normalizer import detect_currency_from_ticker, get_exchange_r
 
 
 # ─────────────────────────────────────────
-# FAILED-TICKER CACHE  (30-min cooldown)
+# FAILED-TICKER CACHE  (10-min cooldown)
 # Avoids re-fetching tickers we know have no price data on any source.
 # ─────────────────────────────────────────
 import time as _time
 _failed_tickers: Dict[str, float] = {}   # {ticker: failed_at_timestamp}
-_FAIL_COOLDOWN = 1800   # 30 minutes — don't retry a known-failing ticker
+_FAIL_COOLDOWN = 600   # 10 minutes — retry sooner (was 30 min)
 
 
 def _mark_failed(sym: str):
@@ -37,6 +37,11 @@ def _mark_failed(sym: str):
 def _is_failed(sym: str) -> bool:
     t = _failed_tickers.get(sym, 0)
     return (_time.time() - t) < _FAIL_COOLDOWN
+
+
+def clear_failed_tickers():
+    """Clear the in-memory failed-ticker cooldown so all tickers are retried."""
+    _failed_tickers.clear()
 
 
 # ─────────────────────────────────────────
@@ -145,13 +150,16 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
 
     results: Dict[str, dict] = {}
     explicit_failures: set = set()
-    max_workers = min(len(tickers), 12)   # conservative cap — prevents crashes
+    max_workers = min(len(tickers), 15)   # increased from 12 for larger portfolios
+
+    # Scale timeout: 60s base + 3s per ticker beyond 20
+    batch_timeout = max(60, 60 + (len(tickers) - 20) * 3) if len(tickers) > 20 else 60
 
     pool = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures = {pool.submit(_fetch_one_quote, sym): sym for sym in tickers}
         try:
-            for future in as_completed(futures, timeout=60):
+            for future in as_completed(futures, timeout=batch_timeout):
                 try:
                     sym, data = future.result(timeout=15)
                     if data is not None:
@@ -162,7 +170,7 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
                 except Exception:
                     pass
         except Exception:
-            # Global 60s timeout — return whatever completed; timed-out tickers are NOT failed
+            # Timeout — return whatever completed; timed-out tickers are NOT failed
             pass
     finally:
         pool.shutdown(wait=False)

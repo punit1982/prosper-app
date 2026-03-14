@@ -1,6 +1,6 @@
 """
 Prosper — AI-Native Investment Operating System
-Main entrypoint: page config, DB init, and navigation.
+Main entrypoint: page config, DB init, authentication, and navigation.
 """
 
 import os
@@ -21,6 +21,72 @@ st.set_page_config(
 )
 
 init_db()
+
+# ── Authentication ────────────────────────────────────────────────────────────
+# Uses streamlit-authenticator for email/password login.
+# Auth can be disabled by setting PROSPER_AUTH_ENABLED=false in .env
+
+AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
+
+if AUTH_ENABLED:
+    try:
+        import yaml
+        import streamlit_authenticator as stauth
+
+        _auth_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_config.yaml")
+
+        if os.path.exists(_auth_config_path):
+            with open(_auth_config_path) as _f:
+                _auth_config = yaml.safe_load(_f)
+
+            authenticator = stauth.Authenticate(
+                _auth_config["credentials"],
+                _auth_config["cookie"]["name"],
+                _auth_config["cookie"]["key"],
+                _auth_config["cookie"]["expiry_days"],
+            )
+
+            authenticator.login()
+
+            if st.session_state.get("authentication_status") is None:
+                st.info("Please enter your credentials to access Prosper.")
+                st.caption("Default login: **admin** / **prosper2026**")
+
+                # Registration form
+                with st.expander("📝 New User? Register Here"):
+                    try:
+                        email, username, name = authenticator.register_user(pre_authorization=False)
+                        if email:
+                            # Save updated credentials back to YAML
+                            with open(_auth_config_path, "w") as _wf:
+                                yaml.dump(_auth_config, _wf, default_flow_style=False)
+                            st.success(f"User **{username}** registered successfully! You can now log in.")
+                    except Exception as reg_err:
+                        st.error(str(reg_err))
+
+                st.stop()
+
+            elif st.session_state.get("authentication_status") is False:
+                st.error("Invalid username or password.")
+                st.stop()
+
+            # User is authenticated — show logout in sidebar
+            with st.sidebar:
+                st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
+                authenticator.logout("Logout", "sidebar")
+                st.divider()
+
+        else:
+            # No auth config file — skip authentication
+            AUTH_ENABLED = False
+
+    except ImportError:
+        # streamlit-authenticator not installed — skip authentication
+        AUTH_ENABLED = False
+    except Exception as auth_err:
+        st.warning(f"Authentication error: {auth_err}. Running without login.")
+        AUTH_ENABLED = False
+
 
 # ── Global currency filter (visible on every page) ────────────────────────────
 _holdings_for_filter = get_all_holdings()
@@ -73,10 +139,13 @@ pg = st.navigation({
         st.Page("pages/2_Portfolio_Dashboard.py", title="Portfolio Dashboard", icon="📊"),
     ],
     "Analysis": [
-        st.Page("pages/4_Portfolio_Summary.py",  title="Portfolio Summary",   icon="🧩"),
-        st.Page("pages/5_Performance.py",        title="Performance",         icon="📈"),
-        st.Page("pages/7_Analyst_Consensus.py",  title="Analyst Consensus",   icon="🎯"),
-        st.Page("pages/8_Sentiment.py",          title="Sentiment",           icon="💬"),
+        st.Page("pages/4_Portfolio_Summary.py",    title="Portfolio Summary",   icon="🧩"),
+        st.Page("pages/16_Portfolio_Rebalance.py", title="Portfolio Rebalance", icon="⚖️"),
+        st.Page("pages/5_Performance.py",          title="Performance",         icon="📈"),
+        st.Page("pages/7_Analyst_Consensus.py",    title="Analyst Consensus",   icon="🎯"),
+        st.Page("pages/8_Sentiment.py",            title="Sentiment",           icon="💬"),
+        st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",    icon="🔬"),
+        st.Page("pages/15_Prosper_AI_Analysis.py",  title="Prosper AI",          icon="🤖"),
     ],
     "News": [
         st.Page("pages/3_Portfolio_News.py",     title="Portfolio News",      icon="📰"),
@@ -93,6 +162,7 @@ pg = st.navigation({
     ],
     "Settings": [
         st.Page("pages/0_Settings.py",           title="Settings",            icon="⚙️"),
+        st.Page("pages/17_User_Management.py",   title="User Management",    icon="👥"),
     ],
 })
 

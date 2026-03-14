@@ -39,6 +39,7 @@ with st.sidebar:
     show_unrealized = st.checkbox("Unrealized P&L",   value=SETTINGS.get("pref_dash_show_unrealized", True))
     show_extended   = st.checkbox("Extended Metrics (52W, FWD PE, Target)", value=SETTINGS.get("pref_dash_show_extended", False))
     show_growth     = st.checkbox("Growth & Financials", value=SETTINGS.get("pref_dash_show_growth", False))
+    show_prosper     = st.checkbox("Prosper AI Ratings", value=SETTINGS.get("pref_dash_show_prosper", False))
     show_broker     = st.checkbox("Broker", value=SETTINGS.get("pref_dash_show_broker", False))
 
     # Auto-persist preferences when changed
@@ -47,6 +48,7 @@ with st.sidebar:
         "pref_dash_show_unrealized": show_unrealized,
         "pref_dash_show_extended": show_extended,
         "pref_dash_show_growth": show_growth,
+        "pref_dash_show_prosper": show_prosper,
         "pref_dash_show_broker": show_broker,
     }
     _changed = {k: v for k, v in _prefs.items() if SETTINGS.get(k) != v}
@@ -63,6 +65,24 @@ with st.sidebar:
 
     load_extended_btn = st.button("📊 Load Extended Metrics", use_container_width=True,
                                    help="Fetches 52W H/L, Forward PE, Analyst Consensus, Growth data, Fund metrics, etc.")
+
+    if st.button("🔁 Force Retry All Prices", use_container_width=True,
+                  help="Clears failed-ticker cache and re-fetches ALL prices. Use if you see 'No live price' for stocks that should work."):
+        from core.cio_engine import clear_failed_tickers
+        clear_failed_tickers()
+        try:
+            from core.database import _get_connection
+            conn = _get_connection()
+            conn.execute("DELETE FROM price_cache WHERE price IS NULL")
+            conn.execute("DELETE FROM ticker_cache")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        for key in list(st.session_state.keys()):
+            if key.startswith("enriched_") or key.startswith("_de_resolved_") or key in ("extended_df", "last_refresh_time", "summary_info_map"):
+                del st.session_state[key]
+        st.rerun()
 
     if st.button("🗑️ Clear Entire Portfolio", type="secondary", use_container_width=True):
         clear_all_holdings()
@@ -190,7 +210,9 @@ def fmt_pct_plain(val):
     try:
         v = float(val)
         if math.isnan(v): return ""
-        return f"{v*100:.1f}%"
+        pct = v * 100 if abs(v) < 1 else v
+        if abs(pct) > 500: return ""  # nonsensical — suppress
+        return f"{pct:.1f}%"
     except (TypeError, ValueError):
         return ""
 
@@ -297,6 +319,22 @@ def _build_stock_table(sub_df, sym):
         if "roe" in sub_df.columns:
             display["ROE"] = sub_df["roe"].apply(fmt_pct_plain).values
 
+    if show_prosper:
+        from core.database import get_all_prosper_analyses
+        prosper_df = get_all_prosper_analyses()
+        if not prosper_df.empty:
+            prosper_map = prosper_df.set_index("ticker").to_dict("index")
+            tickers = sub_df["ticker"].values
+            display["AI Rating"] = [prosper_map.get(t, {}).get("rating", "") for t in tickers]
+            display["AI Score"] = [
+                f"{prosper_map[t]['score']:.0f}" if t in prosper_map and pd.notna(prosper_map[t].get("score")) else ""
+                for t in tickers
+            ]
+            display["AI Upside"] = [
+                f"{prosper_map[t]['upside_pct']:+.1f}%" if t in prosper_map and pd.notna(prosper_map[t].get("upside_pct")) else ""
+                for t in tickers
+            ]
+
     if show_broker and "broker_source" in sub_df.columns:
         display["Broker"] = sub_df["broker_source"].fillna("").values
 
@@ -386,14 +424,26 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 
         # Color coding
         signed_cols = [c for c in stock_display.columns
-                       if any(kw in c for kw in ["Day P&L", "Day %", "P&L (", "Return %", "Upside %"])]
+                       if any(kw in c for kw in ["Day P&L", "Day %", "P&L (", "Return %", "Upside %", "AI Upside"])]
         rating_cols = [c for c in stock_display.columns if c == "Rating"]
+        ai_rating_cols = [c for c in stock_display.columns if c == "AI Rating"]
 
         styled = stock_display.style
         if signed_cols:
             styled = styled.map(lambda v: color_signed(v, sym), subset=signed_cols)
         if rating_cols:
             styled = styled.map(_rating_color_from_label, subset=rating_cols)
+        if ai_rating_cols:
+            def _ai_rating_color(val):
+                v = str(val).strip().upper()
+                if v in ("STRONG BUY", "BUY"):
+                    return "color: #1a9e5c; font-weight: 600"
+                elif v in ("SELL", "STRONG SELL"):
+                    return "color: #d63031; font-weight: 600"
+                elif v == "HOLD":
+                    return "color: #f39c12; font-weight: 600"
+                return ""
+            styled = styled.map(_ai_rating_color, subset=ai_rating_cols)
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
         st.caption(f"**{label}**")
@@ -506,29 +556,74 @@ def portfolio_section():
 
     st.divider()
 
-    # ── Currency Tabs ─────────────────────────────────────────────────────────
+    # ── Currency Tabs — with "All" tab, country-friendly names ─────────────
+    _CUR_COUNTRY = {
+        "USD": "United States", "AED": "UAE", "EUR": "Europe", "GBP": "United Kingdom",
+        "INR": "India", "SGD": "Singapore", "HKD": "Hong Kong", "AUD": "Australia",
+        "CAD": "Canada", "JPY": "Japan", "CHF": "Switzerland", "CNY": "China",
+        "BRL": "Brazil", "KRW": "South Korea", "SEK": "Sweden", "NOK": "Norway",
+    }
     currencies = sorted(df["currency"].dropna().unique().tolist()) if "currency" in df.columns else [sym]
 
     if len(currencies) <= 1:
-        # Single currency — no tabs, render directly
         _render_currency_section(df, sym, currencies[0] if currencies else sym, "single")
     else:
-        # Build tab labels: "CUR · VALUE · COUNT"
-        tab_labels = []
+        tab_labels = ["All"]
         for cur in currencies:
-            cur_df = df[df["currency"] == cur]
-            cur_val = safe_sum(cur_df.get("market_value"))
-            count = len(cur_df)
-            if cur_val is not None:
-                tab_labels.append(f"{cur} · {sym} {cur_val:,.0f} · {count}")
-            else:
-                tab_labels.append(f"{cur} · {count} holdings")
+            country = _CUR_COUNTRY.get(cur, cur)
+            tab_labels.append(country)
 
         tabs = st.tabs(tab_labels)
+        # "All" tab
+        with tabs[0]:
+            _render_currency_section(df, sym, "All", "tab_all")
+        # Per-currency tabs
         for i, cur in enumerate(currencies):
-            with tabs[i]:
+            with tabs[i + 1]:
                 cur_df = df[df["currency"] == cur].copy()
                 _render_currency_section(cur_df, sym, cur, f"tab_{cur}")
+
+    # ── Inline Editing ─────────────────────────────
+    st.divider()
+    with st.expander("✏️ Edit Holdings", expanded=False):
+        from core.database import update_holding
+        raw_holdings = get_all_holdings()
+        if not raw_holdings.empty:
+            edit_df = raw_holdings[["id", "ticker", "name", "quantity", "avg_cost", "currency"]].copy()
+            edited = st.data_editor(
+                edit_df,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                    "ticker": st.column_config.TextColumn("Ticker", disabled=True),
+                    "name": st.column_config.TextColumn("Name", disabled=True),
+                    "quantity": st.column_config.NumberColumn("Quantity", min_value=0, format="%.4f"),
+                    "avg_cost": st.column_config.NumberColumn("Avg Cost", min_value=0, format="%.4f"),
+                    "currency": st.column_config.SelectboxColumn("Currency",
+                        options=["USD", "AED", "EUR", "GBP", "INR", "SGD", "HKD", "AUD", "CAD", "JPY", "CHF"]),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="holdings_editor",
+            )
+
+            if st.button("Save Changes", type="primary", key="save_edit"):
+                changes = 0
+                for idx in range(len(edit_df)):
+                    row_id = int(edit_df.iloc[idx]["id"])
+                    for col in ["quantity", "avg_cost", "currency"]:
+                        orig = edit_df.iloc[idx][col]
+                        new_val = edited.iloc[idx][col]
+                        if str(orig) != str(new_val):
+                            update_holding(row_id, **{col: new_val})
+                            changes += 1
+                if changes > 0:
+                    st.success(f"Saved {changes} change(s). Refreshing...")
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("enriched_") or key in ("extended_df", "last_refresh_time"):
+                            del st.session_state[key]
+                    st.rerun()
+                else:
+                    st.info("No changes detected.")
 
     # ── Footer ─────────────────────────────
     st.divider()
