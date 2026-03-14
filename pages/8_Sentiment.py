@@ -63,7 +63,7 @@ if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts
             comp      = get_composite_sentiment(ticker, news_sent["score"])
             return ticker, news_sent, comp
 
-        pool = ThreadPoolExecutor(max_workers=min(len(tickers), 8))
+        pool = ThreadPoolExecutor(max_workers=min(len(tickers), 15))
         futures = {pool.submit(_fetch, t): t for t in tickers}
         try:
             for f in as_completed(futures, timeout=60):
@@ -298,7 +298,7 @@ ticker_detail()
 
 st.divider()
 st.caption(
-    "**Methodology:** News 25% · StockTwits 15% · Reddit 10% · Analyst 30% · Google News 20%  ·  "
+    "**Methodology:** News 30% · StockTwits 15% · Reddit 10% · Analyst 20% · Google News 25%  ·  "
     "Weights redistribute dynamically when sources return empty data  ·  "
     "Score: −100 (very bearish) → +100 (very bullish)"
 )

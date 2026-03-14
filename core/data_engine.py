@@ -1210,11 +1210,20 @@ def calculate_headline_sentiment(headlines: List[str]) -> float:
         total_pos += len(words & _POSITIVE_WORDS)
         total_neg += len(words & _NEGATIVE_WORDS)
 
+    # Bias correction: financial headlines tend to be clickbaity-positive
+    # Apply a slight negative adjustment to counter inherent positive bias
+    if total_pos > 0 and total_neg == 0:
+        # All positive, no negative — likely clickbait/PR, dampen
+        total_pos = total_pos * 0.7
+
+    # Normalize
     total = total_pos + total_neg
     if total == 0:
         return 0.0
-
-    return round((total_pos - total_neg) / total, 2)
+    score = (total_pos - total_neg) / total
+    # Dampen extreme scores — real sentiment is rarely unanimous
+    score = score * 0.8  # cap effective range at -0.8..+0.8
+    return round(score, 2)
 
 
 def get_ticker_sentiment(ticker: str, company_name: str = "") -> Dict:

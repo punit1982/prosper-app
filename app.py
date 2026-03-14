@@ -131,34 +131,24 @@ if not get_nav_snapshot_exists_today(_snap_base):
         except Exception:
             pass  # Silently skip if snapshot fails — non-critical
 
-# ── Navigation — grouped into sections ─────────────────────────────────────────
+# ── Navigation — grouped into 4 clean sections ───────────────────────────────
 pg = st.navigation({
-    "Main": [
-        st.Page("pages/home.py",                 title="Home",                icon="🏠", default=True),
+    "Portfolio": [
         st.Page("pages/1_Upload_Portal.py",      title="Upload Portal",       icon="📤"),
-        st.Page("pages/2_Portfolio_Dashboard.py", title="Portfolio Dashboard", icon="📊"),
+        st.Page("pages/2_Portfolio_Dashboard.py", title="Portfolio Dashboard", icon="📊", default=True),
+        st.Page("pages/4_Portfolio_Summary.py",   title="Portfolio Summary",   icon="🧩"),
+        st.Page("pages/5_Performance.py",         title="Performance",         icon="📈"),
     ],
-    "Analysis": [
-        st.Page("pages/4_Portfolio_Summary.py",    title="Portfolio Summary",   icon="🧩"),
-        st.Page("pages/16_Portfolio_Rebalance.py", title="Portfolio Rebalance", icon="⚖️"),
-        st.Page("pages/5_Performance.py",          title="Performance",         icon="📈"),
-        st.Page("pages/7_Analyst_Consensus.py",    title="Analyst Consensus",   icon="🎯"),
-        st.Page("pages/8_Sentiment.py",            title="Sentiment",           icon="💬"),
-        st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",    icon="🔬"),
-        st.Page("pages/15_Prosper_AI_Analysis.py",  title="Prosper AI",          icon="🤖"),
+    "Research": [
+        st.Page("pages/7_Analyst_Consensus.py",    title="Analyst Consensus",  icon="🎯"),
+        st.Page("pages/8_Sentiment.py",            title="Sentiment",          icon="💬"),
+        st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",   icon="🔬"),
+        st.Page("pages/15_Prosper_AI_Analysis.py",  title="Prosper AI",         icon="🤖"),
     ],
-    "News": [
-        st.Page("pages/3_Portfolio_News.py",     title="Portfolio News",      icon="📰"),
-        st.Page("pages/6_Market_News.py",        title="Market News",         icon="🌍"),
-    ],
-    "Ownership": [
-        st.Page("pages/9_Insider_Activity.py",   title="Insider Activity",    icon="👤"),
-        st.Page("pages/10_Institutional.py",     title="Institutional",       icon="🏛️"),
-    ],
-    "Trading": [
+    "Activity": [
         st.Page("pages/12_Transaction_Log.py",   title="Transaction Log",     icon="📝"),
-        st.Page("pages/14_Watchlist.py",         title="Watchlist",           icon="👁️"),
-        st.Page("pages/13_Export.py",            title="Export Reports",      icon="📥"),
+        st.Page("pages/3_Portfolio_News.py",      title="Portfolio News",      icon="📰"),
+        st.Page("pages/6_Market_News.py",         title="Market News",         icon="🌍"),
     ],
     "Settings": [
         st.Page("pages/0_Settings.py",           title="Settings",            icon="⚙️"),

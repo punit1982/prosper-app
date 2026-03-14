@@ -122,7 +122,7 @@ def get_reddit_sentiment(ticker: str) -> Dict:
 def get_analyst_sentiment(ticker: str) -> Dict:
     """
     Derive sentiment from analyst buy/hold/sell recommendations.
-    Score = (strongBuy*2 + buy*1 + hold*0 + sell*-1 + strongSell*-2) / total
+    Contrarian-adjusted: Score = (strongBuy*2 + buy*0.5 + hold*-0.5 + sell*-1.5 + strongSell*-2) / total
     Normalized to -1..+1 range.
     """
     try:
@@ -142,7 +142,9 @@ def get_analyst_sentiment(ticker: str) -> Dict:
         if total == 0:
             return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
 
-        raw_score = (strong_buy * 2 + buy * 1 + hold * 0 + sell * -1 + strong_sell * -2) / total
+        # Contrarian-adjusted scoring: Hold is slightly negative (if analysts
+        # can only say Hold, it's not positive), Buy weight reduced (lazy default)
+        raw_score = (strong_buy * 2 + buy * 0.5 + hold * -0.5 + sell * -1.5 + strong_sell * -2) / total
         # raw_score range is -2..+2, normalize to -1..+1
         score = round(max(-1.0, min(1.0, raw_score / 2)), 2)
 
@@ -205,29 +207,49 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
     weight redistribution.
 
     Default weights:
-      - News headlines:   25%
+      - News headlines:   30%
       - StockTwits:       15%
       - Reddit:           10%
-      - Analyst Consensus: 30%
-      - Google News RSS:  20%
+      - Analyst Consensus: 20%
+      - Google News RSS:  25%
 
     If a source returns empty data, its weight is redistributed proportionally
     to sources that DO have real data.
 
     Returns dict with composite_score, per-source breakdown, and sources_active count.
     """
-    st_data = get_stocktwits_sentiment(ticker)
-    rd_data = get_reddit_sentiment(ticker)
-    an_data = get_analyst_sentiment(ticker)
-    gn_data = get_google_news_sentiment(ticker)
+    # Fetch all 4 sources in parallel (within this single ticker)
+    from concurrent.futures import as_completed
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_st = pool.submit(get_stocktwits_sentiment, ticker)
+        f_rd = pool.submit(get_reddit_sentiment, ticker)
+        f_an = pool.submit(get_analyst_sentiment, ticker)
+        f_gn = pool.submit(get_google_news_sentiment, ticker)
+
+        try:
+            st_data = f_st.result(timeout=12)
+        except Exception:
+            st_data = {"score": 0, "messages": 0, "bulls": 0, "bears": 0, "top_messages": []}
+        try:
+            rd_data = f_rd.result(timeout=12)
+        except Exception:
+            rd_data = {"score": 0, "mentions": 0, "top_posts": [], "source": "Reddit"}
+        try:
+            an_data = f_an.result(timeout=12)
+        except Exception:
+            an_data = {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
+        try:
+            gn_data = f_gn.result(timeout=12)
+        except Exception:
+            gn_data = {"score": 0, "headlines": 0, "source": "Google News RSS"}
 
     # Default weights
     sources = {
-        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},  # news always counted
+        "news":        {"score": news_score, "default_weight": 0.30, "has_data": True},  # news always counted
         "stocktwits":  {"score": st_data["score"],  "default_weight": 0.15, "has_data": st_data.get("messages", 0) > 0},
         "reddit":      {"score": rd_data["score"],  "default_weight": 0.10, "has_data": rd_data.get("mentions", 0) > 0},
-        "analyst":     {"score": an_data["score"],   "default_weight": 0.30, "has_data": an_data.get("total_recs", 0) > 0},
-        "google_news": {"score": gn_data["score"],  "default_weight": 0.20, "has_data": gn_data.get("headlines", 0) > 0},
+        "analyst":     {"score": an_data["score"],   "default_weight": 0.20, "has_data": an_data.get("total_recs", 0) > 0},
+        "google_news": {"score": gn_data["score"],  "default_weight": 0.25, "has_data": gn_data.get("headlines", 0) > 0},
     }
 
     # Calculate redistributed weights
