@@ -1,8 +1,9 @@
 """
 Sentiment Score
 ===============
-Composite sentiment from News Headlines + StockTwits + Reddit.
+Composite sentiment from News Headlines + StockTwits + Reddit + Analyst Consensus + Google News.
 Score range: -100 (very bearish) to +100 (very bullish).
+Uses dynamic weight redistribution — empty sources have their weight redistributed.
 
 Optimized:
 - Results cached in session_state (30 min TTL) — no re-fetch on every click
@@ -53,7 +54,7 @@ now      = time.time()
 if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts", 0)) > SENT_TTL:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    with st.spinner(f"Analysing sentiment for {len(tickers)} holdings (News · StockTwits · Reddit)…"):
+    with st.spinner(f"Analysing sentiment for {len(tickers)} holdings (News · StockTwits · Reddit · Analyst · Google News)…"):
         sentiments = {}
         composites = {}
 
@@ -118,14 +119,17 @@ for t in tickers:
     c = composites.get(t, {})
     s = sentiments.get(t, {})
     rows.append({
-        "Ticker":     t,
-        "Name":       names.get(t, ""),
-        "Composite":  _to_100(c.get("composite_score", 0)),
-        "News":       _to_100(c.get("news", {}).get("score", 0)),
-        "StockTwits": _to_100(c.get("stocktwits", {}).get("score", 0)),
-        "Reddit":     _to_100(c.get("reddit", {}).get("score", 0)),
-        "Headlines":  s.get("total_headlines", 0),
-        "Signal":     score_label(c.get("composite_score", 0)),
+        "Ticker":         t,
+        "Name":           names.get(t, ""),
+        "Composite":      _to_100(c.get("composite_score", 0)),
+        "News":           _to_100(c.get("news", {}).get("score", 0)),
+        "StockTwits":     _to_100(c.get("stocktwits", {}).get("score", 0)),
+        "Reddit":         _to_100(c.get("reddit", {}).get("score", 0)),
+        "Analyst":        _to_100(c.get("analyst", {}).get("score", 0)),
+        "Google News":    _to_100(c.get("google_news", {}).get("score", 0)),
+        "Headlines":      s.get("total_headlines", 0),
+        "Active Sources": c.get("sources_active", 1),
+        "Signal":         score_label(c.get("composite_score", 0)),
     })
 
 sdf = pd.DataFrame(rows)
@@ -135,7 +139,16 @@ if not sdf.empty:
         sdf.sort_values("Composite"),
         x="Composite", y="Ticker", orientation="h",
         color="Composite",
-        color_continuous_scale=["#DD2C00", "#FF6D00", "#FFD600", "#64DD17", "#00C853"],
+        color_continuous_scale=[
+            [0.0,  "#DD2C00"],   # -100: deep bearish red
+            [0.2,  "#FF6D00"],   # -60:  bearish orange
+            [0.35, "#FFD600"],   # -30:  slightly bearish yellow
+            [0.45, "#E0E0E0"],   # -10:  neutral zone start (grey)
+            [0.55, "#E0E0E0"],   # +10:  neutral zone end (grey)
+            [0.65, "#FFD600"],   # +30:  slightly bullish yellow
+            [0.8,  "#64DD17"],   # +60:  bullish light green
+            [1.0,  "#00C853"],   # +100: deep bullish green
+        ],
         range_color=[-100, 100],
         title="Sentiment Score — All Holdings (-100 to +100)",
         text="Signal",
@@ -161,7 +174,7 @@ if not sdf.empty:
     with st.expander("📊 Full Sentiment Table", expanded=False):
         from core.data_engine import clean_nan
         st.dataframe(
-            clean_nan(sdf[["Ticker", "Name", "Composite", "News", "StockTwits", "Reddit", "Signal", "Headlines"]]),
+            clean_nan(sdf[["Ticker", "Name", "Composite", "News", "StockTwits", "Reddit", "Analyst", "Google News", "Active Sources", "Signal", "Headlines"]]),
             hide_index=True, use_container_width=True,
         )
 
@@ -170,11 +183,22 @@ st.divider()
 # ── Per-ticker detail (fragment = only this section re-runs on selectbox change) ──
 @st.fragment
 def ticker_detail():
-    selected = st.selectbox(
-        "🔍 Deep-dive into a holding",
-        tickers,
-        format_func=lambda t: f"{t}  —  {names.get(t, '')}",
-    )
+    search_col, pick_col = st.columns([1, 2])
+    with search_col:
+        search_text = st.text_input("🔍 Search", placeholder="Type ticker or name...",
+                                     key="sentiment_search", label_visibility="collapsed")
+    with pick_col:
+        if search_text:
+            filtered_tickers = [t for t in tickers
+                               if search_text.upper() in t.upper() or search_text.lower() in names.get(t, "").lower()]
+        else:
+            filtered_tickers = tickers
+        selected = st.selectbox(
+            "🔍 Deep-dive into a holding",
+            filtered_tickers if filtered_tickers else tickers,
+            format_func=lambda t: f"{t}  —  {names.get(t, '')}",
+            label_visibility="collapsed",
+        )
     if not selected:
         return
 
@@ -187,10 +211,20 @@ def ticker_detail():
 
     st.markdown(f"### {selected}  ·  {label}  `{comp_100:+d}`")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("📰 News (40%)",         f"{round(c.get('news', {}).get('score', 0) * 100):+d}")
-    col2.metric("💬 StockTwits (35%)",   f"{round(c.get('stocktwits', {}).get('score', 0) * 100):+d}")
-    col3.metric("📡 Reddit (25%)",       f"{round(c.get('reddit', {}).get('score', 0) * 100):+d}")
+    sources_active = c.get("sources_active", 1)
+    st.caption(f"**{sources_active} of 5 sources active** — weights redistributed dynamically")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric(f"📰 News ({c.get('news', {}).get('weight', '25%')})",
+                f"{round(c.get('news', {}).get('score', 0) * 100):+d}")
+    col2.metric(f"💬 StockTwits ({c.get('stocktwits', {}).get('weight', '15%')})",
+                f"{round(c.get('stocktwits', {}).get('score', 0) * 100):+d}")
+    col3.metric(f"📡 Reddit ({c.get('reddit', {}).get('weight', '10%')})",
+                f"{round(c.get('reddit', {}).get('score', 0) * 100):+d}")
+    col4.metric(f"🏦 Analyst ({c.get('analyst', {}).get('weight', '30%')})",
+                f"{round(c.get('analyst', {}).get('score', 0) * 100):+d}")
+    col5.metric(f"🌐 G-News ({c.get('google_news', {}).get('weight', '20%')})",
+                f"{round(c.get('google_news', {}).get('score', 0) * 100):+d}")
 
     # StockTwits messages
     st_data = c.get("stocktwits", {})
@@ -215,6 +249,22 @@ def ticker_detail():
             date  = post.get("created_utc", "")
             date_str = f" · {date[:10]}" if date else ""
             st.caption(f"📝{date_str}  {post.get('title', '')}  *(↑{score})*")
+
+    # Analyst consensus
+    an_data = c.get("analyst", {})
+    if an_data.get("total_recs", 0) > 0:
+        bd = an_data.get("breakdown", {})
+        st.markdown(
+            f"**Analyst Consensus:** {an_data.get('total_recs', 0)} analysts — "
+            f"{bd.get('strongBuy', 0)} Strong Buy · {bd.get('buy', 0)} Buy · "
+            f"{bd.get('hold', 0)} Hold · {bd.get('sell', 0)} Sell · "
+            f"{bd.get('strongSell', 0)} Strong Sell"
+        )
+
+    # Google News RSS
+    gn_data = c.get("google_news", {})
+    if gn_data.get("headlines", 0) > 0:
+        st.markdown(f"**Google News:** {gn_data.get('headlines', 0)} headlines analysed")
 
     # News headlines with dates
     col_pos, col_neg = st.columns(2)
@@ -248,6 +298,7 @@ ticker_detail()
 
 st.divider()
 st.caption(
-    "**Methodology:** News 40% · StockTwits 35% · Reddit 25%  ·  "
+    "**Methodology:** News 25% · StockTwits 15% · Reddit 10% · Analyst 30% · Google News 20%  ·  "
+    "Weights redistribute dynamically when sources return empty data  ·  "
     "Score: −100 (very bearish) → +100 (very bullish)"
 )

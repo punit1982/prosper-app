@@ -33,13 +33,31 @@ st.caption("Comprehensive 360° view of any stock — fundamentals, analyst cons
 holdings = get_all_holdings()
 portfolio_tickers = sorted(holdings["ticker"].dropna().unique().tolist()) if not holdings.empty else []
 
-pick_col1, pick_col2 = st.columns([1, 3])
+pick_col1, pick_col2, pick_col3 = st.columns([1, 2, 2])
 with pick_col1:
     source = st.radio("Source", ["Portfolio", "Manual"], horizontal=True, key="dd_source")
 with pick_col2:
     if source == "Portfolio" and portfolio_tickers:
-        ticker = st.selectbox("Ticker", portfolio_tickers, key="dd_ticker_select",
+        # Search filter
+        names_map = dict(zip(holdings["ticker"], holdings["name"])) if not holdings.empty else {}
+        search = st.text_input("Search", placeholder="Type ticker or name...", key="dd_search", label_visibility="collapsed")
+        if search:
+            filtered = [t for t in portfolio_tickers
+                       if search.upper() in t.upper() or search.lower() in names_map.get(t, "").lower()]
+        else:
+            filtered = portfolio_tickers
+    else:
+        filtered = []
+        search = ""
+with pick_col3:
+    if source == "Portfolio" and filtered:
+        names_map = dict(zip(holdings["ticker"], holdings["name"])) if not holdings.empty else {}
+        ticker = st.selectbox("Ticker", filtered, key="dd_ticker_select",
+                              format_func=lambda t: f"{t} — {names_map.get(t, '')}",
                               label_visibility="collapsed")
+    elif source == "Portfolio" and not filtered and search:
+        st.warning("No matches")
+        ticker = None
     else:
         ticker = st.text_input("Enter Ticker", value="AAPL", max_chars=20,
                                key="dd_ticker_input", label_visibility="collapsed").strip().upper()
@@ -240,7 +258,8 @@ if hist is not None and not hist.empty:
     # Price line
     close_col = "Close" if "Close" in hist.columns else hist.columns[0]
     fig.add_trace(
-        go.Scatter(x=hist.index, y=hist[close_col], name=ticker, line=dict(color="#1a9e5c", width=2)),
+        go.Scatter(x=hist.index, y=hist[close_col], name=ticker, line=dict(color="#1a9e5c", width=2),
+                   hovertemplate="%{x|%b %d, %Y}<br>Price: %{y:,.2f}<extra>" + ticker + "</extra>"),
         row=1, col=1,
     )
 
@@ -262,13 +281,17 @@ if hist is not None and not hist.empty:
             stock_indexed = (hist[close_col] / hist[close_col].iloc[0]) * 100
             bench_indexed = (bench_hist[b_col] / bench_hist[b_col].iloc[0]) * 100
 
-            # Replace stock line with indexed version
+            # Replace stock line with indexed version, store actual prices in customdata
             fig.data[0].y = stock_indexed
+            fig.data[0].customdata = hist[close_col].values
             fig.data[0].name = f"{ticker} (indexed)"
+            fig.data[0].hovertemplate = "%{x|%b %d, %Y}<br>Indexed: %{y:.1f}<br>Price: %{customdata:,.2f}<extra>" + ticker + "</extra>"
 
             fig.add_trace(
                 go.Scatter(x=bench_hist.index, y=bench_indexed, name=f"{bench_label} (indexed)",
-                           line=dict(color="#888", width=1, dash="dash")),
+                           line=dict(color="#888", width=1, dash="dash"),
+                           customdata=bench_hist[b_col].values,
+                           hovertemplate="%{x|%b %d, %Y}<br>Indexed: %{y:.1f}<br>Price: %{customdata:,.2f}<extra>" + bench_label + "</extra>"),
                 row=1, col=1,
             )
 
@@ -356,6 +379,96 @@ with col_health:
     else:
         st.caption("No financial data available")
 
+# ── Historical Financials (3Y + TTM) ──
+with st.expander("Historical Financials (3 Years + TTM)", expanded=False):
+    import yfinance as yf
+    tk = yf.Ticker(ticker)
+
+    # Fetch annual financials
+    try:
+        annual_is = tk.financials  # income statement
+        annual_bs = tk.balance_sheet
+        annual_cf = tk.cashflow
+        quarterly_is = tk.quarterly_financials
+
+        if annual_is is not None and not annual_is.empty:
+            # Build a summary table with key metrics
+            # Columns: latest 3 annual years + TTM (sum of last 4 quarters)
+            # Rows: Revenue, Gross Profit, Operating Income, Net Income, EBITDA
+            # From balance sheet: Total Debt, Total Cash, Total Assets
+            # From cashflow: Operating Cash Flow, Free Cash Flow, CapEx
+
+            metrics = {}
+            # Get column headers (dates) - most recent first
+            annual_cols = annual_is.columns[:3]  # last 3 years
+            col_labels = [c.strftime("%Y") if hasattr(c, 'strftime') else str(c)[:4] for c in annual_cols]
+
+            # Add TTM from quarterly
+            if quarterly_is is not None and not quarterly_is.empty and len(quarterly_is.columns) >= 4:
+                col_labels = ["TTM"] + col_labels
+                has_ttm = True
+            else:
+                has_ttm = False
+
+            # Helper to get row from a dataframe
+            def _get_row(df, row_names, label):
+                for name in row_names:
+                    if name in df.index:
+                        vals = []
+                        if has_ttm and quarterly_is is not None and name in quarterly_is.index:
+                            ttm_val = quarterly_is.loc[name].iloc[:4].sum()
+                            vals.append(ttm_val)
+                        elif has_ttm:
+                            vals.append(None)
+                        for col in annual_cols:
+                            try:
+                                vals.append(df.loc[name, col])
+                            except (KeyError, IndexError):
+                                vals.append(None)
+                        return vals
+                return [None] * len(col_labels)
+
+            # Income Statement rows
+            rows_data = {}
+            for label, names, source in [
+                ("Revenue", ["Total Revenue", "Revenue"], annual_is),
+                ("Gross Profit", ["Gross Profit"], annual_is),
+                ("Operating Income", ["Operating Income", "EBIT"], annual_is),
+                ("Net Income", ["Net Income", "Net Income Common Stockholders"], annual_is),
+                ("EBITDA", ["EBITDA", "Normalized EBITDA"], annual_is),
+                ("Total Debt", ["Total Debt", "Long Term Debt"], annual_bs),
+                ("Cash & Equivalents", ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"], annual_bs),
+                ("Total Assets", ["Total Assets"], annual_bs),
+                ("Operating Cash Flow", ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities"], annual_cf),
+                ("Capital Expenditure", ["Capital Expenditure"], annual_cf),
+                ("Free Cash Flow", ["Free Cash Flow"], annual_cf),
+            ]:
+                vals = _get_row(source, names, label)
+                if any(v is not None and v != 0 for v in vals):
+                    rows_data[label] = vals
+
+            if rows_data:
+                # Format values as compact numbers
+                table_data = {}
+                for period in col_labels:
+                    table_data[period] = []
+
+                row_labels = []
+                for label, vals in rows_data.items():
+                    row_labels.append(label)
+                    for i, v in enumerate(vals):
+                        formatted = fmt_large(v) if v is not None else "\u2014"
+                        table_data[col_labels[i]].append(formatted)
+
+                hist_df = pd.DataFrame(table_data, index=row_labels)
+                st.dataframe(hist_df, use_container_width=True)
+            else:
+                st.caption("No historical financial data available.")
+        else:
+            st.caption("No historical financial data available for this ticker.")
+    except Exception as e:
+        st.caption("Could not load historical financials.")
+
 st.divider()
 
 # ═══════════════════════════════════════════════════════════════════
@@ -428,197 +541,205 @@ st.divider()
 # ═══════════════════════════════════════════════════════════════════
 # SECTION 6 — SENTIMENT PULSE
 # ═══════════════════════════════════════════════════════════════════
-st.subheader("Sentiment Pulse")
+@st.fragment
+def sentiment_section():
+    st.subheader("Sentiment Pulse")
 
-sentiment = get_ticker_sentiment(ticker, company_name)
-score = sentiment.get("score", 0)
-label = sentiment.get("label", "No Data")
-total_h = sentiment.get("total_headlines", 0)
-relevant = sentiment.get("relevant_count", 0)
-breakdown = sentiment.get("relevance_breakdown", {})
+    sentiment = get_ticker_sentiment(ticker, company_name)
+    score = sentiment.get("score", 0)
+    label = sentiment.get("label", "No Data")
+    total_h = sentiment.get("total_headlines", 0)
+    relevant = sentiment.get("relevant_count", 0)
+    breakdown = sentiment.get("relevance_breakdown", {})
 
-if total_h > 0:
-    # Score display — convert to -100..+100 scale
-    score_100 = round(score * 100)
-    score_color = "#00C853" if score > 0.1 else "#DD2C00" if score < -0.1 else "#f39c12"
-    sc1, sc2, sc3 = st.columns(3)
-    with sc1:
-        st.metric("Sentiment Score", f"{score_100:+d}", delta=label)
-    with sc2:
-        st.metric("Headlines Analyzed", str(total_h))
-    with sc3:
-        st.metric("Direct/Related", f"{relevant} of {total_h}")
+    if total_h > 0:
+        # Score display — convert to -100..+100 scale
+        score_100 = round(score * 100)
+        score_color = "#00C853" if score > 0.1 else "#DD2C00" if score < -0.1 else "#f39c12"
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.metric("Sentiment Score", f"{score_100:+d}", delta=label)
+        with sc2:
+            st.metric("Headlines Analyzed", str(total_h))
+        with sc3:
+            st.metric("Direct/Related", f"{relevant} of {total_h}")
 
-    # Top positive & negative headlines with AI summaries
-    top_pos = sentiment.get("top_positive", [])[:3]
-    top_neg = sentiment.get("top_negative", [])[:3]
+        # Top positive & negative headlines with AI summaries
+        top_pos = sentiment.get("top_positive", [])[:3]
+        top_neg = sentiment.get("top_negative", [])[:3]
 
-    # Get full news items for links
-    news_items = get_ticker_news(ticker)
-    title_to_link = {n.get("title", ""): n.get("link", "") for n in news_items}
+        # Get full news items for links
+        news_items = get_ticker_news(ticker)
+        title_to_link = {n.get("title", ""): n.get("link", "") for n in news_items}
 
-    if top_pos or top_neg:
-        pos_col, neg_col = st.columns(2)
+        if top_pos or top_neg:
+            pos_col, neg_col = st.columns(2)
 
-        with pos_col:
-            if top_pos:
-                st.markdown("**Positive Signals**")
-                for h in top_pos:
-                    title = h.get("title", "")
-                    date = h.get("date", "")
-                    link = title_to_link.get(title, "")
+            with pos_col:
+                if top_pos:
+                    st.markdown("**Positive Signals**")
+                    for h in top_pos:
+                        title = h.get("title", "")
+                        date = h.get("date", "")
+                        link = title_to_link.get(title, "")
 
-                    # AI summary
-                    skey = f"dd_pos_{hash(title)}"
-                    if skey not in st.session_state:
-                        try:
-                            st.session_state[skey] = summarize_news_with_ai(title, "", ticker, company_name)
-                        except Exception:
-                            st.session_state[skey] = title
+                        # AI summary
+                        skey = f"dd_pos_{hash(title)}"
+                        if skey not in st.session_state:
+                            try:
+                                st.session_state[skey] = summarize_news_with_ai(title, "", ticker, company_name)
+                            except Exception:
+                                st.session_state[skey] = title
 
-                    st.markdown(f"📗 {st.session_state[skey]}")
-                    caption_parts = []
-                    if date:
-                        caption_parts.append(date)
-                    if link:
-                        caption_parts.append(f"[Read →]({link})")
-                    if caption_parts:
-                        st.caption(" · ".join(caption_parts))
+                        st.markdown(f"📗 {st.session_state[skey]}")
+                        caption_parts = []
+                        if date:
+                            caption_parts.append(date)
+                        if link:
+                            caption_parts.append(f"[Read →]({link})")
+                        if caption_parts:
+                            st.caption(" · ".join(caption_parts))
 
-        with neg_col:
-            if top_neg:
-                st.markdown("**Negative Signals**")
-                for h in top_neg:
-                    title = h.get("title", "")
-                    date = h.get("date", "")
-                    link = title_to_link.get(title, "")
+            with neg_col:
+                if top_neg:
+                    st.markdown("**Negative Signals**")
+                    for h in top_neg:
+                        title = h.get("title", "")
+                        date = h.get("date", "")
+                        link = title_to_link.get(title, "")
 
-                    skey = f"dd_neg_{hash(title)}"
-                    if skey not in st.session_state:
-                        try:
-                            st.session_state[skey] = summarize_news_with_ai(title, "", ticker, company_name)
-                        except Exception:
-                            st.session_state[skey] = title
+                        skey = f"dd_neg_{hash(title)}"
+                        if skey not in st.session_state:
+                            try:
+                                st.session_state[skey] = summarize_news_with_ai(title, "", ticker, company_name)
+                            except Exception:
+                                st.session_state[skey] = title
 
-                    st.markdown(f"📕 {st.session_state[skey]}")
-                    caption_parts = []
-                    if date:
-                        caption_parts.append(date)
-                    if link:
-                        caption_parts.append(f"[Read →]({link})")
-                    if caption_parts:
-                        st.caption(" · ".join(caption_parts))
-else:
-    st.info("No sentiment data available. News headlines may not be available for this ticker.")
+                        st.markdown(f"📕 {st.session_state[skey]}")
+                        caption_parts = []
+                        if date:
+                            caption_parts.append(date)
+                        if link:
+                            caption_parts.append(f"[Read →]({link})")
+                        if caption_parts:
+                            st.caption(" · ".join(caption_parts))
+    else:
+        st.info("No sentiment data available. News headlines may not be available for this ticker.")
+
+sentiment_section()
 
 st.divider()
 
 # ═══════════════════════════════════════════════════════════════════
 # SECTION 7 — OWNERSHIP & INSIDER (Combined with Insights)
 # ═══════════════════════════════════════════════════════════════════
-st.subheader("Ownership & Insider Activity")
+@st.fragment
+def ownership_section():
+    st.subheader("Ownership & Insider Activity")
 
-# Fetch all ownership data
-major = get_major_holders(ticker)
-inst_holders = get_institutional_holders(ticker)
-purchases = get_insider_purchases(ticker)
-transactions = get_insider_transactions(ticker)
+    # Fetch all ownership data
+    major = get_major_holders(ticker)
+    inst_holders = get_institutional_holders(ticker)
+    purchases = get_insider_purchases(ticker)
+    transactions = get_insider_transactions(ticker)
 
-# Parse ownership percentages from info
-insider_pct = info.get("heldPercentInsiders")
-inst_pct = info.get("heldPercentInstitutions")
+    # Parse ownership percentages from info
+    insider_pct = info.get("heldPercentInsiders")
+    inst_pct = info.get("heldPercentInstitutions")
 
-# ── Ownership Split (metrics + pie) ──
-if insider_pct is not None or inst_pct is not None:
-    ins_v = (insider_pct or 0) * 100 if insider_pct and insider_pct < 1 else (insider_pct or 0)
-    inst_v = (inst_pct or 0) * 100 if inst_pct and inst_pct < 1 else (inst_pct or 0)
-    retail_v = max(0, 100 - ins_v - inst_v)
+    # ── Ownership Split (metrics + pie) ──
+    if insider_pct is not None or inst_pct is not None:
+        ins_v = (insider_pct or 0) * 100 if insider_pct and insider_pct < 1 else (insider_pct or 0)
+        inst_v = (inst_pct or 0) * 100 if inst_pct and inst_pct < 1 else (inst_pct or 0)
+        retail_v = max(0, 100 - ins_v - inst_v)
 
-    pie_col, insight_col = st.columns([2, 3])
-    with pie_col:
-        fig_pie = go.Figure(go.Pie(
-            labels=["Insiders", "Institutions", "Retail/Other"],
-            values=[ins_v, inst_v, retail_v],
-            marker_colors=["#f39c12", "#1a9e5c", "#888"],
-            hole=0.5,
-            textinfo="label+percent",
-        ))
-        fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
-                               template="plotly_dark", showlegend=False)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        pie_col, insight_col = st.columns([2, 3])
+        with pie_col:
+            fig_pie = go.Figure(go.Pie(
+                labels=["Insiders", "Institutions", "Retail/Other"],
+                values=[ins_v, inst_v, retail_v],
+                marker_colors=["#f39c12", "#1a9e5c", "#888"],
+                hole=0.5,
+                textinfo="label+percent",
+            ))
+            fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
+                                   template="plotly_dark", showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    with insight_col:
-        st.markdown("**Ownership Insights**")
-        insights = []
-        if inst_v > 70:
-            insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
-        elif inst_v > 40:
-            insights.append("Moderate institutional ownership — balanced between smart money and retail")
-        elif inst_v < 15:
-            insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
+        with insight_col:
+            st.markdown("**Ownership Insights**")
+            insights = []
+            if inst_v > 70:
+                insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
+            elif inst_v > 40:
+                insights.append("Moderate institutional ownership — balanced between smart money and retail")
+            elif inst_v < 15:
+                insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
 
-        if ins_v > 20:
-            insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
-        elif ins_v > 5:
-            insights.append("Moderate insider ownership — management maintains meaningful stake")
-        elif ins_v < 1 and ins_v > 0:
-            insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
+            if ins_v > 20:
+                insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
+            elif ins_v > 5:
+                insights.append("Moderate insider ownership — management maintains meaningful stake")
+            elif ins_v < 1 and ins_v > 0:
+                insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
 
-        if retail_v > 50:
-            insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
+            if retail_v > 50:
+                insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
 
-        for insight in insights:
-            st.markdown(f"- {insight}")
+            for insight in insights:
+                st.markdown(f"- {insight}")
 
-        # Insider activity trend
+            # Insider activity trend
+            if not transactions.empty:
+                type_col = "Text" if "Text" in transactions.columns else None
+                if type_col:
+                    buys = transactions[transactions[type_col].str.contains("Purchase|Buy|Acquisition", case=False, na=False)]
+                    sells = transactions[transactions[type_col].str.contains("Sale|Sell|Disposition", case=False, na=False)]
+                    if len(buys) > len(sells):
+                        st.markdown(f"- **Insider trend: NET BUYING** ({len(buys)} buys vs {len(sells)} sells in past 12 months)")
+                    elif len(sells) > len(buys):
+                        st.markdown(f"- **Insider trend: NET SELLING** ({len(sells)} sells vs {len(buys)} buys in past 12 months)")
+                    else:
+                        st.markdown(f"- **Insider trend: BALANCED** ({len(buys)} buys, {len(sells)} sells)")
+
+    # ── Top Institutional Holders + Recent Insider Transactions ──
+    inst_tab, insider_tab = st.columns(2)
+
+    with inst_tab:
+        if not inst_holders.empty:
+            st.markdown("**Top 5 Institutional Holders**")
+            display_inst = inst_holders.head(5).copy()
+            if "Holder" in display_inst.columns:
+                cols_show = ["Holder"]
+                if "pctHeld" in display_inst.columns:
+                    display_inst["Ownership"] = display_inst["pctHeld"].apply(
+                        lambda x: f"{x * 100:.2f}%" if pd.notna(x) and x < 1 else (f"{x:.2f}%" if pd.notna(x) else "—")
+                    )
+                    cols_show.append("Ownership")
+                if "Shares" in display_inst.columns:
+                    display_inst["Shares"] = display_inst["Shares"].apply(
+                        lambda x: f"{x/1e6:.1f}M" if pd.notna(x) and x >= 1e6 else (f"{x:,.0f}" if pd.notna(x) else "—")
+                    )
+                    cols_show.append("Shares")
+                st.dataframe(display_inst[cols_show], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No institutional holder data available")
+
+    with insider_tab:
         if not transactions.empty:
-            type_col = "Text" if "Text" in transactions.columns else None
-            if type_col:
-                buys = transactions[transactions[type_col].str.contains("Purchase|Buy|Acquisition", case=False, na=False)]
-                sells = transactions[transactions[type_col].str.contains("Sale|Sell|Disposition", case=False, na=False)]
-                if len(buys) > len(sells):
-                    st.markdown(f"- **Insider trend: NET BUYING** ({len(buys)} buys vs {len(sells)} sells in past 12 months)")
-                elif len(sells) > len(buys):
-                    st.markdown(f"- **Insider trend: NET SELLING** ({len(sells)} sells vs {len(buys)} buys in past 12 months)")
-                else:
-                    st.markdown(f"- **Insider trend: BALANCED** ({len(buys)} buys, {len(sells)} sells)")
+            st.markdown("**Recent Insider Transactions**")
+            recent_txns = transactions.head(5).copy()
+            cols_available = [c for c in ["Insider Trading", "Text", "Start Date", "Shares", "Value"]
+                              if c in recent_txns.columns]
+            if cols_available:
+                st.dataframe(clean_nan(recent_txns[cols_available]), use_container_width=True, hide_index=True)
+        elif not purchases.empty:
+            st.markdown("**Insider Purchase Summary**")
+            st.dataframe(purchases.head(3), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No insider activity data available")
 
-# ── Top Institutional Holders + Recent Insider Transactions ──
-inst_tab, insider_tab = st.columns(2)
-
-with inst_tab:
-    if not inst_holders.empty:
-        st.markdown("**Top 5 Institutional Holders**")
-        display_inst = inst_holders.head(5).copy()
-        if "Holder" in display_inst.columns:
-            cols_show = ["Holder"]
-            if "pctHeld" in display_inst.columns:
-                display_inst["Ownership"] = display_inst["pctHeld"].apply(
-                    lambda x: f"{x * 100:.2f}%" if pd.notna(x) and x < 1 else (f"{x:.2f}%" if pd.notna(x) else "—")
-                )
-                cols_show.append("Ownership")
-            if "Shares" in display_inst.columns:
-                display_inst["Shares"] = display_inst["Shares"].apply(
-                    lambda x: f"{x/1e6:.1f}M" if pd.notna(x) and x >= 1e6 else (f"{x:,.0f}" if pd.notna(x) else "—")
-                )
-                cols_show.append("Shares")
-            st.dataframe(display_inst[cols_show], use_container_width=True, hide_index=True)
-    else:
-        st.caption("No institutional holder data available")
-
-with insider_tab:
-    if not transactions.empty:
-        st.markdown("**Recent Insider Transactions**")
-        recent_txns = transactions.head(5).copy()
-        cols_available = [c for c in ["Insider Trading", "Text", "Start Date", "Shares", "Value"]
-                          if c in recent_txns.columns]
-        if cols_available:
-            st.dataframe(clean_nan(recent_txns[cols_available]), use_container_width=True, hide_index=True)
-    elif not purchases.empty:
-        st.markdown("**Insider Purchase Summary**")
-        st.dataframe(purchases.head(3), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No insider activity data available")
+ownership_section()
 
 st.divider()
 
@@ -673,6 +794,13 @@ st.subheader("Prosper AI Analysis")
 analysis = get_prosper_analysis(ticker)
 
 if analysis:
+    # ── Data quality warning banner ──
+    _dq_warning = analysis.get("data_quality_warning")
+    if _dq_warning == "INSUFFICIENT":
+        st.warning("**Insufficient data** — Not enough data points available to generate a reliable analysis for this stock.")
+    elif _dq_warning == "LOW":
+        st.warning("**Low confidence analysis** — Limited data sources available. Results should be interpreted with caution.")
+
     # ── Display existing analysis ──
     rating = analysis.get("rating", "N/A")
     ai_score = analysis.get("score", 0)
@@ -710,7 +838,8 @@ if analysis:
         st.markdown(f'<div style="height:4px;background:{conv_color};border-radius:2px;"></div>', unsafe_allow_html=True)
 
     if thesis:
-        st.info(f"**Thesis:** {thesis}")
+        thesis_safe = thesis.replace("$", "\\$")
+        st.info(f"**Thesis:** {thesis_safe}")
 
     # Fair value
     fv = analysis.get("full_response", {}).get("fair_value", {})

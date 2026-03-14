@@ -53,6 +53,29 @@ def _is_twelve_data_symbol(sym: str) -> bool:
     return ":" in sym and any(sym.endswith(f":{ex}") for ex in ("DFM", "XADS"))
 
 
+def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
+    """
+    Return True if the price looks valid.  Suppresses:
+      - Negative prices (data error)
+      - ETF/fund prices > 10 000 (likely wrong ticker or currency mismatch)
+    """
+    if price is None or price < 0:
+        return False
+    # ETF / fund prices should not exceed 10 000 — flag as suspicious
+    # (most ETFs/funds trade well below 1 000; > 10 000 usually means wrong ticker)
+    if price > 10_000:
+        # Only flag for known ETF-like tickers (suffix-based heuristic)
+        etf_hints = (".L", ".SW", ".PA", ".DE", ".AS")
+        if any(sym.upper().endswith(h) for h in etf_hints):
+            import logging
+            logging.getLogger(__name__).warning(
+                "Price sanity: %s has price %.2f from %s — possibly incorrect ETF/fund price",
+                sym, price, source,
+            )
+            return False
+    return True
+
+
 def _fetch_one_quote(sym: str) -> tuple:
     """
     Fetch price data for a single ticker.
@@ -93,19 +116,25 @@ def _fetch_one_quote(sym: str) -> tuple:
 
     # Source 1: yfinance
     try:
-        fi = yf.Ticker(sym).fast_info
+        tk = yf.Ticker(sym)
+        fi = tk.fast_info
         price = fi.last_price
-        if price is not None:
+        if price is not None and _price_sanity_check(sym, price, "yfinance"):
             prev  = fi.previous_close
             change     = round(price - prev, 6) if prev else None
             change_pct = round((change / prev) * 100, 4) if (prev and change is not None) else None
-            return sym, {
+            # Include trading currency so enrichment can override suffix-based guess
+            yf_currency = getattr(fi, "currency", None) or ""
+            result = {
                 "symbol":            sym,
                 "price":             price,
                 "change":            change,
                 "changesPercentage": change_pct,
                 "source":            "yfinance",
             }
+            if yf_currency:
+                result["currency"] = yf_currency.upper()
+            return sym, result
     except Exception:
         pass
 
@@ -113,7 +142,7 @@ def _fetch_one_quote(sym: str) -> tuple:
     try:
         from core.finnhub_client import quote as fh_quote
         fh = fh_quote(sym)
-        if fh and fh.get("c", 0) > 0:
+        if fh and fh.get("c", 0) > 0 and _price_sanity_check(sym, fh["c"], "finnhub"):
             price = fh["c"]
             prev  = fh.get("pc", price)
             change     = round(price - prev, 6)
@@ -321,6 +350,15 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
     # Uses SQLite cache — instant on second load, only re-fetches stale tickers
     tickers = df["ticker_resolved"].dropna().tolist()
     quotes  = fetch_batch_quotes_with_cache(tickers)
+
+    # Step 2b: Override currency if yfinance reports a different trading currency
+    # This fixes cases like U03A.L which has .L suffix (→ GBP) but trades in USD.
+    for idx, row in df.iterrows():
+        resolved_ticker = row.get("ticker_resolved", row.get("ticker", ""))
+        quote = quotes.get(resolved_ticker, {})
+        yf_currency = quote.get("currency", "")
+        if yf_currency and yf_currency != row["currency"]:
+            df.at[idx, "currency"] = yf_currency
 
     # Step 3: Fetch FX rates for each unique currency in parallel (5s timeout each)
     unique_currencies = df["currency"].unique().tolist()

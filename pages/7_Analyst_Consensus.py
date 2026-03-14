@@ -37,12 +37,23 @@ else:
     tickers = sorted(holdings["ticker"].dropna().tolist(), key=str.upper)
     names = dict(zip(holdings["ticker"], holdings["name"]))
 
-# Ticker selector
-selected = st.selectbox(
-    "Select a holding",
-    tickers,
-    format_func=lambda t: f"{t} — {names.get(t, '')}",
-)
+# Ticker selector with search
+search_col, pick_col = st.columns([1, 2])
+with search_col:
+    search_text = st.text_input("🔍 Search", placeholder="Type ticker or name...",
+                                 key="analyst_search", label_visibility="collapsed")
+with pick_col:
+    if search_text:
+        filtered_tickers = [t for t in tickers
+                           if search_text.upper() in t.upper() or search_text.lower() in names.get(t, "").lower()]
+    else:
+        filtered_tickers = tickers
+    selected = st.selectbox(
+        "Select a holding",
+        filtered_tickers if filtered_tickers else tickers,
+        format_func=lambda t: f"{t} — {names.get(t, '')}",
+        label_visibility="collapsed",
+    )
 
 if not selected:
     st.stop()
@@ -51,10 +62,50 @@ if not selected:
 try:
     st.divider()
 
+    # ── Fetch data needed for AI summary early ──
+    info    = get_ticker_info(selected)
+    from core.data_engine import get_upgrade_downgrade
+    upgrades = get_upgrade_downgrade(selected)
+
+    # ── AI Summary (shown first for quick insight) ──
+    if upgrades and len(upgrades) >= 1:
+        try:
+            import os
+            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+            if api_key and api_key != "your_anthropic_api_key_here":
+                import anthropic
+                ud_df_early = pd.DataFrame(upgrades)
+                col_renames_early = {
+                    "company":            "Analyst Firm",
+                    "action":             "Action",
+                    "fromGrade":          "From Grade",
+                    "toGrade":            "To Grade",
+                    "gradeTime":          "Date",
+                    "currentPriceTarget": "Price Target",
+                    "priorPriceTarget":   "Prior Target",
+                    "priceTargetAction":  "Target Action",
+                }
+                ud_df_early = ud_df_early.rename(columns={k: v for k, v in col_renames_early.items() if k in ud_df_early.columns})
+                if "Date" in ud_df_early.columns:
+                    ud_df_early["Date"] = pd.to_datetime(ud_df_early["Date"], unit="s", errors="coerce").dt.strftime("%Y-%m-%d")
+                priority_cols_early = ["Date", "Analyst Firm", "Action", "From Grade", "To Grade", "Price Target", "Prior Target"]
+                show_cols_early = [c for c in priority_cols_early if c in ud_df_early.columns]
+                recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
+                client = anthropic.Anthropic(api_key=api_key)
+                response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=200,
+                    messages=[{"role": "user", "content":
+                        f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
+                        f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
+                )
+                st.info(f"🤖 **AI Summary:** {response.content[0].text}")
+        except Exception:
+            pass
+
     # ── Price Targets ──
     st.subheader("📊 Analyst Price Targets")
 
-    info    = get_ticker_info(selected)
     targets = get_analyst_price_targets(selected)
 
     current_price = info.get("currentPrice") or info.get("regularMarketPrice")
@@ -186,9 +237,6 @@ try:
     # ── Upgrades & Downgrades (yfinance primary) ──
     st.subheader("⬆️ Recent Upgrades & Downgrades")
 
-    from core.data_engine import get_upgrade_downgrade
-    upgrades = get_upgrade_downgrade(selected)
-
     if upgrades:
         ud_df = pd.DataFrame(upgrades)
         col_renames = {
@@ -211,26 +259,6 @@ try:
         show_cols = [c for c in priority_cols if c in ud_df.columns]
         from core.data_engine import clean_nan
         st.dataframe(clean_nan(ud_df[show_cols].head(25)), use_container_width=True, hide_index=True)
-
-        # AI Summary of recent analyst activity
-        if len(ud_df) >= 1:
-            try:
-                import os
-                api_key = os.getenv("ANTHROPIC_API_KEY", "")
-                if api_key and api_key != "your_anthropic_api_key_here":
-                    import anthropic
-                    recent_text = ud_df[show_cols].head(5).to_string(index=False)
-                    client = anthropic.Anthropic(api_key=api_key)
-                    response = client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=200,
-                        messages=[{"role": "user", "content":
-                            f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
-                            f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
-                    )
-                    st.info(f"🤖 **AI Summary:** {response.content[0].text}")
-            except Exception:
-                pass
     else:
         st.info("No upgrade/downgrade data available for this ticker.")
 

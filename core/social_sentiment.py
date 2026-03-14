@@ -1,13 +1,16 @@
 """
 Social Sentiment
 ================
-Fetches sentiment data from StockTwits (free, no auth) and Reddit (public JSON feed).
-Combines with news headline sentiment into a composite score.
+Fetches sentiment data from StockTwits (free, no auth), Reddit (public JSON feed),
+Analyst Consensus (via FMP), and Google News RSS.
+Combines with news headline sentiment into a composite score with dynamic weight
+redistribution — empty sources have their weight redistributed proportionally.
 
 Reddit approach: uses the public *.json feed — no API key or OAuth required.
 """
 
 import requests
+import xml.etree.ElementTree as ET
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
 
@@ -114,34 +117,148 @@ def get_reddit_sentiment(ticker: str) -> Dict:
         return {"score": 0, "mentions": 0, "top_posts": [], "source": "Reddit"}
 
 
+# ── Analyst Consensus (via FMP recommendations) ─────────────────────────────
+
+def get_analyst_sentiment(ticker: str) -> Dict:
+    """
+    Derive sentiment from analyst buy/hold/sell recommendations.
+    Score = (strongBuy*2 + buy*1 + hold*0 + sell*-1 + strongSell*-2) / total
+    Normalized to -1..+1 range.
+    """
+    try:
+        from core.data_engine import get_recommendations_summary
+        recs = get_recommendations_summary(ticker)
+        if not recs or not isinstance(recs, list) or len(recs) == 0:
+            return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
+
+        latest = recs[0]  # Most recent period
+        strong_buy = latest.get("strongBuy", 0) or 0
+        buy = latest.get("buy", 0) or 0
+        hold = latest.get("hold", 0) or 0
+        sell = latest.get("sell", 0) or 0
+        strong_sell = latest.get("strongSell", 0) or 0
+
+        total = strong_buy + buy + hold + sell + strong_sell
+        if total == 0:
+            return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
+
+        raw_score = (strong_buy * 2 + buy * 1 + hold * 0 + sell * -1 + strong_sell * -2) / total
+        # raw_score range is -2..+2, normalize to -1..+1
+        score = round(max(-1.0, min(1.0, raw_score / 2)), 2)
+
+        return {
+            "score": score,
+            "total_recs": total,
+            "breakdown": {
+                "strongBuy": strong_buy, "buy": buy, "hold": hold,
+                "sell": sell, "strongSell": strong_sell,
+            },
+            "source": "Analyst Consensus",
+        }
+    except Exception:
+        return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
+
+
+# ── Google News RSS ──────────────────────────────────────────────────────────
+
+def get_google_news_sentiment(ticker: str) -> Dict:
+    """
+    Fetch Google News RSS headlines for a ticker and calculate sentiment.
+    """
+    base_ticker = ticker.split(".")[0] if "." in ticker else ticker
+    if ":" in base_ticker:
+        base_ticker = base_ticker.split(":")[0]
+
+    try:
+        url = f"https://news.google.com/rss/search?q={base_ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        resp = requests.get(url, timeout=8)
+        if resp.status_code != 200:
+            return {"score": 0, "headlines": 0, "source": "Google News RSS"}
+
+        root = ET.fromstring(resp.content)
+        titles = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            if title_el is not None and title_el.text:
+                titles.append(title_el.text)
+
+        if not titles:
+            return {"score": 0, "headlines": 0, "source": "Google News RSS"}
+
+        from core.data_engine import calculate_headline_sentiment
+        score = calculate_headline_sentiment(titles)
+
+        return {
+            "score": round(score, 2),
+            "headlines": len(titles),
+            "source": "Google News RSS",
+        }
+    except Exception:
+        return {"score": 0, "headlines": 0, "source": "Google News RSS"}
+
+
 # ── Composite Score ──────────────────────────────────────────────────────────
 
 def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
     """
-    Combine all sentiment sources into a weighted composite.
+    Combine all sentiment sources into a weighted composite with dynamic
+    weight redistribution.
 
-    Weights:
-      - News headlines:  40%
-      - StockTwits:      35%
-      - Reddit:          25%
+    Default weights:
+      - News headlines:   25%
+      - StockTwits:       15%
+      - Reddit:           10%
+      - Analyst Consensus: 30%
+      - Google News RSS:  20%
 
-    Returns dict with composite_score and per-source breakdown.
+    If a source returns empty data, its weight is redistributed proportionally
+    to sources that DO have real data.
+
+    Returns dict with composite_score, per-source breakdown, and sources_active count.
     """
     st_data = get_stocktwits_sentiment(ticker)
     rd_data = get_reddit_sentiment(ticker)
+    an_data = get_analyst_sentiment(ticker)
+    gn_data = get_google_news_sentiment(ticker)
 
-    # Weighted composite
-    composite = (
-        news_score * 0.40 +
-        st_data["score"] * 0.35 +
-        rd_data["score"] * 0.25
-    )
+    # Default weights
+    sources = {
+        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},  # news always counted
+        "stocktwits":  {"score": st_data["score"],  "default_weight": 0.15, "has_data": st_data.get("messages", 0) > 0},
+        "reddit":      {"score": rd_data["score"],  "default_weight": 0.10, "has_data": rd_data.get("mentions", 0) > 0},
+        "analyst":     {"score": an_data["score"],   "default_weight": 0.30, "has_data": an_data.get("total_recs", 0) > 0},
+        "google_news": {"score": gn_data["score"],  "default_weight": 0.20, "has_data": gn_data.get("headlines", 0) > 0},
+    }
+
+    # Calculate redistributed weights
+    active_weight = sum(s["default_weight"] for s in sources.values() if s["has_data"])
+    sources_active = sum(1 for s in sources.values() if s["has_data"])
+
+    composite = 0.0
+    actual_weights = {}
+    if active_weight > 0:
+        for name, info in sources.items():
+            if info["has_data"]:
+                actual_w = info["default_weight"] / active_weight  # redistribute proportionally
+                actual_weights[name] = actual_w
+                composite += info["score"] * actual_w
+            else:
+                actual_weights[name] = 0.0
+    else:
+        for name in sources:
+            actual_weights[name] = 0.0
+
+    def _fmt_w(w):
+        return f"{round(w * 100)}%"
 
     return {
         "composite_score": round(composite, 2),
-        "news": {"score": news_score, "weight": "40%"},
-        "stocktwits": {**st_data, "weight": "35%"},
-        "reddit": {**rd_data, "weight": "25%"},
+        "sources_active": sources_active,
+        "news":        {"score": news_score, "weight": _fmt_w(actual_weights["news"])},
+        "stocktwits":  {**st_data, "weight": _fmt_w(actual_weights["stocktwits"])},
+        "reddit":      {**rd_data, "weight": _fmt_w(actual_weights["reddit"])},
+        "analyst":     {**an_data, "weight": _fmt_w(actual_weights["analyst"])},
+        "google_news": {**gn_data, "weight": _fmt_w(actual_weights["google_news"])},
     }
 
 

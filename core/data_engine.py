@@ -32,12 +32,12 @@ from datetime import datetime, timedelta
 # ─────────────────────────────────────────
 # CACHE TTLs (seconds)
 # ─────────────────────────────────────────
-INFO_TTL     = 3600   # 1 hour — fundamentals rarely change intraday
+INFO_TTL     = 86400  # 24 hours — fundamentals rarely change intraday
 NEWS_TTL     = 900    # 15 minutes — news is time-sensitive
-ANALYST_TTL  = 3600   # 1 hour
+ANALYST_TTL  = 43200  # 12 hours — analyst data changes rarely
 INSIDER_TTL  = 3600   # 1 hour
 INST_TTL     = 3600   # 1 hour
-HISTORY_TTL  = 300    # 5 minutes — price history for charts
+HISTORY_TTL  = 3600   # 1 hour — price history for charts
 
 # ─────────────────────────────────────────
 # TICKER OVERRIDE MAP
@@ -50,8 +50,8 @@ TICKER_OVERRIDES: Dict[str, str] = {
     "EMIRATESN.AE":  "EMIRATESNBD.AE",
     # ETFs/funds stored without exchange suffix — correct tickers with suffix
     "JEPG":          "JEPG.L",    # JPM Global Equity Premium Income UCITS ETF (LSE, USD)
-    "IEDY":          "IEDY.L",    # iShares EM Dividend UCITS ETF (LSE, USD)
-    "IEDY.SW":       "IEDY.L",    # Stored with wrong exchange — actually LSE, not SIX
+    "IEDY":          "IEDY.SW",   # iShares MSCI India ETF (SIX Swiss Exchange)
+    "EMBC":          "EMBC.L",    # JPMorgan ETFs (London Stock Exchange)
     "GHYC":          "GHYC.SW",   # iShares Global High Yield Corp Bond CHF Hedged ETF (Swiss, CHF)
     "SREN":          "SREN.SW",   # Swiss Re AG (SIX Swiss Exchange, CHF)
     # Franklin Income Fund stored as internal fund code — correct US mutual fund ticker
@@ -1546,6 +1546,38 @@ def calc_portfolio_volatility(tickers: list, weights: dict, period: str = "1y") 
         return float((pd.Series(vols) * w_arr).sum())
     except Exception:
         return None
+
+
+def resolve_sector(ticker: str, info: dict, name: str = "") -> str:
+    """Smart sector resolution with fallbacks."""
+    qt = str(info.get("quoteType", "EQUITY")).upper()
+    if qt in ("ETF", "MUTUALFUND"):
+        return "Funds & ETFs"
+    sector = info.get("sector")
+    if sector and str(sector) not in ("", "None", "nan"):
+        return sector
+    # Fallback: infer from name
+    if name:
+        n = name.lower()
+        if any(k in n for k in ("bank", "finance", "capital", "credit", "insurance")):
+            return "Financial Services"
+        if any(k in n for k in ("tech", "software", "digital", "cyber", "cloud", "data")):
+            return "Technology"
+        if any(k in n for k in ("energy", "oil", "gas", "solar", "power", "petrol")):
+            return "Energy"
+        if any(k in n for k in ("health", "pharma", "bio", "medical", "hospital")):
+            return "Healthcare"
+        if any(k in n for k in ("real estate", "property", "reit", "housing")):
+            return "Real Estate"
+        if any(k in n for k in ("telecom", "communication", "mobile")):
+            return "Communication Services"
+        if any(k in n for k in ("consumer", "retail", "food", "beverage")):
+            return "Consumer"
+        if any(k in n for k in ("industrial", "material", "mining", "steel", "cement")):
+            return "Industrials"
+        if any(k in n for k in ("utility", "water", "electric")):
+            return "Utilities"
+    return "Other"
 
 
 def fmt_large(val) -> str:

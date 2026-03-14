@@ -242,10 +242,13 @@ def _build_india_context(ticker: str, info: dict) -> str:
 # CONTEXT BUILDER — Multi-source enrichment
 # ─────────────────────────────────────────
 
-def build_analysis_context(ticker: str, info: dict = None, enriched_row: dict = None) -> str:
+def build_analysis_context(ticker: str, info: dict = None, enriched_row: dict = None) -> Tuple[str, int]:
     """
     Build a comprehensive context string from ALL available data sources.
     Pulls from: yfinance, Finnhub, enriched portfolio data.
+
+    Returns:
+        (context_string, data_fields_count) — context for the prompt and count of data points found.
     """
     if info is None:
         info = {}
@@ -397,11 +400,42 @@ def build_analysis_context(ticker: str, info: dict = None, enriched_row: dict = 
 
     # ── Data confidence indicator ──
     data_fields = len([l for l in lines if ":" in l and l.split(":")[0].strip() not in ("TICKER", "Company")])
-    sources_used = ["yfinance"]
+
+    # Track which specific sources succeeded vs missing
+    sources_found = []
+    sources_missing = []
+
+    # yfinance: check if we got meaningful data beyond just the ticker/name
+    yf_has_data = bool(price or mkt_cap or ratios or growth or bs or rev)
+    if yf_has_data:
+        sources_found.append("yfinance (fundamentals)")
+    else:
+        sources_missing.append("yfinance (fundamentals)")
+
     if finnhub_ctx:
-        sources_used.append("Finnhub")
+        sources_found.append("Finnhub (analyst consensus)")
+    else:
+        sources_missing.append("Finnhub (analyst consensus)")
+
     if enriched_row:
-        sources_used.append("Portfolio")
+        sources_found.append("Portfolio (holdings data)")
+    else:
+        sources_missing.append("Portfolio (holdings data)")
+
+    if region == "india":
+        india_ctx_check = _build_india_context(ticker, info)
+        if india_ctx_check:
+            sources_found.append("India market context")
+        else:
+            sources_missing.append("India market context")
+
+    # Add Data Sources Status section
+    lines.append("")
+    lines.append("DATA SOURCES STATUS:")
+    if sources_found:
+        lines.append(f"  Found: {', '.join(sources_found)}")
+    if sources_missing:
+        lines.append(f"  Missing: {', '.join(sources_missing)}")
 
     if data_fields >= 15:
         confidence = "HIGH"
@@ -411,9 +445,9 @@ def build_analysis_context(ticker: str, info: dict = None, enriched_row: dict = 
         confidence = "LOW"
         lines.append("\nNOTE: Limited data available for this stock. Use your knowledge of this company, sector, and market to provide a complete analysis. Set conviction to LOW.")
 
-    lines.append(f"\nDATA CONFIDENCE: {confidence} ({data_fields} data points from {', '.join(sources_used)})")
+    lines.append(f"\nDATA CONFIDENCE: {confidence} ({data_fields} data points from {', '.join(sources_found) if sources_found else 'none'})")
 
-    return "\n".join(lines)
+    return "\n".join(lines), data_fields
 
 
 # ─────────────────────────────────────────
@@ -437,7 +471,7 @@ ACCURACY RULES:
 - Cross-reference multiple data sources for higher confidence ratings.
 - For US stocks: leverage deep yfinance fundamentals + Finnhub analyst consensus + recent headlines for maximum accuracy.
 - For India stocks (.NS, .BO): use available fundamentals + India market context. Factor in promoter holding patterns and index membership.
-- NEVER say "insufficient data" or refuse to analyze — always provide scores and a rating.
+- If data confidence is LOW, note this prominently in the thesis and reduce conviction accordingly.
 - If data is limited, use industry knowledge and sector context. Lower conviction but still score.
 - Mark conviction: HIGH (>80% data + analyst consensus aligns), MEDIUM (50-80% data or mixed signals), LOW (<50% data).
 
@@ -498,7 +532,19 @@ def run_analysis(
     tier_config = MODEL_TIERS.get(tier, MODEL_TIERS["standard"])
 
     # Build base context (includes yfinance + Finnhub analyst + enriched data)
-    context = build_analysis_context(ticker, info, enriched_row)
+    context, data_fields = build_analysis_context(ticker, info, enriched_row)
+
+    # ── Data quality gate — reject if too few data points ──
+    if data_fields < 4:
+        return {
+            "rating": "N/A",
+            "score": 0,
+            "data_quality_warning": "INSUFFICIENT",
+            "thesis": "Not enough data points available to generate a reliable analysis.",
+            "analysis_date": datetime.now().strftime("%Y-%m-%d"),
+            "model_used": tier,
+            "cost_estimate": 0,
+        }, ""
 
     # ── Fetch additional sources in parallel (for standard + full tiers) ──
     web_context = ""
@@ -574,6 +620,14 @@ def run_analysis(
         # Enrich with metadata
         result["model_used"] = tier
         result["cost_estimate"] = round(cost, 4)
+
+        # Data quality warning based on data_fields count
+        if data_fields < 8:
+            result["data_quality_warning"] = "LOW"
+        elif data_fields >= 15:
+            result["data_quality_warning"] = None
+        else:
+            result["data_quality_warning"] = None
         result["analysis_date"] = datetime.now().strftime("%Y-%m-%d")
         result["elapsed_seconds"] = round(elapsed, 1)
         result["input_tokens"] = input_tokens

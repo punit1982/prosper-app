@@ -12,7 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from core.database import get_all_holdings
 from core.cio_engine import enrich_portfolio
-from core.data_engine import get_ticker_info_batch, get_history
+from core.data_engine import get_ticker_info_batch, get_history, resolve_sector
 from core.portfolio_optimizer import (
     analyze_current_allocation,
     concentration_risk_check,
@@ -86,10 +86,10 @@ try:
 
     # Add sector / country columns for concentration check
     enriched["sector"] = enriched["ticker"].apply(
-        lambda t: (info_map.get(t, {}).get("sector") or "Unknown")
+        lambda t: resolve_sector(t, info_map.get(t, {}), enriched.loc[enriched["ticker"]==t, "name"].values[0] if len(enriched.loc[enriched["ticker"]==t, "name"].values) > 0 else "")
     )
     enriched["country"] = enriched["ticker"].apply(
-        lambda t: (info_map.get(t, {}).get("country") or "Unknown")
+        lambda t: (info_map.get(t, {}).get("country") or "Other")
     )
 
     # -------------------------------------------------------------------

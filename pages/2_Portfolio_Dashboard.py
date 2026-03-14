@@ -391,19 +391,19 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:
-        st.metric(f"{currency_label} Value", f"{sym} {cur_value:,.0f}" if cur_value else "—")
+        st.metric(f"{currency_label} Value", f"{sym} {fmt_large(cur_value)}" if cur_value else "—")
     with mc2:
         if cur_day_gain is not None:
             base_v = (cur_value - cur_day_gain) if cur_value else None
             d_pct = (cur_day_gain / base_v * 100) if base_v else 0
-            st.metric("Today", f"{sym} {abs(cur_day_gain):,.0f}",
+            st.metric("Today", f"{sym} {fmt_large(abs(cur_day_gain))}",
                       delta=f"{cur_day_gain:+,.0f} ({d_pct:+.1f}%)")
         else:
             st.metric("Today", "—")
     with mc3:
         if cur_unrealized is not None and cur_cost:
             u_pct = cur_unrealized / cur_cost * 100
-            st.metric("Unrealized P&L", f"{sym} {abs(cur_unrealized):,.0f}",
+            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(cur_unrealized))}",
                       delta=f"{cur_unrealized:+,.0f} ({u_pct:+.1f}%)")
         else:
             st.metric("Unrealized P&L", "—")
@@ -525,27 +525,27 @@ def portfolio_section():
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         if total_value is not None:
-            st.metric("Total Portfolio Value", f"{sym} {total_value:,.0f}")
+            st.metric("Total Portfolio Value", f"{sym} {fmt_large(total_value)}")
         else:
             st.metric("Total Portfolio Value", f"{len(df)} holdings")
     with c2:
         if total_day_gain is not None:
             base = (total_value - total_day_gain) if total_value else None
             pct  = (total_day_gain / base * 100) if base else 0
-            st.metric("Today's Gain / Loss", f"{sym} {abs(total_day_gain):,.0f}",
+            st.metric("Today's Gain / Loss", f"{sym} {fmt_large(abs(total_day_gain))}",
                       delta=f"{total_day_gain:+,.0f} ({pct:+.2f}%)")
         else:
             st.metric("Today's Gain / Loss", "—")
     with c3:
         if total_unrealized is not None and total_cost:
             pct = total_unrealized / total_cost * 100
-            st.metric("Unrealized P&L", f"{sym} {abs(total_unrealized):,.0f}",
+            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(total_unrealized))}",
                       delta=f"{total_unrealized:+,.0f} ({pct:+.1f}%)")
         else:
             st.metric("Unrealized P&L", "—")
     with c4:
         if total_realized != 0:
-            st.metric("Realized P&L", f"{sym} {abs(total_realized):,.0f}",
+            st.metric("Realized P&L", f"{sym} {fmt_large(abs(total_realized))}",
                       delta=f"{total_realized:+,.0f}",
                       help="Net realized gains/losses from sell transactions.")
         else:
