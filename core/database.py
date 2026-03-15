@@ -6,12 +6,33 @@ import pandas as pd
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
-from core.db_connector import get_connection as _get_cloud_connection, sync_to_cloud, DB_PATH
+from core.db_connector import get_connection as _get_cloud_connection, sync_to_cloud, is_cloud_db, DB_PATH
 
 
 def _get_connection():
     """Get a database connection (Turso cloud or local SQLite)."""
     return _get_cloud_connection()
+
+
+def _read_sql(query: str, conn, params=None) -> pd.DataFrame:
+    """
+    Run a SELECT query and return a DataFrame.
+    Works with both sqlite3 connections (pd.read_sql_query) and
+    TursoConnection (manual cursor → DataFrame conversion).
+    """
+    if isinstance(conn, sqlite3.Connection):
+        return pd.read_sql_query(query, conn, params=params)
+    else:
+        # TursoConnection — execute and build DataFrame manually
+        cursor = conn.execute(query, params or [])
+        rows = cursor.fetchall()
+        if not rows:
+            # Try to get column names from cursor description
+            cols = [d[0] for d in cursor.description] if cursor.description else []
+            return pd.DataFrame(columns=cols)
+        cols = rows[0].keys() if hasattr(rows[0], 'keys') else []
+        data = [[row[c] for c in cols] for row in rows]
+        return pd.DataFrame(data, columns=cols)
 
 
 def init_db():
@@ -182,7 +203,7 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None):
 def get_all_holdings() -> pd.DataFrame:
     """Retrieve all holdings as a DataFrame."""
     conn = _get_connection()
-    df = pd.read_sql_query("SELECT * FROM holdings ORDER BY ticker ASC", conn)
+    df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn)
     conn.close()
     return df
 
@@ -612,7 +633,7 @@ def get_transactions(ticker: str = None, txn_type: str = None,
         query += " AND date <= ?"
         params.append(date_to)
     query += " ORDER BY date DESC, created_at DESC"
-    df = pd.read_sql_query(query, conn, params=params)
+    df = _read_sql(query, conn, params=params)
     conn.close()
     return df
 
@@ -634,7 +655,7 @@ def get_realized_pnl_summary() -> pd.DataFrame:
     """
     conn = _get_connection()
     # Get all transactions sorted by date (FIFO order)
-    df = pd.read_sql_query(
+    df = _read_sql(
         "SELECT ticker, type, quantity, price, fees, date FROM transactions ORDER BY date ASC, id ASC",
         conn,
     )
@@ -722,7 +743,7 @@ def add_to_watchlist(ticker: str, name: str = None, currency: str = "USD",
 def get_watchlist() -> pd.DataFrame:
     """Retrieve all watchlist items."""
     conn = _get_connection()
-    df = pd.read_sql_query("SELECT * FROM watchlist ORDER BY ticker ASC", conn)
+    df = _read_sql("SELECT * FROM watchlist ORDER BY ticker ASC", conn)
     conn.close()
     return df
 
@@ -774,7 +795,7 @@ def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
         query += " AND base_currency = ?"
         params.append(base_currency)
     query += " ORDER BY date ASC"
-    df = pd.read_sql_query(query, conn, params=params)
+    df = _read_sql(query, conn, params=params)
     conn.close()
     return df
 
@@ -857,7 +878,7 @@ def get_prosper_analysis(ticker: str) -> Optional[Dict]:
 def get_all_prosper_analyses() -> pd.DataFrame:
     """Retrieve all Prosper analyses as a DataFrame."""
     conn = _get_connection()
-    df = pd.read_sql_query(
+    df = _read_sql(
         "SELECT ticker, analysis_date, rating, score, archetype_name, "
         "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
         "FROM prosper_analysis ORDER BY score DESC",
