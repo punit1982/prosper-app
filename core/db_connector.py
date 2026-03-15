@@ -24,6 +24,7 @@ DB_PATH = os.path.join(DB_DIR, "prosper.db")
 _turso_url = None
 _turso_token = None
 _use_turso = None  # None = not yet checked
+_cached_pipeline_url = None  # Cache the working pipeline URL globally
 
 
 def _get_secret(key_name: str) -> str:
@@ -153,18 +154,23 @@ class TursoConnection:
     Endpoint: POST {database_url}/v2/pipeline
     """
     def __init__(self, base_url, auth_token):
+        global _cached_pipeline_url
         self._base_url = base_url.rstrip("/")
         self._auth_token = auth_token
         self._headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json",
         }
-        # Try v3 first (current), fall back to v2
-        self._pipeline_url = self._find_pipeline_url()
+        # Use cached URL if available (avoids HTTP roundtrip on every connection)
+        if _cached_pipeline_url:
+            self._pipeline_url = _cached_pipeline_url
+        else:
+            self._pipeline_url = self._find_pipeline_url()
+            _cached_pipeline_url = self._pipeline_url
 
     def _find_pipeline_url(self):
-        """Detect which pipeline API version works."""
-        for version in ("v3", "v2"):
+        """Detect which pipeline API version works (called once, then cached)."""
+        for version in ("v2", "v3"):
             url = f"{self._base_url}/{version}/pipeline"
             try:
                 resp = requests.post(
@@ -177,8 +183,7 @@ class TursoConnection:
                     return url
             except Exception:
                 continue
-        # Default to v3
-        return f"{self._base_url}/v3/pipeline"
+        return f"{self._base_url}/v2/pipeline"
 
     def _type_for_value(self, val):
         """Map Python value to Turso arg type."""
