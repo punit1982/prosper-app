@@ -227,14 +227,17 @@ st.divider()
 # ─────────────────────────────────────────
 st.subheader("ℹ️ About Prosper")
 
-# Show database backend info
+# Show database backend info (session-cached to avoid slow HTTP pings on every load)
 try:
-    from core.db_connector import get_db_info
-    db_info = get_db_info()
+    if "_db_info_cache" not in st.session_state:
+        from core.db_connector import get_db_info
+        st.session_state["_db_info_cache"] = get_db_info()
+    db_info = st.session_state["_db_info_cache"]
     db_icon = "☁️" if db_info["persistent"] else "💾"
     db_label = db_info["backend"]
     db_persistent = "✅ Persistent (survives reboots)" if db_info["persistent"] else "⚠️ Local only (lost on Streamlit Cloud reboot)"
 except Exception:
+    db_info = {}
     db_label = "SQLite (Local)"
     db_icon = "💾"
     db_persistent = "⚠️ Local only"
