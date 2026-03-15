@@ -134,15 +134,15 @@ for i, item in enumerate(news):
                     st.session_state[skey] = summarize_news_with_ai(
                         title, publisher, ticker, "Market Index"
                     )
-            st.info(f"🤖 **AI Insight:** {st.session_state[skey]}")
+            st.info(f"🤖 **AI Summary:** {st.session_state[skey]}")
         else:
             if st.button("🤖 AI Summary", key=f"mkt_btn_{i}", use_container_width=False):
                 if skey not in st.session_state:
-                    with st.spinner("Generating AI insight…"):
+                    with st.spinner("Generating AI summary…"):
                         st.session_state[skey] = summarize_news_with_ai(
                             title, publisher, ticker, "Market Index"
                         )
             if skey in st.session_state:
-                st.info(f"🤖 **AI Insight:** {st.session_state[skey]}")
+                st.info(f"🤖 **AI Summary:** {st.session_state[skey]}")
 
     st.divider()

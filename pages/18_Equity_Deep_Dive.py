@@ -591,7 +591,7 @@ def sentiment_section():
                             except Exception:
                                 st.session_state[skey] = title
 
-                        st.markdown(f"📗 {st.session_state[skey]}")
+                        st.success(f"🤖 **AI Summary:** {st.session_state[skey]}")
                         caption_parts = []
                         if date:
                             caption_parts.append(date)
@@ -615,7 +615,7 @@ def sentiment_section():
                             except Exception:
                                 st.session_state[skey] = title
 
-                        st.markdown(f"📕 {st.session_state[skey]}")
+                        st.error(f"🤖 **AI Summary:** {st.session_state[skey]}")
                         caption_parts = []
                         if date:
                             caption_parts.append(date)

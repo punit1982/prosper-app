@@ -54,11 +54,23 @@ if enriched_key in st.session_state:
     if "market_value" in priced.columns:
         priced = priced.sort_values("market_value", ascending=False)
 
-    # Exclude Funds/ETFs from stock news (they clutter focus)
-    if "quote_type" in priced.columns:
-        is_fund = priced["quote_type"].apply(lambda x: str(x).upper() in ("ETF", "MUTUALFUND"))
-        fund_tickers = priced.loc[is_fund, t_col].dropna().tolist()
-        priced = priced[~is_fund]
+    # Exclude Funds/ETFs from stock news (they return generic/irrelevant news)
+    _ETF_KEYWORDS = ("ISHARES", "VANGUARD", "SPDR", "INVESCO", "PROSHARES", "WISDOMTREE",
+                      "SCHWAB", "FIRST TRUST", "GLOBAL X", "PIMCO", "JPMORGAN EQUITY",
+                      "ETF", "FUND", "INDEX", "TRUST")
+
+    def _is_fund_or_etf(row):
+        qt = str(row.get("quote_type", "")).upper()
+        if qt in ("ETF", "MUTUALFUND"):
+            return True
+        name = str(row.get("name", "")).upper()
+        if any(kw in name for kw in _ETF_KEYWORDS):
+            return True
+        return False
+
+    is_fund = priced.apply(_is_fund_or_etf, axis=1)
+    fund_tickers = priced.loc[is_fund, t_col].dropna().tolist()
+    priced = priced[~is_fund]
 
     all_tickers = priced[t_col].dropna().tolist()
 
@@ -122,14 +134,14 @@ else:
             if summary_key not in st.session_state:
                 ticker_name = names.get(ticker, "")
                 st.session_state[summary_key] = summarize_news_with_ai(title, publisher, ticker, ticker_name)
-            st.info(f"🤖 **AI Analysis:** {st.session_state[summary_key]}")
+            st.info(f"🤖 **AI Summary:** {st.session_state[summary_key]}")
         else:
             if st.button("🤖 AI Summary", key=f"btn_summary_{i}"):
                 if summary_key not in st.session_state:
                     ticker_name = names.get(ticker, "")
-                    with st.spinner("Generating AI analysis…"):
+                    with st.spinner("Generating AI summary…"):
                         st.session_state[summary_key] = summarize_news_with_ai(title, publisher, ticker, ticker_name)
-                st.info(f"🤖 **AI Analysis:** {st.session_state[summary_key]}")
+                st.info(f"🤖 **AI Summary:** {st.session_state[summary_key]}")
 
         st.divider()
 
