@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 MODEL_TIERS = {
     "quick": {
         "label": "Quick Score",
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-3-5-haiku-20241022",
         "max_tokens": 1200,
         "description": "Fast archetype + score using pre-fetched data only (~$0.008/stock)",
         "cost_per_1k_input": 0.001,
@@ -34,7 +34,7 @@ MODEL_TIERS = {
     },
     "standard": {
         "label": "Standard",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-3-5-sonnet-20241022",
         "max_tokens": 2000,
         "description": "Full scoring + fair value with multi-source data (~$0.04/stock)",
         "cost_per_1k_input": 0.003,
@@ -42,7 +42,7 @@ MODEL_TIERS = {
     },
     "full": {
         "label": "Full CIO",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-3-5-sonnet-20241022",
         "max_tokens": 2500,
         "description": "Deep analysis with web search + all sources (~$0.04/stock + search)",
         "cost_per_1k_input": 0.003,
