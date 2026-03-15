@@ -249,6 +249,30 @@ and institutional portfolio management.
 - **Data:** yfinance, Finnhub, Twelve Data, RSS feeds (CNBC, Reuters, MarketWatch, Motley Fool)
 """)
 
+# Show Turso diagnostic details
+try:
+    if db_info.get("persistent"):
+        with st.expander("☁️ Turso Connection Details"):
+            if db_info.get("connected"):
+                st.success(f"✅ Connected — {db_info.get('status', 'OK')}")
+            else:
+                st.error(f"❌ Not connected — {db_info.get('status', 'Error')}")
+                if db_info.get("error"):
+                    st.code(db_info["error"])
+            st.caption(f"**URL:** `{db_info.get('url', '?')}`")
+            st.caption(f"**Pipeline:** `{db_info.get('pipeline_url', '?')}`")
+            st.caption(f"**Token:** `{db_info.get('token_preview', '?')}`")
+    elif not db_info.get("persistent"):
+        # Show why Turso isn't active
+        if db_info.get("turso_url_found") or db_info.get("turso_token_found"):
+            st.warning(
+                f"Turso secrets partially configured: "
+                f"URL={'✅' if db_info.get('turso_url_found') else '❌'} "
+                f"Token={'✅' if db_info.get('turso_token_found') else '❌'}"
+            )
+except Exception:
+    pass
+
 # Turso setup instructions
 if not db_info.get("persistent", False):
     with st.expander("☁️ Enable Cloud Database (Turso) — recommended for Streamlit Cloud"):
