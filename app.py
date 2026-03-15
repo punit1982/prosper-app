@@ -137,28 +137,32 @@ if not get_nav_snapshot_exists_today(_snap_base):
         except Exception:
             pass  # Silently skip if snapshot fails — non-critical
 
-# ── Navigation — grouped into 4 clean sections ───────────────────────────────
+# ── Navigation — 5 focused sections ──────────────────────────────────────────
 pg = st.navigation({
+    "Prosper": [
+        st.Page("pages/00_Command_Center.py",    title="Command Center",      icon="🏠", default=True),
+    ],
     "Portfolio": [
-        st.Page("pages/1_Upload_Portal.py",      title="Upload Portal",       icon="📤"),
-        st.Page("pages/2_Portfolio_Dashboard.py", title="Portfolio Dashboard", icon="📊", default=True),
-        st.Page("pages/4_Portfolio_Summary.py",   title="Portfolio Summary",   icon="🧩"),
+        st.Page("pages/2_Portfolio_Dashboard.py", title="Dashboard",          icon="📊"),
+        st.Page("pages/4_Portfolio_Summary.py",   title="Summary",            icon="🧩"),
         st.Page("pages/5_Performance.py",         title="Performance",         icon="📈"),
+        st.Page("pages/19_Portfolio_Optimizer.py", title="Optimizer",          icon="⚖️"),
     ],
     "Research": [
+        st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",   icon="🔬"),
         st.Page("pages/7_Analyst_Consensus.py",    title="Analyst Consensus",  icon="🎯"),
         st.Page("pages/8_Sentiment.py",            title="Sentiment",          icon="💬"),
-        st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",   icon="🔬"),
         st.Page("pages/15_Prosper_AI_Analysis.py",  title="Prosper AI",         icon="🤖"),
     ],
-    "Activity": [
-        st.Page("pages/12_Transaction_Log.py",   title="Transaction Log",     icon="📝"),
+    "News & Activity": [
         st.Page("pages/3_Portfolio_News.py",      title="Portfolio News",      icon="📰"),
         st.Page("pages/6_Market_News.py",         title="Market News",         icon="🌍"),
+        st.Page("pages/12_Transaction_Log.py",   title="Transactions",        icon="📝"),
     ],
     "Settings": [
         st.Page("pages/0_Settings.py",           title="Settings",            icon="⚙️"),
-        st.Page("pages/17_User_Management.py",   title="User Management",    icon="👥"),
+        st.Page("pages/1_Upload_Portal.py",      title="Upload Portal",       icon="📤"),
+        st.Page("pages/17_User_Management.py",   title="Users",               icon="👥"),
     ],
 })
 
