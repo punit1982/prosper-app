@@ -122,12 +122,30 @@ def get_api_key(key_name: str) -> str:
     if val:
         return val
 
-    # 2. Streamlit Cloud secrets
+    # 2. Streamlit Cloud secrets — try multiple access patterns
     try:
         import streamlit as st
-        val = st.secrets.get(key_name, "")
-        if val:
-            return str(val)
+        # Pattern A: direct key access (most reliable)
+        try:
+            val = st.secrets[key_name]
+            if val:
+                return str(val)
+        except KeyError:
+            pass
+        # Pattern B: .get() fallback
+        try:
+            val = st.secrets.get(key_name, "")
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        # Pattern C: check nested [secrets] table (some Streamlit versions)
+        try:
+            val = st.secrets["secrets"][key_name]
+            if val:
+                return str(val)
+        except (KeyError, Exception):
+            pass
     except Exception:
         pass
 

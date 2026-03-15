@@ -158,9 +158,20 @@ for name, key in optional_apis.items():
     status = "Configured" if configured else "Not set (optional)"
     st.markdown(f"{icon} **{name}** — {status}")
 
-with st.expander("💡 How to add optional API keys"):
+with st.expander("💡 How to add API keys on Streamlit Cloud"):
     st.markdown("""
-Add keys to your `.env` file and restart the app:
+**On Streamlit Cloud** → go to your app → ⋮ menu → **Settings** → **Secrets** and paste:
+```toml
+ANTHROPIC_API_KEY = "sk-ant-..."
+FMP_API_KEY = "..."
+FINNHUB_API_KEY = "..."
+SERPER_API_KEY = "..."
+TWELVE_DATA_API_KEY = "..."
+PROSPER_AUTH_ENABLED = "true"
+```
+Each line must be in `KEY = "value"` format (with quotes around the value).
+
+**Locally**: add keys to your `.env` file and restart the app:
 - **Finnhub**: Free at [finnhub.io](https://finnhub.io/) — improves analyst data & company news
 - **Twelve Data**: Free at [twelvedata.com](https://twelvedata.com/) — UAE/DFM stock quotes
 - **Serper**: Free (2.5K/month) at [serper.dev](https://serper.dev/) — Google-powered news + analysis context for Prosper AI
