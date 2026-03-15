@@ -169,30 +169,51 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
     client = anthropic.Anthropic(api_key=api_key)
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
 
-    # --- Call the API ---
-    try:
-        response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=4096,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_data,
-                            },
-                        },
-                        {"type": "text", "text": _EXTRACTION_PROMPT},
-                    ],
-                }
-            ],
+    # Try models in order — different API tiers/regions support different models
+    _MODELS_TO_TRY = [
+        "claude-opus-4-5",
+        "claude-sonnet-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-haiku-20240307",
+        "claude-3-opus-20240229",
+    ]
+
+    content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": image_data,
+            },
+        },
+        {"type": "text", "text": _EXTRACTION_PROMPT},
+    ]
+
+    response = None
+    last_error = None
+    for model in _MODELS_TO_TRY:
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": content}],
+            )
+            break  # success
+        except Exception as e:
+            err_str = str(e)
+            if "404" in err_str or "not_found" in err_str:
+                last_error = err_str
+                continue  # try next model
+            return f"Claude API call failed: {e}"
+
+    if response is None:
+        return (
+            f"No Claude model is accessible with your API key. "
+            f"Please verify your key at console.anthropic.com has billing enabled. "
+            f"Last error: {last_error}"
         )
-    except Exception as e:
-        return f"Claude API call failed: {e}"
 
     # --- Parse the response ---
     result_text = response.content[0].text
