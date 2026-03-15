@@ -182,22 +182,29 @@ def init_db():
 def save_holdings(df: pd.DataFrame, broker_source: str = None):
     """Insert holdings from a DataFrame into the database."""
     conn = _get_connection()
-    for _, row in df.iterrows():
-        conn.execute(
-            """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (
-                str(row.get("ticker", "") or "").strip(),
-                str(row.get("name", "") or "").strip(),
-                float(row.get("quantity", 0) or 0),
-                float(row.get("avg_cost", 0) or 0),
-                str(row.get("currency", "USD") or "USD").strip(),
-                broker_source,
-            ),
-        )
-    conn.commit()
-    conn.close()
-    sync_to_cloud()
+    try:
+        for _, row in df.iterrows():
+            conn.execute(
+                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    str(row.get("ticker", "") or "").strip(),
+                    str(row.get("name", "") or "").strip(),
+                    float(row.get("quantity", 0) or 0),
+                    float(row.get("avg_cost", 0) or 0),
+                    str(row.get("currency", "USD") or "USD").strip(),
+                    broker_source or "",
+                ),
+            )
+        conn.commit()
+        conn.close()
+        sync_to_cloud()
+    except Exception as e:
+        # Surface the actual error (Streamlit Cloud redacts raw exceptions)
+        import streamlit as st
+        error_msg = str(e)
+        st.error(f"Database save failed: {error_msg}")
+        raise
 
 
 def get_all_holdings() -> pd.DataFrame:

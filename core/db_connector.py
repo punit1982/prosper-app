@@ -154,12 +154,31 @@ class TursoConnection:
     """
     def __init__(self, base_url, auth_token):
         self._base_url = base_url.rstrip("/")
-        self._pipeline_url = f"{self._base_url}/v2/pipeline"
+        self._auth_token = auth_token
         self._headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json",
         }
-        self._pending = []  # Batch of statements to execute on commit
+        # Try v3 first (current), fall back to v2
+        self._pipeline_url = self._find_pipeline_url()
+
+    def _find_pipeline_url(self):
+        """Detect which pipeline API version works."""
+        for version in ("v3", "v2"):
+            url = f"{self._base_url}/{version}/pipeline"
+            try:
+                resp = requests.post(
+                    url,
+                    headers=self._headers,
+                    json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    return url
+            except Exception:
+                continue
+        # Default to v3
+        return f"{self._base_url}/v3/pipeline"
 
     def _type_for_value(self, val):
         """Map Python value to Turso arg type."""
@@ -350,28 +369,27 @@ def get_db_info() -> dict:
             masked_token = "***"
         info["url"] = _turso_url
         info["token_preview"] = masked_token
-        info["pipeline_url"] = f"{_turso_url.rstrip('/')}/v2/pipeline"
-
-        # Quick connectivity test
-        try:
-            test_resp = requests.post(
-                info["pipeline_url"],
-                headers={
-                    "Authorization": f"Bearer {_turso_token}",
-                    "Content-Type": "application/json",
-                },
-                json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
-                timeout=10,
-            )
-            info["status"] = f"HTTP {test_resp.status_code}"
-            if test_resp.status_code == 200:
-                info["connected"] = True
-            else:
-                info["connected"] = False
-                info["error"] = test_resp.text[:200]
-        except Exception as e:
-            info["connected"] = False
-            info["error"] = str(e)[:200]
+        # Quick connectivity test — try v3 then v2
+        info["connected"] = False
+        for ver in ("v3", "v2"):
+            test_url = f"{_turso_url.rstrip('/')}/{ver}/pipeline"
+            try:
+                test_resp = requests.post(
+                    test_url,
+                    headers={"Authorization": f"Bearer {_turso_token}", "Content-Type": "application/json"},
+                    json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
+                    timeout=10,
+                )
+                info["pipeline_url"] = test_url
+                info["status"] = f"HTTP {test_resp.status_code} ({ver})"
+                if test_resp.status_code == 200:
+                    info["connected"] = True
+                    break
+                else:
+                    info["error"] = test_resp.text[:300]
+            except Exception as e:
+                info["pipeline_url"] = test_url
+                info["error"] = str(e)[:300]
     else:
         info["turso_url_found"] = bool(_turso_url)
         info["turso_token_found"] = bool(_turso_token)
