@@ -49,8 +49,9 @@ def parse_brokerage_image(image_bytes: bytes, media_type: str) -> ParseResult:
         if cached is not None:
             return cached  # Cache hit — instant, free
 
-    # --- Step 2: Check API key ---
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    # --- Step 2: Check API key (env var OR Streamlit Cloud secrets) ---
+    from core.settings import get_api_key
+    api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
         return _mock_parse()  # Demo mode
 
@@ -90,9 +91,13 @@ FIELD DEFINITIONS — READ CAREFULLY BEFORE EXTRACTING
        .BO  = BSE India    (e.g. TATASTEEL.BO)
        .AE  = Dubai DFM    (e.g. EMAAR.AE)
        .HK  = Hong Kong    (e.g. 0700.HK)
-       .SI  = Singapore    (e.g. D05.SI)
-       .L   = London       (e.g. SHEL.L)
-   • No suffix for US stocks  (e.g. AAPL, MSFT, NVDA)
+       .SI  = Singapore SGX (e.g. D05.SI, S08.SI)
+       .SW  = Swiss SIX     (e.g. SREN.SW, IEDY.SW)
+       .L   = London LSE    (e.g. SHEL.L)
+   • No suffix for US stocks (NYSE/NASDAQ) (e.g. AAPL, MSFT, NVDA)
+   • IBKR shows exchange as SGX, EBS, NASDAQ.NMS, NYSE — map these:
+       SGX → .SI suffix     EBS → .SW suffix
+       NASDAQ.NMS or NYSE → no suffix (US stock)
 
 2. name — The full company or fund name as printed on the screen.
 
@@ -130,7 +135,9 @@ FIELD DEFINITIONS — READ CAREFULLY BEFORE EXTRACTING
 COMMON BROKER COLUMN LAYOUTS (for reference)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Zerodha:   Instrument | Qty | Avg. cost | LTP | Cur. val | P&L
-IBKR:      Symbol | Quantity | Avg Price | Market Value | Unrealized P&L
+IBKR:      Instrument | Position | Cst Bss (total cost) | Avg Price | Unrlzd P&L | Unrlzd P&L %
+   Note for IBKR: "Position" = quantity, "Avg Price" = avg_cost, "Cst Bss" = total cost basis (NOT avg_cost).
+   Positions may show "1.00K" meaning 1,000 shares, "20.0K" meaning 20,000 shares.
 HSBC:      Stock | Units | Avg Unit Cost | Current Price | Market Value
 Tiger:     Stock | Position | Avg Cost | Last Price | Market Value
 Groww:     Holding | Units | Avg Buy Price | Current Price | Current Value
@@ -165,7 +172,7 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
     # --- Call the API ---
     try:
         response = client.messages.create(
-            model="claude-opus-4-5",
+            model="claude-sonnet-4-5-20250514",
             max_tokens=4096,
             messages=[
                 {

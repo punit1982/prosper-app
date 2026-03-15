@@ -525,9 +525,10 @@ def run_analysis(
     Returns:
         (result_dict, error_message) — result is None on failure
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    from core.settings import get_api_key
+    api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key.startswith("your_"):
-        return None, "Anthropic API key not configured. Add ANTHROPIC_API_KEY to your .env file."
+        return None, "Anthropic API key not configured. Add ANTHROPIC_API_KEY to your .env or Streamlit secrets."
 
     tier_config = MODEL_TIERS.get(tier, MODEL_TIERS["standard"])
 

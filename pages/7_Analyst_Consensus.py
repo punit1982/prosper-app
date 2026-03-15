@@ -70,8 +70,8 @@ try:
     # ── AI Summary (shown first for quick insight) ──
     if upgrades and len(upgrades) >= 1:
         try:
-            import os
-            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+            from core.settings import get_api_key
+            api_key = get_api_key("ANTHROPIC_API_KEY")
             if api_key and api_key != "your_anthropic_api_key_here":
                 import anthropic
                 ud_df_early = pd.DataFrame(upgrades)

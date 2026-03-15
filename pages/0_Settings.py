@@ -128,16 +128,18 @@ st.divider()
 # API STATUS
 # ─────────────────────────────────────────
 st.subheader("🔑 API Keys & Integrations")
-st.caption("Shows which API keys are configured in your .env file. Keys are never displayed for security.")
+st.caption("Shows which API keys are configured (via .env or Streamlit secrets). Keys are never displayed for security.")
+
+from core.settings import get_api_key
 
 required_apis = {
-    "Anthropic (Claude AI — required)":     os.getenv("ANTHROPIC_API_KEY", ""),
+    "Anthropic (Claude AI — required)":     get_api_key("ANTHROPIC_API_KEY"),
 }
 optional_apis = {
-    "Finnhub (quotes, analyst data)":       os.getenv("FINNHUB_API_KEY", ""),
-    "Twelve Data (UAE/DFM quotes)":         os.getenv("TWELVE_DATA_API_KEY", ""),
-    "Serper / Google Search (news + analysis)": os.getenv("SERPER_API_KEY", ""),
-    "Financial Modeling Prep":              os.getenv("FMP_API_KEY", ""),
+    "Finnhub (quotes, analyst data)":       get_api_key("FINNHUB_API_KEY"),
+    "Twelve Data (UAE/DFM quotes)":         get_api_key("TWELVE_DATA_API_KEY"),
+    "Serper / Google Search (news + analysis)": get_api_key("SERPER_API_KEY"),
+    "Financial Modeling Prep":              get_api_key("FMP_API_KEY"),
 }
 
 st.markdown("**Required:**")

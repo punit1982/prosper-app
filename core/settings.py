@@ -110,6 +110,30 @@ def get_defaults() -> dict:
     return dict(_DEFAULTS)
 
 
+def get_api_key(key_name: str) -> str:
+    """
+    Get an API key by name, checking multiple sources:
+    1. os.environ / .env file  (local development)
+    2. st.secrets              (Streamlit Cloud deployment)
+    Returns empty string if not found anywhere.
+    """
+    # 1. Environment variable (works locally with .env)
+    val = os.getenv(key_name, "")
+    if val:
+        return val
+
+    # 2. Streamlit Cloud secrets
+    try:
+        import streamlit as st
+        val = st.secrets.get(key_name, "")
+        if val:
+            return str(val)
+    except Exception:
+        pass
+
+    return ""
+
+
 # ─────────────────────────────────────────
 # LIVE SETTINGS — loaded once at import time, updated when user saves
 # ─────────────────────────────────────────

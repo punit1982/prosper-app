@@ -427,7 +427,8 @@ def get_serper_web_context(query: str, count: int = 5) -> List[Dict]:
     Fetch web search results via Serper (Google Search).
     Returns list of {title, snippet, link} for analysis context.
     """
-    api_key = os.getenv("SERPER_API_KEY", "")
+    from core.settings import get_api_key
+    api_key = get_api_key("SERPER_API_KEY")
     if not api_key or "your_" in api_key.lower():
         return []
 
@@ -489,10 +490,11 @@ def _fetch_news_search_api(ticker: str) -> List[Dict]:
 def _fetch_news_serper(query: str, count: int = 10) -> List[Dict]:
     """
     Fetch news via Serper (Google Search API).
-    Configured via SERPER_API_KEY in .env.
+    Configured via SERPER_API_KEY in .env or Streamlit secrets.
     Returns [] if not configured or on error.
     """
-    api_key = os.getenv("SERPER_API_KEY", "")
+    from core.settings import get_api_key
+    api_key = get_api_key("SERPER_API_KEY")
     if not api_key or "your_" in api_key.lower():
         return []
 
@@ -833,7 +835,8 @@ def summarize_news_with_ai(title: str, publisher: str, ticker: str, ticker_name:
     Use Claude to generate a concise AI analysis of a news headline.
     Uses claude-sonnet for speed + cost efficiency.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    from core.settings import get_api_key
+    api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
         return "AI summary unavailable — Anthropic API key not configured."
 

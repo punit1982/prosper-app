@@ -283,7 +283,17 @@ if not st.session_state.parsed_holdings:
     st.stop()
 
 # --- Editable table ---
-st.subheader("Step 2 — Review & Save")
+col_title, col_restart = st.columns([3, 1])
+with col_title:
+    st.subheader("Step 2 — Review & Save")
+with col_restart:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 Clear & Start Over"):
+        st.session_state.parsed_holdings = []
+        st.session_state.last_uploaded_names = []
+        st.session_state.save_done = False
+        st.rerun()
+
 st.caption(
     "Check the data below. Click any cell to edit. "
     "When everything looks right, click **Save to Portfolio**."

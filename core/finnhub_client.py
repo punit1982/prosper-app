@@ -23,7 +23,8 @@ def get_client():
     """Lazy singleton Finnhub client."""
     global _client
     if _client is None:
-        key = os.getenv("FINNHUB_API_KEY", "")
+        from core.settings import get_api_key
+        key = get_api_key("FINNHUB_API_KEY")
         if not key:
             return None
         import finnhub
@@ -139,4 +140,5 @@ def institutional_ownership(symbol: str) -> List[Dict]:
 
 def is_configured() -> bool:
     """Check if Finnhub API key is available."""
-    return bool(os.getenv("FINNHUB_API_KEY", ""))
+    from core.settings import get_api_key
+    return bool(get_api_key("FINNHUB_API_KEY"))

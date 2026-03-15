@@ -32,7 +32,8 @@ UAE_EXCHANGES = ["DFM", "ADX", "XADS"]   # try Dubai first, then Abu Dhabi (ADX 
 # ─── Internal helpers ────────────────────────────────────────────────────────
 
 def _api_key() -> str:
-    return os.getenv("TWELVE_DATA_API_KEY", "")
+    from core.settings import get_api_key
+    return get_api_key("TWELVE_DATA_API_KEY")
 
 
 def _rate_limit() -> None:
