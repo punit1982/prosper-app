@@ -186,15 +186,19 @@ class TursoConnection:
         return f"{self._base_url}/v2/pipeline"
 
     def _type_for_value(self, val):
-        """Map Python value to Turso arg type."""
+        """Map Python value to Turso arg type.
+
+        IMPORTANT: Turso v2 pipeline expects native JSON types for values —
+        floats must be actual JSON numbers (not strings), integers likewise.
+        """
         if val is None:
             return {"type": "null"}
         elif isinstance(val, bool):
-            return {"type": "integer", "value": "1" if val else "0"}
+            return {"type": "integer", "value": str(int(val))}
         elif isinstance(val, int):
             return {"type": "integer", "value": str(val)}
         elif isinstance(val, float):
-            return {"type": "float", "value": str(val)}
+            return {"type": "float", "value": val}
         elif isinstance(val, bytes):
             import base64
             return {"type": "blob", "value": base64.b64encode(val).decode()}
