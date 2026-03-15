@@ -152,6 +152,46 @@ def get_api_key(key_name: str) -> str:
     return ""
 
 
+def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5"):
+    """
+    Call Claude API with automatic model fallback.
+    Tries multiple model IDs until one works — handles different API tiers/regions.
+    Returns the API response object.
+    Raises Exception if ALL models fail.
+    """
+    _FALLBACK_MODELS = [
+        "claude-opus-4-5",
+        "claude-sonnet-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-haiku-20240307",
+    ]
+
+    # Put the preferred model first, deduplicate
+    models_to_try = [preferred_model] + [m for m in _FALLBACK_MODELS if m != preferred_model]
+
+    last_error = None
+    for model in models_to_try:
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            return response
+        except Exception as e:
+            err_str = str(e)
+            if "404" in err_str or "not_found" in err_str:
+                last_error = e
+                continue  # try next model
+            raise  # non-404 errors should propagate immediately
+
+    raise Exception(
+        f"No Claude model accessible with your API key. "
+        f"Verify billing at console.anthropic.com. Last error: {last_error}"
+    )
+
+
 # ─────────────────────────────────────────
 # LIVE SETTINGS — loaded once at import time, updated when user saves
 # ─────────────────────────────────────────
