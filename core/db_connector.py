@@ -285,6 +285,17 @@ class TursoConnection:
 
         return TursoCursor([], [])
 
+    def execute_batch(self, sql_statements):
+        """Execute multiple independent SQL statements in a SINGLE HTTP pipeline call.
+
+        This is critical for init_db() — turns 10 HTTP requests into 1.
+        """
+        if not sql_statements:
+            return
+        stmts = [{"sql": sql.strip()} for sql in sql_statements if sql.strip()]
+        if stmts:
+            self._send_pipeline(stmts)
+
     def executemany(self, sql, param_list):
         """Execute the same SQL with multiple parameter sets."""
         statements = []

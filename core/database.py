@@ -3,15 +3,37 @@ import os
 import json
 import time
 import pandas as pd
+import streamlit as st
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
 from core.db_connector import get_connection as _get_cloud_connection, sync_to_cloud, is_cloud_db, DB_PATH
 
+# ─────────────────────────────────────────
+# SESSION CACHE KEYS — avoid redundant Turso HTTP calls
+# ─────────────────────────────────────────
+_HOLDINGS_CACHE_KEY = "_prosper_holdings_cache"
+_REALIZED_PNL_CACHE_KEY = "_prosper_realized_pnl_cache"
+_NAV_HISTORY_CACHE_KEY = "_prosper_nav_history_cache"
+_ANALYSES_CACHE_KEY = "_prosper_analyses_cache"
+
 
 def _get_connection():
     """Get a database connection (Turso cloud or local SQLite)."""
     return _get_cloud_connection()
+
+
+def _invalidate_holdings_cache():
+    """Clear cached holdings so next read hits the DB. Call after any write."""
+    try:
+        for key in (_HOLDINGS_CACHE_KEY, _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY):
+            st.session_state.pop(key, None)
+        # Also clear enriched data that depends on holdings
+        for key in list(st.session_state.keys()):
+            if key.startswith("enriched_") or key in ("extended_df", "last_refresh_time"):
+                del st.session_state[key]
+    except Exception:
+        pass
 
 
 def _read_sql(query: str, conn, params=None) -> pd.DataFrame:
@@ -36,143 +58,80 @@ def _read_sql(query: str, conn, params=None) -> pd.DataFrame:
 
 
 def init_db():
-    """Create the database and all tables if they don't exist."""
+    """Create all tables if they don't exist.
+
+    PERFORMANCE: On Turso, all CREATE TABLE statements are batched into a
+    SINGLE HTTP pipeline call (1 request instead of 10). Also skipped entirely
+    if already done this session.
+    """
+    # Skip if already initialized this session
+    if st.session_state.get("_db_initialized"):
+        return
+
+    _TABLE_STATEMENTS = [
+        """CREATE TABLE IF NOT EXISTS holdings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, name TEXT,
+            quantity REAL NOT NULL, avg_cost REAL NOT NULL,
+            currency TEXT DEFAULT 'USD', broker_source TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS parse_cache (
+            image_hash TEXT PRIMARY KEY, result_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS price_cache (
+            ticker TEXT PRIMARY KEY, price REAL, change_val REAL,
+            change_pct REAL, source TEXT DEFAULT 'unknown',
+            fetched_at REAL DEFAULT 0)""",
+        """CREATE TABLE IF NOT EXISTS news_cache (
+            cache_key TEXT PRIMARY KEY, news_json TEXT NOT NULL,
+            fetched_at REAL DEFAULT 0)""",
+        """CREATE TABLE IF NOT EXISTS ticker_cache (
+            ticker TEXT PRIMARY KEY, resolved TEXT NOT NULL,
+            fetched_at REAL DEFAULT 0)""",
+        """CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, name TEXT, type TEXT NOT NULL,
+            quantity REAL NOT NULL, price REAL NOT NULL,
+            currency TEXT DEFAULT 'USD', fees REAL DEFAULT 0,
+            date TEXT NOT NULL, broker_source TEXT, notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, name TEXT, currency TEXT DEFAULT 'USD',
+            target_price REAL, notes TEXT,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS nav_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL, total_value REAL NOT NULL,
+            total_cost REAL, unrealized_pnl REAL, realized_pnl REAL,
+            holdings_count INTEGER, base_currency TEXT DEFAULT 'USD',
+            snapshot_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(date, base_currency))""",
+        """CREATE TABLE IF NOT EXISTS prosper_analysis (
+            ticker TEXT PRIMARY KEY, analysis_date TEXT NOT NULL,
+            model_used TEXT DEFAULT 'sonnet', rating TEXT, score REAL,
+            archetype TEXT, archetype_name TEXT,
+            fair_value_base REAL, fair_value_bear REAL, fair_value_bull REAL,
+            upside_pct REAL, conviction TEXT, thesis TEXT, env_net TEXT,
+            score_breakdown TEXT, key_risks TEXT, key_catalysts TEXT,
+            full_response TEXT, cost_estimate REAL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    ]
+
     conn = _get_connection()
 
-    # Holdings table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS holdings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT,
-            quantity REAL NOT NULL,
-            avg_cost REAL NOT NULL,
-            currency TEXT DEFAULT 'USD',
-            broker_source TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    # Turso: batch all statements in ONE HTTP call
+    if hasattr(conn, 'execute_batch'):
+        conn.execute_batch(_TABLE_STATEMENTS)
+    else:
+        # SQLite: execute one by one (fast locally)
+        for sql in _TABLE_STATEMENTS:
+            conn.execute(sql)
+        conn.commit()
 
-    # Parse cache table — avoids re-calling Claude for the same screenshot
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS parse_cache (
-            image_hash TEXT PRIMARY KEY,
-            result_json TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Price cache — persists live prices across server restarts (TTL: 5 min)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS price_cache (
-            ticker      TEXT PRIMARY KEY,
-            price       REAL,
-            change_val  REAL,
-            change_pct  REAL,
-            source      TEXT DEFAULT 'unknown',
-            fetched_at  REAL DEFAULT 0
-        )
-    """)
-
-    # News cache — persists aggregated news across sessions (TTL: 1 hour)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS news_cache (
-            cache_key   TEXT PRIMARY KEY,
-            news_json   TEXT NOT NULL,
-            fetched_at  REAL DEFAULT 0
-        )
-    """)
-
-    # Ticker resolution cache — persists yfinance ticker probing (TTL: 24 hours)
-    # Eliminates 79+ HTTP pings on every new browser session; single SQLite read instead
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS ticker_cache (
-            ticker      TEXT PRIMARY KEY,
-            resolved    TEXT NOT NULL,
-            fetched_at  REAL DEFAULT 0
-        )
-    """)
-
-    # ── Phase 2 tables ──────────────────────────────────────────────────────────
-
-    # Transactions table — buy/sell trade history for realized P&L
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT,
-            type TEXT NOT NULL,
-            quantity REAL NOT NULL,
-            price REAL NOT NULL,
-            currency TEXT DEFAULT 'USD',
-            fees REAL DEFAULT 0,
-            date TEXT NOT NULL,
-            broker_source TEXT,
-            notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Watchlist table — stocks being tracked (not in portfolio)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS watchlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT,
-            currency TEXT DEFAULT 'USD',
-            target_price REAL,
-            notes TEXT,
-            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # NAV snapshots — daily portfolio value for historical performance
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS nav_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            total_value REAL NOT NULL,
-            total_cost REAL,
-            unrealized_pnl REAL,
-            realized_pnl REAL,
-            holdings_count INTEGER,
-            base_currency TEXT DEFAULT 'USD',
-            snapshot_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(date, base_currency)
-        )
-    """)
-
-    # ── Phase 4 tables ──────────────────────────────────────────────────────────
-
-    # Prosper AI Analysis — stores CIO-grade analysis results per ticker
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS prosper_analysis (
-            ticker          TEXT PRIMARY KEY,
-            analysis_date   TEXT NOT NULL,
-            model_used      TEXT DEFAULT 'sonnet',
-            rating          TEXT,
-            score           REAL,
-            archetype       TEXT,
-            archetype_name  TEXT,
-            fair_value_base REAL,
-            fair_value_bear REAL,
-            fair_value_bull REAL,
-            upside_pct      REAL,
-            conviction      TEXT,
-            thesis          TEXT,
-            env_net         TEXT,
-            score_breakdown TEXT,
-            key_risks       TEXT,
-            key_catalysts   TEXT,
-            full_response   TEXT,
-            cost_estimate   REAL,
-            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    conn.commit()
     conn.close()
+    st.session_state["_db_initialized"] = True
 
 
 # ─────────────────────────────────────────
@@ -198,25 +157,39 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None):
             )
         conn.commit()
         conn.close()
-        sync_to_cloud()
+        _invalidate_holdings_cache()
     except Exception as e:
-        # Surface the actual error (Streamlit Cloud redacts raw exceptions)
-        import streamlit as st
         error_msg = str(e)
         st.error(f"Database save failed: {error_msg}")
         raise
 
 
 def get_all_holdings() -> pd.DataFrame:
-    """Retrieve all holdings as a DataFrame."""
+    """Retrieve all holdings as a DataFrame.
+
+    PERFORMANCE: Returns session-cached copy if available.
+    Cache is invalidated automatically by save/update/delete functions.
+    """
+    try:
+        cached = st.session_state.get(_HOLDINGS_CACHE_KEY)
+        if cached is not None:
+            return cached.copy()
+    except Exception:
+        pass
+
     conn = _get_connection()
     df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn)
     conn.close()
+
+    try:
+        st.session_state[_HOLDINGS_CACHE_KEY] = df.copy()
+    except Exception:
+        pass
     return df
 
 
 def update_holding(holding_id: int, **kwargs):
-    """Update specific fields of a holding by ID. Accepts quantity, avg_cost, currency, country."""
+    """Update specific fields of a holding by ID."""
     allowed = {"quantity", "avg_cost", "currency", "broker_source"}
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
@@ -227,7 +200,7 @@ def update_holding(holding_id: int, **kwargs):
     conn.execute(f"UPDATE holdings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    _invalidate_holdings_cache()
 
 
 def delete_holding(holding_id: int):
@@ -236,7 +209,7 @@ def delete_holding(holding_id: int):
     conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    _invalidate_holdings_cache()
 
 
 def clear_all_holdings():
@@ -245,7 +218,7 @@ def clear_all_holdings():
     conn.execute("DELETE FROM holdings")
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    _invalidate_holdings_cache()
 
 
 # ─────────────────────────────────────────
@@ -442,13 +415,31 @@ def get_stale_tickers(tickers: List[str], max_age: float = PRICE_CACHE_TTL) -> L
 
 
 def get_price_cache_age() -> Optional[float]:
-    """Return age in seconds of the oldest cached price, or None if empty."""
+    """Return age in seconds of the oldest cached price, or None if empty.
+
+    Uses a cached timestamp so we only hit the DB once per session.
+    """
+    try:
+        cached_ts = st.session_state.get("_price_cache_min_ts")
+        if cached_ts is not None:
+            return time.time() - cached_ts if cached_ts > 0 else None
+    except Exception:
+        pass
+
     try:
         conn = _get_connection()
         row = conn.execute("SELECT MIN(fetched_at) FROM price_cache WHERE price IS NOT NULL").fetchone()
         conn.close()
         if row and row[0]:
+            try:
+                st.session_state["_price_cache_min_ts"] = row[0]
+            except Exception:
+                pass
             return time.time() - row[0]
+        try:
+            st.session_state["_price_cache_min_ts"] = 0
+        except Exception:
+            pass
         return None
     except Exception:
         return None
@@ -618,7 +609,10 @@ def save_transaction(ticker: str, txn_type: str, quantity: float, price: float,
     )
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    try:
+        st.session_state.pop(_REALIZED_PNL_CACHE_KEY, None)
+    except Exception:
+        pass
 
 
 def get_transactions(ticker: str = None, txn_type: str = None,
@@ -651,7 +645,10 @@ def delete_transaction(txn_id: int):
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    try:
+        st.session_state.pop(_REALIZED_PNL_CACHE_KEY, None)
+    except Exception:
+        pass
 
 
 def get_realized_pnl_summary() -> pd.DataFrame:
@@ -723,11 +720,22 @@ def get_realized_pnl_summary() -> pd.DataFrame:
 
 
 def get_total_realized_pnl() -> float:
-    """Return total realized P&L across all tickers."""
+    """Return total realized P&L across all tickers. Session-cached."""
+    try:
+        cached = st.session_state.get(_REALIZED_PNL_CACHE_KEY)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
     summary = get_realized_pnl_summary()
-    if summary.empty:
-        return 0.0
-    return float(summary["realized_pnl"].sum())
+    result = 0.0 if summary.empty else float(summary["realized_pnl"].sum())
+
+    try:
+        st.session_state[_REALIZED_PNL_CACHE_KEY] = result
+    except Exception:
+        pass
+    return result
 
 
 # ─────────────────────────────────────────
@@ -790,11 +798,25 @@ def save_nav_snapshot(date: str, total_value: float, total_cost: float = None,
     )
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    # Invalidate NAV history cache
+    try:
+        for key in list(st.session_state.keys()):
+            if key.startswith(_NAV_HISTORY_CACHE_KEY):
+                del st.session_state[key]
+    except Exception:
+        pass
 
 
 def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
-    """Retrieve NAV history for the last N days."""
+    """Retrieve NAV history for the last N days. Session-cached."""
+    cache_key = f"{_NAV_HISTORY_CACHE_KEY}_{base_currency or 'all'}"
+    try:
+        cached = st.session_state.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+    except Exception:
+        pass
+
     conn = _get_connection()
     query = "SELECT * FROM nav_snapshots WHERE 1=1"
     params = []
@@ -804,11 +826,24 @@ def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
     query += " ORDER BY date ASC"
     df = _read_sql(query, conn, params=params)
     conn.close()
+
+    try:
+        st.session_state[cache_key] = df.copy()
+    except Exception:
+        pass
     return df
 
 
 def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
-    """Check if a NAV snapshot already exists for today."""
+    """Check if a NAV snapshot already exists for today. Session-cached."""
+    cache_key = f"_nav_exists_today_{base_currency}"
+    try:
+        cached = st.session_state.get(cache_key)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
     today = datetime.now().strftime("%Y-%m-%d")
     conn = _get_connection()
     row = conn.execute(
@@ -816,7 +851,13 @@ def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
         (today, base_currency),
     ).fetchone()
     conn.close()
-    return row[0] > 0 if row else False
+    result = row[0] > 0 if row else False
+
+    try:
+        st.session_state[cache_key] = result
+    except Exception:
+        pass
+    return result
 
 
 # ─────────────────────────────────────────
@@ -858,7 +899,10 @@ def save_prosper_analysis(ticker: str, data: dict):
     )
     conn.commit()
     conn.close()
-    sync_to_cloud()
+    try:
+        st.session_state.pop(_ANALYSES_CACHE_KEY, None)
+    except Exception:
+        pass
 
 
 def get_prosper_analysis(ticker: str) -> Optional[Dict]:
@@ -883,7 +927,14 @@ def get_prosper_analysis(ticker: str) -> Optional[Dict]:
 
 
 def get_all_prosper_analyses() -> pd.DataFrame:
-    """Retrieve all Prosper analyses as a DataFrame."""
+    """Retrieve all Prosper analyses as a DataFrame. Session-cached."""
+    try:
+        cached = st.session_state.get(_ANALYSES_CACHE_KEY)
+        if cached is not None:
+            return cached.copy()
+    except Exception:
+        pass
+
     conn = _get_connection()
     df = _read_sql(
         "SELECT ticker, analysis_date, rating, score, archetype_name, "
@@ -892,6 +943,11 @@ def get_all_prosper_analyses() -> pd.DataFrame:
         conn,
     )
     conn.close()
+
+    try:
+        st.session_state[_ANALYSES_CACHE_KEY] = df.copy()
+    except Exception:
+        pass
     return df
 
 
