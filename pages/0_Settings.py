@@ -226,15 +226,49 @@ st.divider()
 # ABOUT
 # ─────────────────────────────────────────
 st.subheader("ℹ️ About Prosper")
-st.markdown("""
+
+# Show database backend info
+try:
+    from core.db_connector import get_db_info
+    db_info = get_db_info()
+    db_icon = "☁️" if db_info["persistent"] else "💾"
+    db_label = db_info["backend"]
+    db_persistent = "✅ Persistent (survives reboots)" if db_info["persistent"] else "⚠️ Local only (lost on Streamlit Cloud reboot)"
+except Exception:
+    db_label = "SQLite (Local)"
+    db_icon = "💾"
+    db_persistent = "⚠️ Local only"
+
+st.markdown(f"""
 **Prosper** is an AI-native investment operating system for high-net-worth individuals
 and institutional portfolio management.
 
-- **Version:** 5.0 (Phase 5)
-- **Stack:** Python + Streamlit + SQLite + Claude AI
+- **Version:** 5.1 (Command Center + Optimizer + Turso)
+- **Stack:** Python + Streamlit + Claude AI
+- **Database:** {db_icon} {db_label} — {db_persistent}
 - **Data:** yfinance, Finnhub, Twelve Data, RSS feeds (CNBC, Reuters, MarketWatch, Motley Fool)
-- **Security:** All financial data stays local on your machine
-- **Storage:** `~/prosper_data/prosper.db`
+""")
+
+# Turso setup instructions
+if not db_info.get("persistent", False):
+    with st.expander("☁️ Enable Cloud Database (Turso) — recommended for Streamlit Cloud"):
+        st.markdown("""
+**To make your data persistent (survive reboots):**
+
+1. Go to [turso.tech](https://turso.tech) and create a free account
+2. Create a database: `turso db create prosper`
+3. Get your database URL: `turso db show prosper --url`
+4. Create an auth token: `turso db tokens create prosper`
+5. Add these to your Streamlit Cloud secrets (Settings → Secrets):
+
+```toml
+TURSO_DATABASE_URL = "libsql://prosper-yourname.turso.io"
+TURSO_AUTH_TOKEN = "your-auth-token-here"
+```
+
+6. Redeploy — Prosper will automatically use Turso for all data storage.
+
+**Free tier:** 9GB storage, 500M row reads/month, 25M row writes/month.
 """)
 
 st.divider()

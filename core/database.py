@@ -6,16 +6,12 @@ import pandas as pd
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
-# Store DB in home directory so data survives server restarts
-DB_PATH = os.path.expanduser("~/prosper_data/prosper.db")
+from core.db_connector import get_connection as _get_cloud_connection, sync_to_cloud, DB_PATH
 
 
 def _get_connection():
-    """Get a connection to the SQLite database."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get a database connection (Turso cloud or local SQLite)."""
+    return _get_cloud_connection()
 
 
 def init_db():
@@ -180,6 +176,7 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None):
         )
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def get_all_holdings() -> pd.DataFrame:
@@ -202,6 +199,7 @@ def update_holding(holding_id: int, **kwargs):
     conn.execute(f"UPDATE holdings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def delete_holding(holding_id: int):
@@ -210,6 +208,7 @@ def delete_holding(holding_id: int):
     conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def clear_all_holdings():
@@ -218,6 +217,7 @@ def clear_all_holdings():
     conn.execute("DELETE FROM holdings")
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 # ─────────────────────────────────────────
@@ -590,6 +590,7 @@ def save_transaction(ticker: str, txn_type: str, quantity: float, price: float,
     )
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def get_transactions(ticker: str = None, txn_type: str = None,
@@ -622,6 +623,7 @@ def delete_transaction(txn_id: int):
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def get_realized_pnl_summary() -> pd.DataFrame:
@@ -760,6 +762,7 @@ def save_nav_snapshot(date: str, total_value: float, total_cost: float = None,
     )
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
@@ -827,6 +830,7 @@ def save_prosper_analysis(ticker: str, data: dict):
     )
     conn.commit()
     conn.close()
+    sync_to_cloud()
 
 
 def get_prosper_analysis(ticker: str) -> Optional[Dict]:
