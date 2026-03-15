@@ -124,6 +124,8 @@ if st.session_state.save_done:
     st.stop()
 
 # --- Step 1: Upload zone (centered) ---
+broker_source = "Auto-detect"  # default; overridden below if files uploaded
+
 if not st.session_state.parsed_holdings:
     st.markdown("### Step 1 — Upload Files")
 
