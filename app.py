@@ -55,7 +55,7 @@ if AUTH_ENABLED:
                 # Registration form
                 with st.expander("📝 New User? Register Here"):
                     try:
-                        email, username, name = authenticator.register_user(pre_authorization=False)
+                        email, username, name = authenticator.register_user(pre_authorized=False)
                         if email:
                             # Save updated credentials back to YAML
                             with open(_auth_config_path, "w") as _wf:
