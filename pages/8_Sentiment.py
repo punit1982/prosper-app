@@ -215,15 +215,15 @@ def ticker_detail():
     st.caption(f"**{sources_active} of 5 sources active** — weights redistributed dynamically")
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric(f"📰 News ({c.get('news', {}).get('weight', '25%')})",
+    col1.metric(f"📰 News ({c.get('news', {}).get('weight', '30%')})",
                 f"{round(c.get('news', {}).get('score', 0) * 100):+d}")
     col2.metric(f"💬 StockTwits ({c.get('stocktwits', {}).get('weight', '15%')})",
                 f"{round(c.get('stocktwits', {}).get('score', 0) * 100):+d}")
     col3.metric(f"📡 Reddit ({c.get('reddit', {}).get('weight', '10%')})",
                 f"{round(c.get('reddit', {}).get('score', 0) * 100):+d}")
-    col4.metric(f"🏦 Analyst ({c.get('analyst', {}).get('weight', '30%')})",
+    col4.metric(f"🏦 Analyst ({c.get('analyst', {}).get('weight', '20%')})",
                 f"{round(c.get('analyst', {}).get('score', 0) * 100):+d}")
-    col5.metric(f"🌐 G-News ({c.get('google_news', {}).get('weight', '20%')})",
+    col5.metric(f"🌐 G-News ({c.get('google_news', {}).get('weight', '25%')})",
                 f"{round(c.get('google_news', {}).get('score', 0) * 100):+d}")
 
     # StockTwits messages

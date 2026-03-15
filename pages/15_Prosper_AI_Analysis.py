@@ -102,33 +102,57 @@ with batch_col3:
 # ─────────────────────────────────────────
 
 if batch_btn:
-    progress = st.progress(0, text="Starting batch analysis...")
+    # ── Tier ordering: full > standard > quick
+    _TIER_RANK = {"full": 3, "standard": 2, "quick": 1}
+    selected_rank = _TIER_RANK.get(batch_tier, 1)
 
-    info_map = {}
-    with st.spinner("Fetching market data for all tickers..."):
-        info_map = get_ticker_info_batch(portfolio_tickers)
+    # ── Skip tickers with recent analysis of equal or higher grade (within 7 days)
+    from datetime import datetime, timedelta
+    existing_analyses = get_all_prosper_analyses()
+    skip_tickers = set()
+    if not existing_analyses.empty and "analysis_date" in existing_analyses.columns:
+        cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        for _, row in existing_analyses.iterrows():
+            if str(row.get("analysis_date", "")) >= cutoff:
+                existing_rank = _TIER_RANK.get(row.get("model_used", ""), 0)
+                if existing_rank >= selected_rank:
+                    skip_tickers.add(row["ticker"])
 
-    total = len(portfolio_tickers)
-    results = {}
-    errors = []
+    tickers_to_run = [t for t in portfolio_tickers if t not in skip_tickers]
 
-    for i, t in enumerate(portfolio_tickers):
-        progress.progress((i + 1) / total, text=f"Analyzing {t} ({i+1}/{total})...")
-        info = info_map.get(t, {})
-        result, error = run_analysis(t, tier=batch_tier, info=info)
-        if result:
-            save_prosper_analysis(t, result)
-            results[t] = result
-        else:
-            errors.append(f"{t}: {error}")
+    if skip_tickers:
+        st.info(f"Skipping **{len(skip_tickers)}** tickers with recent {batch_tier}+ analysis: {', '.join(sorted(skip_tickers)[:10])}{'...' if len(skip_tickers) > 10 else ''}")
 
-    progress.empty()
-    st.success(f"Batch complete: {len(results)}/{total} analyzed successfully.")
-    if errors:
-        with st.expander(f"Errors ({len(errors)})"):
-            for e in errors:
-                st.caption(e)
-    st.rerun()
+    if not tickers_to_run:
+        st.success("All tickers already have recent analysis. Nothing to do!")
+    else:
+        progress = st.progress(0, text="Starting batch analysis...")
+
+        info_map = {}
+        with st.spinner("Fetching market data..."):
+            info_map = get_ticker_info_batch(tickers_to_run)
+
+        total = len(tickers_to_run)
+        results = {}
+        errors = []
+
+        for i, t in enumerate(tickers_to_run):
+            progress.progress((i + 1) / total, text=f"Analyzing {t} ({i+1}/{total})...")
+            info = info_map.get(t, {})
+            result, error = run_analysis(t, tier=batch_tier, info=info)
+            if result:
+                save_prosper_analysis(t, result)
+                results[t] = result
+            else:
+                errors.append(f"{t}: {error}")
+
+        progress.empty()
+        st.success(f"Batch complete: {len(results)}/{total} analyzed. {len(skip_tickers)} skipped (recent).")
+        if errors:
+            with st.expander(f"Errors ({len(errors)})"):
+                for e in errors:
+                    st.caption(e)
+        st.rerun()
 
 
 # ─────────────────────────────────────────

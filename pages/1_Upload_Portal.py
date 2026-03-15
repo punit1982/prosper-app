@@ -14,6 +14,37 @@ from core.database import save_holdings
 st.header("Prosper Portal")
 st.caption("Upload brokerage screenshots, CSVs, Excel files, or PDFs to extract your holdings.")
 
+# ── Backup & Restore (critical for Streamlit Cloud) ────────────────────────
+from core.database import get_all_holdings as _get_holdings_for_backup
+_existing = _get_holdings_for_backup()
+
+with st.expander("💾 Backup & Restore Portfolio" + (f" ({len(_existing)} holdings)" if not _existing.empty else "")):
+    col_backup, col_restore = st.columns(2)
+    with col_backup:
+        if not _existing.empty:
+            _csv = _existing[["ticker", "name", "quantity", "avg_cost", "currency"]].to_csv(index=False)
+            st.download_button(
+                "⬇️ Download Backup CSV",
+                data=_csv,
+                file_name=f"prosper_backup_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No holdings to backup.")
+    with col_restore:
+        restore_file = st.file_uploader("⬆️ Restore from CSV", type=["csv"], key="restore_csv")
+        if restore_file:
+            try:
+                restore_df = pd.read_csv(restore_file)
+                if st.button("Restore Now", type="primary", use_container_width=True):
+                    save_holdings(restore_df)
+                    st.success(f"Restored {len(restore_df)} holdings!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Invalid CSV: {e}")
+    st.caption("**Tip:** Download a backup before the app reboots. Restore it after.")
+
 SUPPORTED_CURRENCIES = [
     "USD", "AED", "INR", "EUR", "GBP", "CHF", "SGD", "HKD",
     "JPY", "CNY", "AUD", "CAD", "SAR", "KWD", "QAR",

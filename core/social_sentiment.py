@@ -55,7 +55,13 @@ def get_stocktwits_sentiment(ticker: str) -> Dict:
                 })
 
         total = bulls + bears
-        score = round((bulls - bears) / total, 2) if total > 0 else 0
+        # Normalize to -1..+1 range; require minimum sample (3 msgs) for confidence
+        if total >= 3:
+            score = round(max(-1.0, min(1.0, (bulls - bears) / total)), 2)
+        elif total > 0:
+            score = round(max(-1.0, min(1.0, (bulls - bears) / total * 0.5)), 2)  # dampen thin data
+        else:
+            score = 0
 
         return {
             "score": score,
@@ -142,11 +148,13 @@ def get_analyst_sentiment(ticker: str) -> Dict:
         if total == 0:
             return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
 
-        # Contrarian-adjusted scoring: Hold is slightly negative (if analysts
-        # can only say Hold, it's not positive), Buy weight reduced (lazy default)
-        raw_score = (strong_buy * 2 + buy * 0.5 + hold * -0.5 + sell * -1.5 + strong_sell * -2) / total
-        # raw_score range is -2..+2, normalize to -1..+1
-        score = round(max(-1.0, min(1.0, raw_score / 2)), 2)
+        # Balanced scoring using industry-standard approach:
+        # Strong Buy = very positive, Buy = positive, Hold = neutral (not negative),
+        # Sell = negative, Strong Sell = very negative
+        # Hold at 0 (not -0.5) — "Hold" means "don't sell", which is actually neutral
+        raw_score = (strong_buy * 1.5 + buy * 1.0 + hold * 0.0 + sell * -1.0 + strong_sell * -1.5) / total
+        # raw_score range is roughly -1.5..+1.5, normalize to -1..+1
+        score = round(max(-1.0, min(1.0, raw_score)), 2)
 
         return {
             "score": score,

@@ -46,28 +46,34 @@ if AUTH_ENABLED:
                 _auth_config["cookie"]["expiry_days"],
             )
 
-            authenticator.login()
+            # Centered, narrow login form
+            if st.session_state.get("authentication_status") not in (True,):
+                _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
+                with _login_col:
+                    st.markdown(
+                        "<div style='text-align:center;margin-top:3rem'>"
+                        "<h1 style='margin-bottom:0'>Prosper</h1>"
+                        "<p style='color:#888;margin-top:0'>AI-Native Investment OS</p>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    authenticator.login()
 
-            if st.session_state.get("authentication_status") is None:
-                st.info("Please enter your credentials to access Prosper.")
-                st.caption("Default login: **admin** / **prosper2026**")
+                    if st.session_state.get("authentication_status") is None:
+                        st.caption("Default: **admin** / **prosper2026**")
+                        with st.expander("New user? Register"):
+                            try:
+                                email, username, name = authenticator.register_user(pre_authorized=False)
+                                if email:
+                                    with open(_auth_config_path, "w") as _wf:
+                                        yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                    st.success(f"User **{username}** registered!")
+                            except Exception as reg_err:
+                                st.error(str(reg_err))
 
-                # Registration form
-                with st.expander("📝 New User? Register Here"):
-                    try:
-                        email, username, name = authenticator.register_user(pre_authorized=False)
-                        if email:
-                            # Save updated credentials back to YAML
-                            with open(_auth_config_path, "w") as _wf:
-                                yaml.dump(_auth_config, _wf, default_flow_style=False)
-                            st.success(f"User **{username}** registered successfully! You can now log in.")
-                    except Exception as reg_err:
-                        st.error(str(reg_err))
+                    elif st.session_state.get("authentication_status") is False:
+                        st.error("Invalid username or password.")
 
-                st.stop()
-
-            elif st.session_state.get("authentication_status") is False:
-                st.error("Invalid username or password.")
                 st.stop()
 
             # User is authenticated — show logout in sidebar
