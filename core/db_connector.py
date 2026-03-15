@@ -26,33 +26,71 @@ _turso_token = None
 _use_turso = None  # None = not yet checked
 
 
+def _get_secret(key_name: str) -> str:
+    """Get a secret value — tries env vars, then 5 Streamlit secrets patterns."""
+    # 1. Environment variable
+    val = os.getenv(key_name, "")
+    if val:
+        return val
+
+    # 2-6. Streamlit secrets — try every pattern that might work
+    try:
+        import streamlit as st
+        # Pattern A: direct attribute access
+        try:
+            val = getattr(st.secrets, key_name, "")
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        # Pattern B: dict-style access
+        try:
+            val = st.secrets[key_name]
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        # Pattern C: .get()
+        try:
+            val = st.secrets.get(key_name, "")
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        # Pattern D: nested under [secrets] table
+        try:
+            val = st.secrets["secrets"][key_name]
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        # Pattern E: iterate all keys and match case-insensitively
+        try:
+            for k in st.secrets:
+                if k.upper() == key_name.upper():
+                    return str(st.secrets[k])
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return ""
+
+
 def _resolve_turso_config():
     """Resolve Turso credentials from env vars or Streamlit secrets."""
     global _turso_url, _turso_token, _use_turso
 
-    # Try env vars first
-    _turso_url = os.getenv("TURSO_DATABASE_URL", "")
-    _turso_token = os.getenv("TURSO_AUTH_TOKEN", "")
-
-    # Try Streamlit secrets if env vars empty
-    if not _turso_url:
-        try:
-            import streamlit as st
-            _turso_url = st.secrets.get("TURSO_DATABASE_URL", "")
-            _turso_token = st.secrets.get("TURSO_AUTH_TOKEN", "")
-        except Exception:
-            pass
-        if not _turso_url:
-            try:
-                import streamlit as st
-                _turso_url = st.secrets["secrets"]["TURSO_DATABASE_URL"]
-                _turso_token = st.secrets["secrets"]["TURSO_AUTH_TOKEN"]
-            except Exception:
-                pass
+    _turso_url = _get_secret("TURSO_DATABASE_URL").strip().strip('"').strip("'")
+    _turso_token = _get_secret("TURSO_AUTH_TOKEN").strip().strip('"').strip("'")
 
     # Convert libsql:// to https:// for HTTP API
     if _turso_url and _turso_url.startswith("libsql://"):
         _turso_url = _turso_url.replace("libsql://", "https://")
+
+    # Ensure https:// prefix
+    if _turso_url and not _turso_url.startswith("http"):
+        _turso_url = "https://" + _turso_url
 
     _use_turso = bool(_turso_url and _turso_token)
 
@@ -126,7 +164,9 @@ class TursoConnection:
     def _type_for_value(self, val):
         """Map Python value to Turso arg type."""
         if val is None:
-            return {"type": "null", "value": None}
+            return {"type": "null"}
+        elif isinstance(val, bool):
+            return {"type": "integer", "value": "1" if val else "0"}
         elif isinstance(val, int):
             return {"type": "integer", "value": str(val)}
         elif isinstance(val, float):
@@ -142,7 +182,6 @@ class TursoConnection:
         requests_list = []
         for stmt in statements:
             requests_list.append({"type": "execute", "stmt": stmt})
-        requests_list.append({"type": "close"})
 
         payload = {"requests": requests_list}
 
@@ -153,10 +192,18 @@ class TursoConnection:
                 json=payload,
                 timeout=30,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                body = resp.text[:500]
+                raise Exception(
+                    f"Turso HTTP {resp.status_code}: {body} "
+                    f"(URL: {self._pipeline_url})"
+                )
             return resp.json()
         except requests.exceptions.RequestException as e:
-            raise Exception(f"Turso HTTP error: {e}")
+            raise Exception(
+                f"Turso HTTP error: {e} "
+                f"(URL: {self._pipeline_url})"
+            )
 
     def _parse_result(self, result_obj):
         """Parse a single result from pipeline response into TursoCursor."""
@@ -286,8 +333,47 @@ def get_db_info() -> dict:
     global _use_turso
     if _use_turso is None:
         _resolve_turso_config()
-    return {
+
+    info = {
         "backend": "Turso (Cloud)" if _use_turso else "SQLite (Local)",
         "path": _turso_url if _use_turso else DB_PATH,
         "persistent": _use_turso,
     }
+
+    # Add diagnostic info
+    if _use_turso:
+        # Mask the token but show first/last 4 chars
+        masked_token = ""
+        if _turso_token and len(_turso_token) > 8:
+            masked_token = _turso_token[:4] + "…" + _turso_token[-4:]
+        elif _turso_token:
+            masked_token = "***"
+        info["url"] = _turso_url
+        info["token_preview"] = masked_token
+        info["pipeline_url"] = f"{_turso_url.rstrip('/')}/v2/pipeline"
+
+        # Quick connectivity test
+        try:
+            test_resp = requests.post(
+                info["pipeline_url"],
+                headers={
+                    "Authorization": f"Bearer {_turso_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
+                timeout=10,
+            )
+            info["status"] = f"HTTP {test_resp.status_code}"
+            if test_resp.status_code == 200:
+                info["connected"] = True
+            else:
+                info["connected"] = False
+                info["error"] = test_resp.text[:200]
+        except Exception as e:
+            info["connected"] = False
+            info["error"] = str(e)[:200]
+    else:
+        info["turso_url_found"] = bool(_turso_url)
+        info["turso_token_found"] = bool(_turso_token)
+
+    return info
