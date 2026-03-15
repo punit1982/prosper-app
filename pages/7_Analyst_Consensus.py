@@ -93,7 +93,7 @@ try:
                 recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
                 client = anthropic.Anthropic(api_key=api_key)
                 response = client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-3-5-haiku-20241022",
                     max_tokens=200,
                     messages=[{"role": "user", "content":
                         f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
