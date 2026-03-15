@@ -591,11 +591,14 @@ def run_analysis(
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
 
+        from core.settings import call_claude
+
         t0 = time.time()
-        response = client.messages.create(
-            model=tier_config["model"],
-            max_tokens=tier_config["max_tokens"],
+        response = call_claude(
+            client,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=tier_config["max_tokens"],
+            preferred_model=tier_config["model"],
         )
         elapsed = time.time() - t0
 

@@ -92,12 +92,14 @@ try:
                 show_cols_early = [c for c in priority_cols_early if c in ud_df_early.columns]
                 recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
                 client = anthropic.Anthropic(api_key=api_key)
-                response = client.messages.create(
-                    model="claude-3-5-haiku-20241022",
-                    max_tokens=200,
+                from core.settings import call_claude
+                response = call_claude(
+                    client,
                     messages=[{"role": "user", "content":
                         f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
                         f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
+                    max_tokens=200,
+                    preferred_model="claude-3-5-haiku-20241022",
                 )
                 st.info(f"🤖 **AI Summary:** {response.content[0].text}")
         except Exception:

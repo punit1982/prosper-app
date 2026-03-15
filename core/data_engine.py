@@ -857,10 +857,12 @@ In 2-3 sentences:
 
 Be concise and professional. No disclaimers."""
 
-        response = client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=300,
+        from core.settings import call_claude
+        response = call_claude(
+            client,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            preferred_model="claude-3-5-haiku-20241022",
         )
         return response.content[0].text
     except Exception as e:
