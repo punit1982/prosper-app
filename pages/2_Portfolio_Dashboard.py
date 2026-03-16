@@ -16,7 +16,9 @@ import math
 import streamlit as st
 import pandas as pd
 
-from core.database import get_all_holdings, clear_all_holdings, get_price_cache_age, get_total_realized_pnl
+from core.database import (get_all_holdings, clear_all_holdings, get_price_cache_age,
+                          get_total_realized_pnl, get_all_cash_positions, save_cash_position,
+                          delete_cash_position)
 from core.cio_engine import enrich_portfolio, add_key_metrics
 from core.data_engine import get_ticker_info_batch, fmt_large
 from core.settings import SETTINGS, save_user_settings
@@ -84,12 +86,139 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
-    if st.button("🗑️ Clear Entire Portfolio", type="secondary", use_container_width=True):
-        clear_all_holdings()
-        for key in list(st.session_state.keys()):
-            if key.startswith("enriched_") or key in ("metrics_df", "extended_df", "last_refresh_time"):
-                del st.session_state[key]
-        st.rerun()
+    # ── Cash Management ──
+    st.divider()
+    st.subheader("💵 Cash & Margin")
+    with st.expander("Manage Cash Positions", expanded=False):
+        from core.fortress import get_margin_rate, calculate_margin_cost, BROKER_MARGIN_RATES
+
+        cash_df = get_all_cash_positions()
+        total_margin_cost = 0.0
+        if not cash_df.empty:
+            for _, cpos in cash_df.iterrows():
+                amt = float(cpos["amount"])
+                broker = cpos.get("broker_source", "") or ""
+                currency = cpos.get("currency", "USD")
+                is_margin = bool(cpos.get("is_margin", 0)) or amt < 0
+
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    if is_margin or amt < 0:
+                        # Auto-detect margin rate from broker if not manually set
+                        manual_rate = cpos.get("margin_rate")
+                        if manual_rate and float(manual_rate) > 0:
+                            rate = float(manual_rate)
+                            rate_source = "manual"
+                        elif broker:
+                            margin_info = get_margin_rate(broker, amt, currency)
+                            rate = margin_info.get("rate") or 0
+                            rate_source = margin_info.get("broker_name", broker)
+                        else:
+                            rate = 0
+                            rate_source = "unknown"
+
+                        annual_cost = calculate_margin_cost(amt, rate) if rate > 0 else 0
+                        total_margin_cost += annual_cost
+                        st.markdown(
+                            f"🔴 **{cpos['account_name']}** — {currency} {amt:,.2f} *(margin)* · "
+                            f"Rate: **{rate:.2f}%** ({rate_source}) · "
+                            f"Annual cost: **{currency} {annual_cost:,.0f}**"
+                        )
+                    else:
+                        st.markdown(f"🟢 **{cpos['account_name']}** — {currency} {amt:,.2f}")
+                with c2:
+                    if st.button("🗑️", key=f"del_cash_{cpos['id']}", help="Delete"):
+                        delete_cash_position(int(cpos["id"]))
+                        st.rerun()
+
+            # Summary
+            net_cash = float(cash_df["amount"].sum())
+            pos_cash = float(cash_df[cash_df["amount"] >= 0]["amount"].sum()) if len(cash_df[cash_df["amount"] >= 0]) > 0 else 0
+            neg_cash = float(cash_df[cash_df["amount"] < 0]["amount"].sum()) if len(cash_df[cash_df["amount"] < 0]) > 0 else 0
+            st.markdown("---")
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                st.metric("Net Cash", f"{net_cash:,.0f}")
+            with sc2:
+                if neg_cash < 0:
+                    st.metric("Margin Debt", f"{neg_cash:,.0f}")
+                else:
+                    st.metric("Margin Debt", "None")
+            with sc3:
+                if total_margin_cost > 0:
+                    st.metric("Annual Margin Cost", f"{total_margin_cost:,.0f}")
+                else:
+                    st.metric("Annual Margin Cost", "—")
+        else:
+            st.caption("No cash positions added yet.")
+
+        st.markdown("---")
+        st.caption("**Add Cash Position**")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            cash_acct = st.text_input("Account Name", placeholder="e.g. IBKR Cash", key="_cash_acct")
+        with cc2:
+            cash_cur = st.selectbox("Currency", ["USD", "AED", "EUR", "GBP", "INR", "SGD", "HKD"], key="_cash_cur")
+        cc3, cc4 = st.columns(2)
+        with cc3:
+            cash_amt = st.number_input("Amount (negative = margin)", value=0.0, step=1000.0, key="_cash_amt")
+        with cc4:
+            broker_list = [""] + list(BROKER_MARGIN_RATES.keys())
+            cash_broker = st.selectbox("Broker", broker_list, key="_cash_broker",
+                                        format_func=lambda x: BROKER_MARGIN_RATES[x]["name"] if x else "Select broker...")
+        cc5, cc6 = st.columns(2)
+        with cc5:
+            cash_is_margin = st.checkbox("Margin/Debit Balance", key="_cash_margin",
+                                          value=(cash_amt < 0))
+        with cc6:
+            if cash_is_margin and cash_broker:
+                # Auto-fill rate from broker
+                auto_rate = get_margin_rate(cash_broker, cash_amt, cash_cur)
+                default_rate = auto_rate.get("rate") or 6.5
+                st.caption(f"Auto-detected: {default_rate:.2f}% ({auto_rate.get('broker_name', '')})")
+                cash_margin_rate = st.number_input("Margin Rate %", value=default_rate, step=0.25, key="_cash_rate")
+            elif cash_is_margin:
+                cash_margin_rate = st.number_input("Margin Rate %", value=6.5, step=0.25, key="_cash_rate")
+            else:
+                cash_margin_rate = None
+
+        if st.button("Add Cash Position", type="primary", use_container_width=True, key="_add_cash_btn"):
+            if cash_acct.strip():
+                save_cash_position(
+                    account_name=cash_acct.strip(),
+                    currency=cash_cur,
+                    amount=cash_amt,
+                    is_margin=cash_is_margin,
+                    margin_rate=cash_margin_rate,
+                    broker_source=cash_broker or None,
+                )
+                st.success(f"Added: {cash_acct} — {cash_cur} {cash_amt:,.2f}")
+                st.rerun()
+            else:
+                st.warning("Please enter an account name.")
+
+    # ── Clear Portfolio — 2-step confirmation ──
+    if not st.session_state.get("_confirm_clear_portfolio"):
+        if st.button("🗑️ Clear Entire Portfolio", type="secondary", use_container_width=True):
+            st.session_state["_confirm_clear_portfolio"] = True
+            st.rerun()
+    else:
+        st.warning("⚠️ This will **permanently delete** all holdings!")
+        confirm_text = st.text_input("Type **DELETE** to confirm:", key="_clear_confirm_input")
+        col_confirm, col_cancel = st.columns(2)
+        with col_confirm:
+            if st.button("Confirm Delete", type="primary", use_container_width=True,
+                         disabled=(confirm_text != "DELETE")):
+                clear_all_holdings()
+                st.session_state["_confirm_clear_portfolio"] = False
+                for key in list(st.session_state.keys()):
+                    if key.startswith("enriched_") or key in ("metrics_df", "extended_df", "last_refresh_time"):
+                        del st.session_state[key]
+                st.rerun()
+        with col_cancel:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state["_confirm_clear_portfolio"] = False
+                st.rerun()
 
 # ─────────────────────────────────────────
 # PAGE SETUP
@@ -522,10 +651,18 @@ def portfolio_section():
     total_day_gain   = safe_sum(df.get("day_gain"))
     total_realized   = get_total_realized_pnl()
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # Cash positions
+    cash_positions = get_all_cash_positions()
+    total_cash = float(cash_positions["amount"].sum()) if not cash_positions.empty else 0.0
+    margin_debt = float(cash_positions[cash_positions["is_margin"] == 1]["amount"].sum()) if not cash_positions.empty and "is_margin" in cash_positions.columns else 0.0
+    net_portfolio_value = (total_value or 0) + total_cash
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         if total_value is not None:
-            st.metric("Total Portfolio Value", f"{sym} {fmt_large(total_value)}")
+            label = f"{sym} {fmt_large(net_portfolio_value)}" if total_cash != 0 else f"{sym} {fmt_large(total_value)}"
+            st.metric("Total Portfolio Value", label,
+                      help=f"Securities: {sym} {fmt_large(total_value)}" + (f" + Cash: {sym} {total_cash:,.0f}" if total_cash != 0 else ""))
         else:
             st.metric("Total Portfolio Value", f"{len(df)} holdings")
     with c2:
@@ -551,6 +688,17 @@ def portfolio_section():
         else:
             st.metric("Realized P&L", "—", help="Add sell transactions in Transaction Log to see realized P&L.")
     with c5:
+        if total_cash != 0:
+            cash_label = f"{sym} {total_cash:,.0f}"
+            margin_help = f"Margin debt: {sym} {margin_debt:,.0f}" if margin_debt < 0 else ""
+            cash_pct = (total_cash / net_portfolio_value * 100) if net_portfolio_value else 0
+            st.metric("Cash & Equivalents", cash_label,
+                      delta=f"{cash_pct:.1f}% of portfolio",
+                      help=f"Net cash across all accounts. {margin_help}".strip())
+        else:
+            st.metric("Cash & Equivalents", "—",
+                      help="Add cash positions via sidebar → 💵 Cash Positions")
+    with c6:
         live = int(pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").notna().sum())
         st.metric("Holdings", f"{len(df)}", help=f"{live} with live prices · {len(df)-live} missing")
 

@@ -23,75 +23,82 @@ st.set_page_config(
 init_db()
 
 # ── Authentication ────────────────────────────────────────────────────────────
-# Uses streamlit-authenticator for email/password login.
-# Auth can be disabled by setting PROSPER_AUTH_ENABLED=false in .env
+# 3-tier auth: (1) Streamlit Cloud native → (2) streamlit-authenticator fallback → (3) disabled
+# Set PROSPER_AUTH_ENABLED=false in .env to skip all auth.
 
 AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
+_auth_method = None  # Track which auth method is active
 
 if AUTH_ENABLED:
+    # ── Tier 1: Streamlit Cloud built-in auth (Google/GitHub SSO) ─────────
+    _cloud_user = None
     try:
-        import yaml
-        import streamlit_authenticator as stauth
+        _cloud_user = st.context.user if hasattr(st, "context") and hasattr(st.context, "user") else None
+    except Exception:
+        pass
+    if _cloud_user is None:
+        try:
+            _cloud_user = st.experimental_user if hasattr(st, "experimental_user") else None
+        except Exception:
+            pass
 
-        _auth_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_config.yaml")
+    if _cloud_user and getattr(_cloud_user, "email", None):
+        # Authenticated via Streamlit Cloud
+        _auth_method = "cloud"
+        with st.sidebar:
+            st.markdown(f"👤 **{_cloud_user.email}**")
+            st.divider()
+    else:
+        # ── Tier 2: streamlit-authenticator (local/fallback) ──────────────
+        try:
+            import yaml
+            import streamlit_authenticator as stauth
 
-        if os.path.exists(_auth_config_path):
-            with open(_auth_config_path) as _f:
-                _auth_config = yaml.safe_load(_f)
+            _auth_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_config.yaml")
 
-            authenticator = stauth.Authenticate(
-                _auth_config["credentials"],
-                _auth_config["cookie"]["name"],
-                _auth_config["cookie"]["key"],
-                _auth_config["cookie"]["expiry_days"],
-            )
+            if os.path.exists(_auth_config_path):
+                with open(_auth_config_path) as _f:
+                    _auth_config = yaml.safe_load(_f)
 
-            # Centered, narrow login form
-            if st.session_state.get("authentication_status") not in (True,):
-                _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
-                with _login_col:
-                    st.markdown(
-                        "<div style='text-align:center;margin-top:3rem'>"
-                        "<h1 style='margin-bottom:0'>Prosper</h1>"
-                        "<p style='color:#888;margin-top:0'>AI-Native Investment OS</p>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
-                    authenticator.login()
+                authenticator = stauth.Authenticate(
+                    _auth_config["credentials"],
+                    _auth_config["cookie"]["name"],
+                    _auth_config["cookie"]["key"],
+                    _auth_config["cookie"]["expiry_days"],
+                )
 
-                    if st.session_state.get("authentication_status") is None:
-                        st.caption("Default: **admin** / **prosper2026**")
-                        with st.expander("New user? Register"):
-                            try:
-                                email, username, name = authenticator.register_user(pre_authorized=False)
-                                if email:
-                                    with open(_auth_config_path, "w") as _wf:
-                                        yaml.dump(_auth_config, _wf, default_flow_style=False)
-                                    st.success(f"User **{username}** registered!")
-                            except Exception as reg_err:
-                                st.error(str(reg_err))
+                if st.session_state.get("authentication_status") not in (True,):
+                    # Modern centered login page
+                    _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
+                    with _login_col:
+                        st.markdown(
+                            "<div style='text-align:center;margin-top:4rem'>"
+                            "<h1 style='font-size:2.5rem;margin-bottom:0'>Prosper</h1>"
+                            "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
+                            "<hr style='border:none;border-top:1px solid #333;margin:1.5rem 0'/>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                        authenticator.login()
 
-                    elif st.session_state.get("authentication_status") is False:
-                        st.error("Invalid username or password.")
+                        if st.session_state.get("authentication_status") is False:
+                            st.error("Invalid credentials.")
 
-                st.stop()
+                    st.stop()
 
-            # User is authenticated — show logout in sidebar
-            with st.sidebar:
-                st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
-                authenticator.logout("Logout", "sidebar")
-                st.divider()
-
-        else:
-            # No auth config file — skip authentication
+                # Authenticated — show user in sidebar
+                _auth_method = "local"
+                with st.sidebar:
+                    st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
+                    authenticator.logout("Logout", "sidebar")
+                    st.divider()
+            else:
+                AUTH_ENABLED = False
+        except ImportError:
             AUTH_ENABLED = False
-
-    except ImportError:
-        # streamlit-authenticator not installed — skip authentication
-        AUTH_ENABLED = False
-    except Exception as auth_err:
-        st.warning(f"Authentication error: {auth_err}. Running without login.")
-        AUTH_ENABLED = False
+        except Exception as auth_err:
+            st.warning(f"Authentication error: {auth_err}. Running without login.")
+            AUTH_ENABLED = False
 
 
 # ── Global currency filter (visible on every page) ────────────────────────────

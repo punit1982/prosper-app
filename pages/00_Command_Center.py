@@ -176,6 +176,30 @@ with col_alerts:
     except Exception:
         pass
 
+    # FORTRESS alerts — regime & circuit breakers
+    try:
+        from core.fortress import detect_regime, check_circuit_breakers, REGIME_NAMES, REGIME_COLORS
+        from core.database import get_fortress_state
+        vix_val = float(get_fortress_state("vix") or 18)
+        pmi_val = float(get_fortress_state("pmi") or 52)
+        regime_result = detect_regime(vix=vix_val, pmi=pmi_val)
+        regime = regime_result["regime"]
+        if regime in ("III",):  # Contraction
+            alerts.append(f"🏰 FORTRESS: **Contraction regime** detected — reduce risk exposure")
+        elif regime in ("II",):  # Overheating
+            alerts.append(f"🏰 FORTRESS: **Late Cycle** regime — tighten positions")
+
+        # Check circuit breakers
+        if total_cost > 0:
+            dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
+            if dd_pct <= -5:
+                cb = check_circuit_breakers(dd_pct)
+                level = cb["portfolio_level"]["level"]
+                if level != "NONE":
+                    alerts.append(f"🚨 Circuit Breaker **{level}**: Drawdown {dd_pct:.1f}%")
+    except Exception:
+        pass
+
     if alerts:
         for alert in alerts[:6]:
             st.markdown(alert)
@@ -337,17 +361,20 @@ st.divider()
 
 # ── Quick Navigation Cards ───────────────────────────────────────────────────
 st.markdown("### 🧭 Quick Navigation")
-n1, n2, n3, n4 = st.columns(4)
+n1, n2, n3, n4, n5 = st.columns(5)
 with n1:
-    st.page_link("pages/2_Portfolio_Dashboard.py", label="📊 Portfolio Dashboard", icon="📊")
+    st.page_link("pages/2_Portfolio_Dashboard.py", label="📊 Dashboard", icon="📊")
     st.caption("Live prices & P&L")
 with n2:
-    st.page_link("pages/18_Equity_Deep_Dive.py", label="🔬 Equity Research", icon="🔬")
-    st.caption("360° stock analysis")
+    st.page_link("pages/18_FORTRESS_Dashboard.py", label="🏰 FORTRESS", icon="🏰")
+    st.caption("Portfolio governance")
 with n3:
-    st.page_link("pages/3_Portfolio_News.py", label="📰 Portfolio News", icon="📰")
-    st.caption("AI-summarised news")
+    st.page_link("pages/18_Equity_Deep_Dive.py", label="🔬 Research", icon="🔬")
+    st.caption("360° stock analysis")
 with n4:
+    st.page_link("pages/3_Portfolio_News.py", label="📰 News", icon="📰")
+    st.caption("AI-summarised news")
+with n5:
     st.page_link("pages/19_Portfolio_Optimizer.py", label="⚖️ Optimizer", icon="⚖️")
     st.caption("Rebalance & MPT")
 
