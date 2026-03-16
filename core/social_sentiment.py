@@ -148,12 +148,33 @@ def get_analyst_sentiment(ticker: str) -> Dict:
         if total == 0:
             return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
 
-        # Balanced scoring using industry-standard approach:
-        # Strong Buy = very positive, Buy = positive, Hold = neutral (not negative),
-        # Sell = negative, Strong Sell = very negative
-        # Hold at 0 (not -0.5) — "Hold" means "don't sell", which is actually neutral
-        raw_score = (strong_buy * 1.5 + buy * 1.0 + hold * 0.0 + sell * -1.0 + strong_sell * -1.5) / total
-        # raw_score range is roughly -1.5..+1.5, normalize to -1..+1
+        # FORTRESS-aligned contrarian scoring:
+        # Wall Street "Hold" is a soft sell (banking relationships prevent real downgrades).
+        # Near-unanimous consensus = crowded trade risk → dampen.
+        raw_score = (strong_buy * 1.5 + buy * 0.8 + hold * -0.3 + sell * -1.2 + strong_sell * -2.0) / total
+
+        # Contrarian dampening — extreme consensus is historically a contrary indicator
+        max_bucket = max(strong_buy, buy, hold, sell, strong_sell)
+        consensus_pct = max_bucket / total if total > 0 else 0
+        if consensus_pct > 0.80:
+            raw_score *= 0.6   # >80% agree → likely crowded, heavy dampen
+        elif consensus_pct > 0.60:
+            raw_score *= 0.8   # >60% agree → moderate dampen
+
+        # Downgrade trend check — if available, penalize recent downgrades
+        try:
+            from core.data_engine import get_upgrade_downgrade
+            ud = get_upgrade_downgrade(ticker)
+            if ud and isinstance(ud, list) and len(ud) > 0:
+                recent = ud[:10]  # Last 10 changes
+                upgrades = sum(1 for x in recent if str(x.get("action", "")).lower() in ("upgrade", "up"))
+                downgrades = sum(1 for x in recent if str(x.get("action", "")).lower() in ("downgrade", "down"))
+                if downgrades > upgrades and downgrades >= 2:
+                    raw_score -= 0.15  # Downgrade trend penalty
+        except Exception:
+            pass
+
+        # Normalize to -1..+1
         score = round(max(-1.0, min(1.0, raw_score)), 2)
 
         return {
@@ -251,12 +272,12 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
         except Exception:
             gn_data = {"score": 0, "headlines": 0, "source": "Google News RSS"}
 
-    # Default weights
+    # Default weights — analyst weight increased (now de-biased), news reduced (noisiest)
     sources = {
-        "news":        {"score": news_score, "default_weight": 0.30, "has_data": True},  # news always counted
+        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},  # news always counted
         "stocktwits":  {"score": st_data["score"],  "default_weight": 0.15, "has_data": st_data.get("messages", 0) > 0},
         "reddit":      {"score": rd_data["score"],  "default_weight": 0.10, "has_data": rd_data.get("mentions", 0) > 0},
-        "analyst":     {"score": an_data["score"],   "default_weight": 0.20, "has_data": an_data.get("total_recs", 0) > 0},
+        "analyst":     {"score": an_data["score"],   "default_weight": 0.25, "has_data": an_data.get("total_recs", 0) > 0},
         "google_news": {"score": gn_data["score"],  "default_weight": 0.25, "has_data": gn_data.get("headlines", 0) > 0},
     }
 

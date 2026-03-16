@@ -83,6 +83,17 @@ MODEL_DESCRIPTIONS = {
 # Helpers – classifying holdings
 # ---------------------------------------------------------------------------
 
+# Cash Proxy Detection — money market funds, T-bill ETFs, ultra-short bond ETFs
+_CASH_PROXIES = {
+    # US Money Market Funds
+    "VMFXX", "SPAXX", "FDRXX", "SPRXX", "SNAXX", "SWVXX", "TTTXX",
+    # Ultra-Short Duration / T-Bill ETFs
+    "BIL", "SHV", "SGOV", "USFR", "JPST", "MINT", "NEAR", "ICSH",
+    "FLOT", "CSHI", "TBIL", "CLIP", "BOXX",
+    # Ultra-Short Bond ETFs (near-cash)
+    "VUSB", "GSY", "PULS",
+}
+
 _BOND_ETFS = {
     "BND", "AGG", "TLT", "IEF", "SHY", "LQD", "HYG", "BNDX", "VCIT",
     "VCSH", "VGSH", "VGIT", "VGLT", "TIP", "GOVT", "MUB", "SUB",
@@ -111,9 +122,27 @@ _SECTOR_MAP = {
 }
 
 
+def is_cash_proxy(ticker: str, info: dict = None) -> bool:
+    """Check if a ticker is a cash or money-market proxy."""
+    t = ticker.upper()
+    if t in _CASH_PROXIES:
+        return True
+    # Heuristic: check fund name for money-market / treasury-bill keywords
+    if info:
+        name = (info.get("shortName") or info.get("longName") or "").lower()
+        mm_keywords = ("money market", "treasury bill", "t-bill", "government mmf",
+                       "cash reserve", "liquid reserve", "overnight")
+        if any(kw in name for kw in mm_keywords):
+            return True
+    return False
+
+
 def _classify_asset_class(ticker: str, info: dict) -> str:
     """Return one of: Equity, Fixed Income, Gold/Commodities, Real Estate, Cash."""
     t = ticker.upper()
+    # Cash proxies first
+    if is_cash_proxy(t, info):
+        return "Cash"
     if t in _BOND_ETFS:
         return "Fixed Income"
     if t in _GOLD_COMMODITY:
@@ -129,6 +158,9 @@ def _classify_asset_class(ticker: str, info: dict) -> str:
             return "Gold/Commodities"
         if "real estate" in name or "reit" in name:
             return "Real Estate"
+        # Money market mutual funds
+        if "money market" in name or "liquid" in name:
+            return "Cash"
     sector = info.get("sector") or ""
     if sector == "Real Estate":
         return "Real Estate"

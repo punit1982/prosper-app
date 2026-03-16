@@ -16,6 +16,7 @@ _HOLDINGS_CACHE_KEY = "_prosper_holdings_cache"
 _REALIZED_PNL_CACHE_KEY = "_prosper_realized_pnl_cache"
 _NAV_HISTORY_CACHE_KEY = "_prosper_nav_history_cache"
 _ANALYSES_CACHE_KEY = "_prosper_analyses_cache"
+_CASH_POSITIONS_CACHE_KEY = "_prosper_cash_positions_cache"
 
 
 def _get_connection():
@@ -116,6 +117,21 @@ def init_db():
             upside_pct REAL, conviction TEXT, thesis TEXT, env_net TEXT,
             score_breakdown TEXT, key_risks TEXT, key_catalysts TEXT,
             full_response TEXT, cost_estimate REAL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS cash_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_name TEXT NOT NULL,
+            currency TEXT DEFAULT 'USD',
+            amount REAL NOT NULL DEFAULT 0,
+            is_margin INTEGER DEFAULT 0,
+            margin_rate REAL,
+            broker_source TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS fortress_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
 
@@ -957,3 +973,124 @@ def delete_prosper_analysis(ticker: str):
     conn.execute("DELETE FROM prosper_analysis WHERE ticker = ?", (ticker.strip().upper(),))
     conn.commit()
     conn.close()
+
+
+# ─────────────────────────────────────────
+# CASH POSITIONS  (Phase 5 — cash management)
+# ─────────────────────────────────────────
+
+def _invalidate_cash_cache():
+    """Clear cached cash positions so next read hits the DB."""
+    try:
+        st.session_state.pop(_CASH_POSITIONS_CACHE_KEY, None)
+    except Exception:
+        pass
+
+
+def save_cash_position(account_name: str, currency: str = "USD", amount: float = 0,
+                       is_margin: bool = False, margin_rate: float = None,
+                       broker_source: str = None, notes: str = None):
+    """Insert a cash position (positive = cash, negative = margin)."""
+    conn = _get_connection()
+    conn.execute(
+        """INSERT INTO cash_positions
+           (account_name, currency, amount, is_margin, margin_rate, broker_source, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (account_name.strip(), currency.strip(), amount,
+         1 if is_margin else 0, margin_rate, broker_source, notes),
+    )
+    conn.commit()
+    conn.close()
+    _invalidate_cash_cache()
+
+
+def get_all_cash_positions() -> pd.DataFrame:
+    """Retrieve all cash positions as a DataFrame. Session-cached."""
+    try:
+        cached = st.session_state.get(_CASH_POSITIONS_CACHE_KEY)
+        if cached is not None:
+            return cached.copy()
+    except Exception:
+        pass
+
+    conn = _get_connection()
+    df = _read_sql("SELECT * FROM cash_positions ORDER BY account_name ASC", conn)
+    conn.close()
+
+    try:
+        st.session_state[_CASH_POSITIONS_CACHE_KEY] = df.copy()
+    except Exception:
+        pass
+    return df
+
+
+def update_cash_position(position_id: int, **kwargs):
+    """Update specific fields of a cash position by ID."""
+    allowed = {"account_name", "currency", "amount", "is_margin", "margin_rate",
+               "broker_source", "notes"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [position_id]
+    conn = _get_connection()
+    conn.execute(
+        f"UPDATE cash_positions SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
+    _invalidate_cash_cache()
+
+
+def delete_cash_position(position_id: int):
+    """Remove a single cash position by its ID."""
+    conn = _get_connection()
+    conn.execute("DELETE FROM cash_positions WHERE id = ?", (position_id,))
+    conn.commit()
+    conn.close()
+    _invalidate_cash_cache()
+
+
+def get_total_cash(currency: str = None) -> float:
+    """Return total cash across all accounts. Optionally filter by currency."""
+    positions = get_all_cash_positions()
+    if positions.empty:
+        return 0.0
+    if currency:
+        positions = positions[positions["currency"] == currency]
+    return float(positions["amount"].sum()) if not positions.empty else 0.0
+
+
+# ─────────────────────────────────────────
+# FORTRESS STATE  (key-value store for regime, circuit breakers, etc.)
+# ─────────────────────────────────────────
+
+def save_fortress_state(key: str, value: str):
+    """Save a FORTRESS state value (JSON-encoded)."""
+    conn = _get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO fortress_state (key, value, updated_at)
+           VALUES (?, ?, ?)""",
+        (key, value, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_fortress_state(key: str) -> Optional[str]:
+    """Retrieve a FORTRESS state value by key. Returns None if not found."""
+    conn = _get_connection()
+    row = conn.execute(
+        "SELECT value FROM fortress_state WHERE key = ?", (key,)
+    ).fetchone()
+    conn.close()
+    return row["value"] if row else None
+
+
+def get_all_fortress_state() -> Dict[str, str]:
+    """Retrieve all FORTRESS state key-value pairs."""
+    conn = _get_connection()
+    rows = conn.execute("SELECT key, value FROM fortress_state").fetchall()
+    conn.close()
+    return {row["key"]: row["value"] for row in rows}
