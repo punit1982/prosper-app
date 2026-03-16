@@ -153,6 +153,20 @@ Return ONLY a JSON array. No markdown, no explanation, no code blocks.
   {"ticker": "EMAAR.AE", "name": "Emaar Properties", "quantity": 1000, "avg_cost": 7.80, "currency": "AED"}
 ]
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CASH & MARGIN BALANCES — ALSO EXTRACT THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If you see cash balances, margin balances, or debit amounts on the screen,
+include them as entries with:
+  ticker = "CASH" (for positive cash) or "MARGIN" (for margin/debit)
+  name = the label shown (e.g. "Settled Cash", "Margin Debit", "Net Cash Balance")
+  quantity = the amount (positive for cash, negative for margin debt)
+  avg_cost = 1 (always 1 for cash entries)
+  currency = the currency of the cash balance
+
+Example: {"ticker": "CASH", "name": "Settled Cash Balance", "quantity": 50000, "avg_cost": 1, "currency": "USD"}
+Example: {"ticker": "MARGIN", "name": "Margin Debit Balance", "quantity": -25000, "avg_cost": 1, "currency": "USD"}
+
 If you cannot read the image or find portfolio data, return:
 {"error": "Short description of the problem (e.g. image is blurry, no holdings table found)"}
 

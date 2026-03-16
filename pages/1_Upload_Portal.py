@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 from PIL import Image
 from core.screenshot_parser import parse_brokerage_image
-from core.database import save_holdings, get_all_holdings
+from core.database import save_holdings, get_all_holdings, save_cash_position
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -54,6 +54,25 @@ _COL_ALIASES = {
                  "average buy price"],
     "currency": ["currency", "ccy", "cur", "curr"],
 }
+
+# Cash/margin detection keywords in ticker or account name fields
+_CASH_KEYWORDS = {
+    "cash", "cash balance", "settled cash", "available cash", "net cash",
+    "margin", "margin balance", "margin debit", "debit balance", "borrowing",
+    "money market", "sweep", "core position", "free balance", "buying power",
+    "ledger balance", "credit balance", "net liquidation",
+}
+
+def _is_cash_line(ticker: str, name: str) -> bool:
+    """Detect if a parsed line represents a cash/margin balance, not a stock."""
+    combined = f"{ticker} {name}".lower()
+    for kw in _CASH_KEYWORDS:
+        if kw in combined:
+            return True
+    # Specific patterns
+    if ticker.upper() in ("CASH", "USD", "EUR", "GBP", "INR", "AED", "SGD", "HKD"):
+        return True
+    return False
 
 
 def _auto_map_columns(df: pd.DataFrame) -> dict:
@@ -390,6 +409,35 @@ edited_df = st.data_editor(
 st.divider()
 broker = broker_source if broker_source != "Auto-detect" else None
 
+# ── Detect cash/margin lines ──
+cash_lines = []
+stock_lines = []
+for idx, row in edited_df.iterrows():
+    ticker = str(row.get("ticker", "")).strip()
+    name = str(row.get("name", "")).strip()
+    if _is_cash_line(ticker, name):
+        # For cash lines, quantity * avg_cost = total amount, or just use quantity as amount
+        amt = float(row.get("quantity", 0) or 0)
+        # If avg_cost is set and looks like a total, use it
+        avg = float(row.get("avg_cost", 0) or 0)
+        amount = amt * avg if avg > 0 and amt > 0 else (amt if amt != 0 else avg)
+        cash_lines.append({
+            "account_name": name or ticker,
+            "currency": str(row.get("currency", "USD")).strip(),
+            "amount": amount,
+            "is_margin": "margin" in f"{ticker} {name}".lower() or amount < 0,
+        })
+    else:
+        stock_lines.append(idx)
+
+if cash_lines:
+    st.info(f"💵 **{len(cash_lines)} cash/margin line(s) detected** — these will be saved as cash positions, not stock holdings.")
+    for cl in cash_lines:
+        sign = "🔴" if cl["amount"] < 0 or cl["is_margin"] else "🟢"
+        margin_tag = " *(margin)*" if cl["is_margin"] else ""
+        st.markdown(f"{sign} **{cl['account_name']}** — {cl['currency']} {cl['amount']:,.2f}{margin_tag}")
+    st.divider()
+
 # ─── SAVE BUTTON — with double-click protection ─────────────────────────────
 is_saving = st.session_state.saving_in_progress
 
@@ -399,13 +447,28 @@ if st.button(
     use_container_width=True,
     disabled=is_saving,
 ):
-    if edited_df.empty:
+    if edited_df.empty and not cash_lines:
         st.warning("Nothing to save — the table is empty.")
     else:
         # Set flag BEFORE save to prevent double-click
         st.session_state.saving_in_progress = True
         try:
-            save_holdings(edited_df, broker_source=broker)
+            # Save stock holdings (exclude cash lines)
+            if stock_lines:
+                stock_df = edited_df.loc[stock_lines]
+                if not stock_df.empty:
+                    save_holdings(stock_df, broker_source=broker)
+
+            # Save cash positions
+            for cl in cash_lines:
+                save_cash_position(
+                    account_name=cl["account_name"],
+                    currency=cl["currency"],
+                    amount=cl["amount"],
+                    is_margin=cl["is_margin"],
+                    broker_source=broker,
+                )
+
             st.session_state.save_done = True
             st.session_state.saving_in_progress = False
             st.rerun()

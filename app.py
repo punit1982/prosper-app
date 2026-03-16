@@ -68,21 +68,73 @@ if AUTH_ENABLED:
                 )
 
                 if st.session_state.get("authentication_status") not in (True,):
-                    # Modern centered login page
+                    # Modern centered login page with registration
                     _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
                     with _login_col:
                         st.markdown(
-                            "<div style='text-align:center;margin-top:4rem'>"
+                            "<div style='text-align:center;margin-top:3rem'>"
                             "<h1 style='font-size:2.5rem;margin-bottom:0'>Prosper</h1>"
                             "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
                             "<hr style='border:none;border-top:1px solid #333;margin:1.5rem 0'/>"
                             "</div>",
                             unsafe_allow_html=True,
                         )
-                        authenticator.login()
 
-                        if st.session_state.get("authentication_status") is False:
-                            st.error("Invalid credentials.")
+                        _login_tab, _register_tab = st.tabs(["🔑 Sign In", "📝 Create Account"])
+
+                        with _login_tab:
+                            authenticator.login()
+                            if st.session_state.get("authentication_status") is False:
+                                st.error("Invalid credentials.")
+
+                        with _register_tab:
+                            st.markdown("##### Create your Prosper account")
+                            with st.form("register_form", clear_on_submit=True):
+                                _reg_c1, _reg_c2 = st.columns(2)
+                                with _reg_c1:
+                                    _reg_first = st.text_input("First Name", key="_reg_first")
+                                with _reg_c2:
+                                    _reg_last = st.text_input("Last Name", key="_reg_last")
+                                _reg_email = st.text_input("Email", placeholder="you@example.com", key="_reg_email")
+                                _reg_pw = st.text_input("Password (min 6 characters)", type="password", key="_reg_pw")
+                                _reg_pw2 = st.text_input("Confirm Password", type="password", key="_reg_pw2")
+                                _reg_submit = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+
+                                if _reg_submit:
+                                    _reg_errors = []
+                                    if not _reg_email or "@" not in _reg_email:
+                                        _reg_errors.append("Valid email address required.")
+                                    if not _reg_first.strip() or not _reg_last.strip():
+                                        _reg_errors.append("First and last name required.")
+                                    if not _reg_pw or len(_reg_pw) < 6:
+                                        _reg_errors.append("Password must be at least 6 characters.")
+                                    if _reg_pw != _reg_pw2:
+                                        _reg_errors.append("Passwords do not match.")
+
+                                    # Derive username from email
+                                    _reg_username = _reg_email.split("@")[0].lower().replace(".", "_").replace("-", "_").replace("+", "_") if _reg_email else ""
+                                    _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
+                                    if _reg_username in _existing_users:
+                                        _reg_errors.append(f"An account with this email already exists. Please sign in.")
+
+                                    if _reg_errors:
+                                        for _e in _reg_errors:
+                                            st.error(_e)
+                                    else:
+                                        _hashed_pw = stauth.Hasher.hash(_reg_pw)
+                                        _auth_config["credentials"]["usernames"][_reg_username] = {
+                                            "email": _reg_email.strip(),
+                                            "first_name": _reg_first.strip(),
+                                            "last_name": _reg_last.strip(),
+                                            "password": _hashed_pw,
+                                            "role": "user",
+                                        }
+                                        with open(_auth_config_path, "w") as _wf:
+                                            yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                        st.success(
+                                            f"✅ Account created! Your username is **{_reg_username}**\n\n"
+                                            f"Switch to the **Sign In** tab to log in."
+                                        )
 
                     st.stop()
 
@@ -150,16 +202,23 @@ pg = st.navigation({
         st.Page("pages/00_Command_Center.py",    title="Command Center",      icon="🏠", default=True),
     ],
     "Portfolio": [
-        st.Page("pages/2_Portfolio_Dashboard.py", title="Dashboard",          icon="📊"),
-        st.Page("pages/4_Portfolio_Summary.py",   title="Summary",            icon="🧩"),
-        st.Page("pages/5_Performance.py",         title="Performance",         icon="📈"),
-        st.Page("pages/19_Portfolio_Optimizer.py", title="Optimizer",          icon="⚖️"),
+        st.Page("pages/2_Portfolio_Dashboard.py",  title="Dashboard",          icon="📊"),
+        st.Page("pages/18_FORTRESS_Dashboard.py",  title="FORTRESS",           icon="🏰"),
+        st.Page("pages/4_Portfolio_Summary.py",     title="Summary",            icon="🧩"),
+        st.Page("pages/5_Performance.py",           title="Performance",        icon="📈"),
+        st.Page("pages/19_Portfolio_Optimizer.py",  title="Optimizer",          icon="⚖️"),
     ],
     "Research": [
         st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",   icon="🔬"),
         st.Page("pages/7_Analyst_Consensus.py",    title="Analyst Consensus",  icon="🎯"),
         st.Page("pages/8_Sentiment.py",            title="Sentiment",          icon="💬"),
         st.Page("pages/15_Prosper_AI_Analysis.py",  title="Prosper AI",         icon="🤖"),
+        st.Page("pages/23_Peer_Comparison.py",      title="Peer Comparison",    icon="🔍"),
+        st.Page("pages/21_Technical_Analysis.py",   title="Technical Analysis", icon="📉"),
+    ],
+    "Income & Calendar": [
+        st.Page("pages/22_Dividend_Dashboard.py", title="Dividends",           icon="💰"),
+        st.Page("pages/20_Earnings_Calendar.py",  title="Earnings Calendar",   icon="📅"),
     ],
     "News & Activity": [
         st.Page("pages/3_Portfolio_News.py",      title="Portfolio News",      icon="📰"),
