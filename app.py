@@ -68,19 +68,60 @@ if AUTH_ENABLED:
                 )
 
                 if st.session_state.get("authentication_status") not in (True,):
-                    # Modern centered login page with registration
+                    # Modern centered login page with registration + social auth
                     _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
                     with _login_col:
                         st.markdown(
-                            "<div style='text-align:center;margin-top:3rem'>"
-                            "<h1 style='font-size:2.5rem;margin-bottom:0'>Prosper</h1>"
+                            "<div style='text-align:center;margin-top:2rem'>"
+                            "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
                             "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
-                            "<hr style='border:none;border-top:1px solid #333;margin:1.5rem 0'/>"
                             "</div>",
                             unsafe_allow_html=True,
                         )
 
-                        _login_tab, _register_tab = st.tabs(["🔑 Sign In", "📝 Create Account"])
+                        # ── Social Login Buttons ──
+                        st.markdown(
+                            "<div style='margin:1.5rem 0 0.5rem 0'>"
+                            "<style>"
+                            ".social-btn { display:flex; align-items:center; justify-content:center; gap:10px; "
+                            "padding:10px 16px; border-radius:8px; font-weight:600; font-size:0.95rem; "
+                            "cursor:pointer; width:100%; margin-bottom:10px; border:1px solid rgba(255,255,255,0.15); "
+                            "text-decoration:none; color:#eee; transition:background 0.2s; }"
+                            ".social-btn:hover { background:rgba(255,255,255,0.08) !important; }"
+                            ".social-btn-google { background:rgba(66,133,244,0.12); }"
+                            ".social-btn-github { background:rgba(255,255,255,0.05); }"
+                            "</style>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Google button
+                        _google_client = os.getenv("GOOGLE_CLIENT_ID", "")
+                        _github_client = os.getenv("GITHUB_CLIENT_ID", "")
+
+                        _g1, _g2 = st.columns(2)
+                        with _g1:
+                            if st.button("Continue with Google", key="_google_login", use_container_width=True, type="secondary"):
+                                if _google_client:
+                                    st.session_state["_pending_oauth"] = "google"
+                                    st.rerun()
+                                else:
+                                    st.info("Google login available on Streamlit Cloud or configure GOOGLE_CLIENT_ID in .env")
+                        with _g2:
+                            if st.button("Continue with GitHub", key="_github_login", use_container_width=True, type="secondary"):
+                                if _github_client:
+                                    st.session_state["_pending_oauth"] = "github"
+                                    st.rerun()
+                                else:
+                                    st.info("GitHub login available on Streamlit Cloud or configure GITHUB_CLIENT_ID in .env")
+
+                        st.markdown(
+                            "<div style='text-align:center;margin:12px 0;color:#555;font-size:0.85rem'>"
+                            "--- or sign in with your account ---</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        _login_tab, _register_tab = st.tabs(["Sign In", "Create Account"])
 
                         with _login_tab:
                             authenticator.login()

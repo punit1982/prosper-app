@@ -181,8 +181,8 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
     explicit_failures: set = set()
     max_workers = min(len(tickers), 15)   # increased from 12 for larger portfolios
 
-    # Scale timeout: 60s base + 3s per ticker beyond 20
-    batch_timeout = max(60, 60 + (len(tickers) - 20) * 3) if len(tickers) > 20 else 60
+    # Scale timeout: 30s base + 2s per ticker beyond 20 (was 60s — too slow for initial load)
+    batch_timeout = max(30, 30 + (len(tickers) - 20) * 2) if len(tickers) > 20 else 30
 
     pool = ThreadPoolExecutor(max_workers=max_workers)
     try:
@@ -190,7 +190,7 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
         try:
             for future in as_completed(futures, timeout=batch_timeout):
                 try:
-                    sym, data = future.result(timeout=15)
+                    sym, data = future.result(timeout=10)
                     if data is not None:
                         results[sym] = data
                     else:
