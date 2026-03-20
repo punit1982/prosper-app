@@ -545,7 +545,7 @@ with col_links:
 
     nav_items = [
         ("pages/2_Portfolio_Dashboard.py", "Dashboard", "Live prices, P&L, holdings"),
-        ("pages/18_FORTRESS_Dashboard.py", "FORTRESS", "Regime, sizing, risk governance"),
+        ("pages/18_Risk_Strategy.py", "Risk & Strategy", "Regime, sizing, risk governance"),
         ("pages/18_Equity_Deep_Dive.py", "Equity Deep Dive", "360-degree stock research"),
         ("pages/22_Dividend_Dashboard.py", "Dividends", "Income tracking & projections"),
         ("pages/20_Earnings_Calendar.py", "Earnings Calendar", "Upcoming reporting dates"),

@@ -244,10 +244,9 @@ pg = st.navigation({
     ],
     "Portfolio": [
         st.Page("pages/2_Portfolio_Dashboard.py",  title="Dashboard",          icon="📊"),
-        st.Page("pages/18_FORTRESS_Dashboard.py",  title="FORTRESS",           icon="🏰"),
+        st.Page("pages/18_Risk_Strategy.py",       title="Risk & Strategy",    icon="🏰"),
         st.Page("pages/4_Portfolio_Summary.py",     title="Summary",            icon="🧩"),
         st.Page("pages/5_Performance.py",           title="Performance",        icon="📈"),
-        st.Page("pages/19_Portfolio_Optimizer.py",  title="Optimizer",          icon="⚖️"),
     ],
     "Research": [
         st.Page("pages/18_Equity_Deep_Dive.py",    title="Equity Deep Dive",   icon="🔬"),
