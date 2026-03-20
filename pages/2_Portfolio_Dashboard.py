@@ -311,7 +311,12 @@ def fmt_val(val):
     try:
         v = float(val)
         if math.isnan(v): return ""
-        return f"{'+' if v > 0 else ''}{v:,.2f}"
+        if abs(v) >= 100:
+            return f"{v:+,.0f}"
+        elif abs(v) >= 1:
+            return f"{v:+,.2f}"
+        else:
+            return f"{v:+,.4f}"
     except (TypeError, ValueError):
         return ""
 
@@ -327,7 +332,13 @@ def fmt_price(val):
     try:
         v = float(val)
         if math.isnan(v): return ""
-        return f"{v:,.4f}"
+        # Adaptive decimals: 2 for >10, 3 for 1-10, 4 for <1
+        if abs(v) >= 10:
+            return f"{v:,.2f}"
+        elif abs(v) >= 1:
+            return f"{v:,.3f}"
+        else:
+            return f"{v:,.4f}"
     except (TypeError, ValueError):
         return ""
 
@@ -403,8 +414,8 @@ def _build_stock_table(sub_df, sym):
     """Build display DataFrame for stocks with consensus columns."""
     display = pd.DataFrame()
     display["Ticker"] = sub_df["ticker"].values
-    display["Name"]   = sub_df.get("name", pd.Series(dtype=str)).fillna("").values
-    display["Qty"]    = sub_df["quantity"].apply(lambda x: f"{float(x):,.4f}" if pd.notna(x) else "").values
+    display["Name"]   = sub_df.get("name", pd.Series(dtype=str)).fillna("").apply(lambda x: str(x)[:25]).values
+    display["Qty"]    = sub_df["quantity"].apply(lambda x: f"{float(x):g}" if pd.notna(x) else "").values
     display["Avg Cost"]  = sub_df["avg_cost"].apply(fmt_price).values
     display["Price"]     = sub_df.get("current_price", pd.Series(dtype=float)).apply(fmt_price).values
 

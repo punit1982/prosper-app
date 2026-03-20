@@ -55,17 +55,27 @@ if enriched.empty:
 if "change_pct" in enriched.columns and "day_change_pct" not in enriched.columns:
     enriched["day_change_pct"] = enriched["change_pct"]
 
+# Also calculate day_change_pct from price_change if change_pct is all None
+if "day_change_pct" not in enriched.columns or enriched.get("day_change_pct") is None or enriched["day_change_pct"].isna().all():
+    if "price_change" in enriched.columns and "current_price" in enriched.columns:
+        _pc = pd.to_numeric(enriched["price_change"], errors="coerce")
+        _cp = pd.to_numeric(enriched["current_price"], errors="coerce")
+        enriched["day_change_pct"] = (_pc / (_cp - _pc) * 100).round(4)
+
+# ── Use resolved tickers for all lookups ──────────────────────────────────
+_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+
 # Enrich with sector data if not already present (needed for heatmap + allocation)
 if "sector" not in enriched.columns or enriched["sector"].isna().all():
     from core.data_engine import get_ticker_info_batch
-    _cmd_tickers = enriched["ticker"].tolist()
+    _cmd_tickers = enriched[_t_col].tolist()
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _cmd_sector_fetch(tickers_tuple):
         return get_ticker_info_batch(list(tickers_tuple))
 
     _cmd_info = _cmd_sector_fetch(tuple(_cmd_tickers))
-    enriched["sector"] = enriched["ticker"].map(
+    enriched["sector"] = enriched[_t_col].map(
         lambda t: _cmd_info.get(t, {}).get("sector") or "Other"
     ).replace({"": "Other", "None": "Other"})
 
@@ -92,26 +102,33 @@ day_pct = (day_gain / (total_value - day_gain) * 100) if (total_value - day_gain
 # FORTRESS Regime detection
 regime_name = "Unknown"
 regime_color = "#888"
+_regime_key = None  # The raw regime constant (e.g. REGIME_EXPANSION)
 try:
-    from core.fortress import detect_regime, REGIME_NAMES, REGIME_COLORS
+    from core.fortress import (
+        detect_regime, REGIME_NAMES, REGIME_COLORS,
+        REGIME_EXPANSION, REGIME_OVERHEATING, REGIME_CONTRACTION, REGIME_RECOVERY,
+    )
     from core.database import get_fortress_state
     vix_val = float(get_fortress_state("vix") or 18)
     pmi_val = float(get_fortress_state("pmi") or 52)
     regime_result = detect_regime(vix=vix_val, pmi=pmi_val)
-    regime = regime_result["regime"]
-    regime_name = REGIME_NAMES.get(regime, "Unknown")
-    regime_color = REGIME_COLORS.get(regime, "#888")
+    _regime_key = regime_result["regime"]
+    regime_color = REGIME_COLORS.get(_regime_key, "#888")
 except Exception:
     pass
 
-# Regime explanation mapping
-_REGIME_EXPLAIN = {
-    "Expansion": ("🟢", "Economy growing, markets favour risk. Good for equities."),
-    "Overheating": ("🟡", "Late-cycle: inflation rising, volatility increasing. Tighten stops, trim winners."),
-    "Contraction": ("🔴", "Economic weakness: reduce risk, hold more cash, avoid new positions."),
-    "Recovery": ("🔵", "Early recovery signs. Gradually increase equity exposure."),
-}
-_regime_icon, _regime_tip = _REGIME_EXPLAIN.get(regime_name, ("⚪", ""))
+# Plain-English regime labels (replace jargon like "Overheating Late Cycle")
+_REGIME_SIMPLE = {
+    REGIME_EXPANSION: ("Growing", "#4CAF50", "🟢", "Economy healthy, markets favour risk. Good for equities."),
+    REGIME_OVERHEATING: ("Heating Up", "#FF9800", "🟡", "Late-cycle: inflation rising, volatility increasing. Tighten stops, trim winners."),
+    REGIME_CONTRACTION: ("Slowing Down", "#f44336", "🔴", "Economic weakness: reduce risk, hold more cash, avoid new positions."),
+    REGIME_RECOVERY: ("Bouncing Back", "#2196F3", "🔵", "Early recovery signs. Gradually increase equity exposure."),
+} if _regime_key is not None else {}
+_rs = _REGIME_SIMPLE.get(_regime_key, ("Unknown", "#888", "⚪", ""))
+regime_name = _rs[0]
+regime_color = _rs[1]
+_regime_icon = _rs[2]
+_regime_tip = _rs[3]
 
 # Market context bar
 st.markdown(
@@ -133,10 +150,10 @@ st.markdown(
 )
 # Regime scale (always visible, shows where we are on the spectrum)
 _regime_phases = [
-    ("Recovery", "#2196F3", regime_name == "Recovery"),
-    ("Expansion", "#4CAF50", regime_name == "Expansion"),
-    ("Overheating", "#FF9800", regime_name == "Overheating"),
-    ("Contraction", "#f44336", regime_name == "Contraction"),
+    ("Bouncing Back", "#2196F3", regime_name == "Bouncing Back"),
+    ("Growing", "#4CAF50", regime_name == "Growing"),
+    ("Heating Up", "#FF9800", regime_name == "Heating Up"),
+    ("Slowing Down", "#f44336", regime_name == "Slowing Down"),
 ]
 _phase_html = "".join(
     f"<span style='padding:3px 10px;border-radius:10px;font-size:0.75rem;font-weight:{'700' if active else '400'};"

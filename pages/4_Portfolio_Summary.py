@@ -43,14 +43,13 @@ try:
     enriched = apply_global_filter(st.session_state[cache_key]).copy()
     t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
 
-    # Fetch ticker info for sector/industry/country
-    # Prefer extended_df data if already loaded from Dashboard (avoids duplicate fetch)
+    # Fetch ticker info for sector/industry/country — use resolved tickers for yfinance
+    _resolved_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else t_col
     info_key = "summary_info_map"
 
     # If extended_df is already loaded from Dashboard, extract sector/industry from it
     ext_df = st.session_state.get("extended_df")
     if ext_df is not None and "sector" in ext_df.columns:
-        # Reuse sector/industry/country from the already-loaded extended data
         ext_t = "ticker_resolved" if "ticker_resolved" in ext_df.columns else "ticker"
         _ext_sector   = dict(zip(ext_df[ext_t], ext_df.get("sector", "")))
         _ext_industry = dict(zip(ext_df[ext_t], ext_df.get("industry", "")))
@@ -58,9 +57,8 @@ try:
         _ext_mcap     = dict(zip(ext_df[ext_t], ext_df.get("market_cap", 0)))
         _ext_qt       = dict(zip(ext_df[ext_t], ext_df.get("quote_type", "EQUITY")))
 
-        # Build a lightweight info_map from extended_df
         info_map = {}
-        for t in enriched[t_col].dropna().tolist():
+        for t in enriched[_resolved_col].dropna().tolist():
             info_map[t] = {
                 "sector": _ext_sector.get(t, ""),
                 "industry": _ext_industry.get(t, ""),
@@ -69,12 +67,19 @@ try:
                 "quoteType": _ext_qt.get(t, "EQUITY"),
             }
     else:
-        # Fetch fresh from yfinance
+        # Fetch fresh from yfinance using resolved tickers
         if info_key not in st.session_state:
             with st.spinner("Loading sector & industry data…"):
-                tickers = enriched[t_col].dropna().tolist()
-                st.session_state[info_key] = get_ticker_info_batch(tickers)
+                resolved_tickers = enriched[_resolved_col].dropna().tolist()
+                st.session_state[info_key] = get_ticker_info_batch(resolved_tickers)
         info_map = st.session_state[info_key]
+
+    # Map original tickers → resolved ticker info (for pages that reference by original name)
+    if _resolved_col != t_col:
+        _map = dict(zip(enriched[t_col], enriched[_resolved_col]))
+        for orig, resolved in _map.items():
+            if orig not in info_map and resolved in info_map:
+                info_map[orig] = info_map[resolved]
 
     # Enrich with classification data
     def _resolve_sector(t):
