@@ -352,7 +352,8 @@ with tab_health:
 
     # Concentration warnings
     risk_df = enriched.copy()
-    risk_df["sector"] = risk_df["ticker"].apply(lambda t: (info_map.get(t, {}).get("sector") or "Unknown"))
+    from core.portfolio_optimizer import _normalise_sector
+    risk_df["sector"] = risk_df["ticker"].apply(lambda t: _normalise_sector(info_map.get(t, {})))
     risk_df["country"] = risk_df["ticker"].apply(lambda t: (info_map.get(t, {}).get("country") or "Unknown"))
     conc_warnings = concentration_risk_check(risk_df)
     if conc_warnings:
@@ -477,14 +478,23 @@ with tab_alloc:
     ]):
         with ac_cols[i]:
             alloc = current_alloc.get(dim, {})
+            # Filter out meaningless "Unknown" if it's the only entry
             if alloc:
+                alloc = {k: v for k, v in alloc.items() if k not in ("Unknown", "", "None") or len(alloc) == 1}
+            if alloc and len(alloc) > 1:
                 fig = px.pie(values=list(alloc.values()), names=list(alloc.keys()),
-                             title=label, hole=0.4)
+                             title=label, hole=0.4,
+                             color_discrete_sequence=px.colors.qualitative.Set2)
                 fig.update_layout(height=250, margin=dict(t=35, l=5, r=5, b=5),
                                   showlegend=True, legend=dict(font=dict(size=9)),
                                   paper_bgcolor="rgba(0,0,0,0)")
-                fig.update_traces(textposition="inside", textinfo="percent")
+                fig.update_traces(textposition="inside", textinfo="percent+label",
+                                  textfont_size=10)
                 st.plotly_chart(fig, use_container_width=True)
+            elif alloc:
+                # Single category — show as metric instead of pie
+                k, v = list(alloc.items())[0]
+                st.metric(label, k, f"{v*100:.0f}%")
 
     st.divider()
 
@@ -533,12 +543,31 @@ with tab_alloc:
                         showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig_w, use_container_width=True)
 
-    # HHI
+    # HHI with explanation
     if total_mv > 0:
         weights = enriched["market_value"] / total_mv
         hhi = (weights ** 2).sum() * 10000
-        hhi_label = "Well diversified" if hhi < 1500 else ("Moderate concentration" if hhi < 2500 else "Concentrated")
-        st.metric("Diversification Score (HHI)", f"{hhi:.0f}", help=f"{hhi_label}")
+        if hhi < 1000:
+            hhi_label, hhi_color, hhi_icon = "Highly Diversified", "#4CAF50", "🟢"
+        elif hhi < 1500:
+            hhi_label, hhi_color, hhi_icon = "Well Diversified", "#8BC34A", "🟢"
+        elif hhi < 2500:
+            hhi_label, hhi_color, hhi_icon = "Moderately Concentrated", "#FF9800", "🟡"
+        else:
+            hhi_label, hhi_color, hhi_icon = "Concentrated", "#f44336", "🔴"
+        st.markdown(f"#### Diversification Score")
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:12px;padding:10px 16px;"
+            f"background:rgba(255,255,255,0.03);border-radius:10px;border:1px solid rgba(255,255,255,0.08)'>"
+            f"<span style='font-size:2rem;font-weight:700;color:{hhi_color}'>{hhi:.0f}</span>"
+            f"<div><b>{hhi_icon} {hhi_label}</b><br>"
+            f"<span style='font-size:0.8rem;color:#999'>HHI Scale: "
+            f"<span style='color:#4CAF50'>0-1500 Diversified</span> · "
+            f"<span style='color:#FF9800'>1500-2500 Moderate</span> · "
+            f"<span style='color:#f44336'>2500+ Concentrated</span></span></div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

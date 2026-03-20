@@ -41,7 +41,9 @@ if enriched.empty:
     st.warning("Portfolio data not ready. Visit the Portfolio Dashboard first.")
     st.stop()
 
-tickers = enriched["ticker"].tolist()
+# Use resolved tickers for better yfinance data coverage
+_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+tickers = enriched[_t_col].tolist()
 
 # ── Fetch info for all portfolio tickers ──
 @st.cache_data(ttl=3600, show_spinner="Fetching company data...")
@@ -80,9 +82,11 @@ def _get_peers(ticker, info, n=8):
     """Get peer tickers for comparison."""
     industry = (info.get("industry") or "").lower()
     sector = info.get("sector", "Unknown")
+    market_cap = info.get("marketCap") or 0
 
-    # Start with same-industry tickers from portfolio
-    peers = []
+    # Priority 1: Same-industry tickers from portfolio
+    same_industry = []
+    same_sector = []
     for t in tickers:
         if t == ticker:
             continue
@@ -90,15 +94,33 @@ def _get_peers(ticker, info, n=8):
         peer_industry = (peer_info.get("industry") or "").lower()
         peer_sector = peer_info.get("sector", "Unknown")
         if peer_industry and peer_industry == industry:
-            peers.append(t)
+            same_industry.append(t)
         elif peer_sector == sector:
-            peers.append(t)
+            same_sector.append(t)
 
-    # Add well-known sector peers not in portfolio
-    sector_defaults = _SECTOR_PEERS.get(sector, [])
-    for p in sector_defaults:
-        if p != ticker and p not in peers and p not in tickers:
-            peers.append(p)
+    peers = same_industry + same_sector
+
+    # Priority 2: Well-known sector peers (try multiple sector name variants)
+    sector_keys = [sector]
+    # Also try common yfinance sector names that may differ
+    _SECTOR_ALIASES = {
+        "Financials": "Financial Services",
+        "Financial Services": "Financials",
+        "Consumer Discretionary": "Consumer Cyclical",
+        "Consumer Cyclical": "Consumer Discretionary",
+        "Consumer Staples": "Consumer Defensive",
+        "Consumer Defensive": "Consumer Staples",
+        "Materials": "Basic Materials",
+        "Basic Materials": "Materials",
+    }
+    if sector in _SECTOR_ALIASES:
+        sector_keys.append(_SECTOR_ALIASES[sector])
+
+    for sk in sector_keys:
+        sector_defaults = _SECTOR_PEERS.get(sk, [])
+        for p in sector_defaults:
+            if p != ticker and p not in peers and p not in tickers:
+                peers.append(p)
 
     return peers[:n]
 

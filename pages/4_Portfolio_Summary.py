@@ -81,24 +81,47 @@ try:
         _inf = info_map.get(t, {})
         qt = str(_inf.get("quoteType", "EQUITY")).upper()
         if qt in ("ETF", "MUTUALFUND"):
+            # Try to classify ETF/fund by category or name
+            cat = str(_inf.get("category", "")).lower()
+            name_raw = str(_inf.get("shortName", "") or _inf.get("longName", "")).lower()
+            for label, keywords in [
+                ("Technology", ("tech", "semiconductor", "software", "internet", "ai ", "artificial")),
+                ("Healthcare", ("health", "biotech", "pharma", "medical")),
+                ("Financial Services", ("financ", "bank", "insurance")),
+                ("Energy", ("energy", "oil", "gas", "petrol", "clean energy")),
+                ("Real Estate", ("real estate", "reit", "property")),
+                ("Fixed Income", ("bond", "income", "fixed", "treasury", "credit", "high yield", "debt")),
+                ("Industrials", ("industrial", "aerospace", "defense")),
+                ("Commodities", ("gold", "silver", "commodity", "metal", "mining")),
+            ]:
+                if any(k in cat or k in name_raw for k in keywords):
+                    return label
             return "Funds & ETFs"
         sector = _inf.get("sector")
         if sector and str(sector) not in ("", "None", "nan"):
             return sector
-        # Fallback: try to infer from ticker name in holdings
+        # Fallback: try to infer from company name in holdings
         name_val = enriched.loc[enriched[t_col] == t, "name"].values
-        if len(name_val) > 0 and name_val[0]:
-            n = str(name_val[0]).lower()
-            if any(k in n for k in ("bank", "finance", "capital", "invest")):
-                return "Financial Services"
-            if any(k in n for k in ("tech", "software", "digital", "cyber")):
-                return "Technology"
-            if any(k in n for k in ("energy", "oil", "gas", "petrol")):
-                return "Energy"
-            if any(k in n for k in ("telecom", "communication")):
-                return "Communication Services"
-            if any(k in n for k in ("real estate", "properties", "reit")):
-                return "Real Estate"
+        name_raw = str(name_val[0]).lower() if len(name_val) > 0 and name_val[0] else ""
+        # Also check shortName from info
+        short_name = str(_inf.get("shortName", "")).lower()
+        n = name_raw or short_name
+        if n:
+            for label, keywords in [
+                ("Financial Services", ("bank", "finance", "capital", "invest", "insurance", "brokerage", "credit")),
+                ("Technology", ("tech", "software", "digital", "cyber", "semiconductor", "chip", "computing", "data", "cloud")),
+                ("Energy", ("energy", "oil", "gas", "petrol", "solar", "wind", "power gen", "drilling")),
+                ("Communication Services", ("telecom", "communication", "media", "broadcast", "entertainment")),
+                ("Real Estate", ("real estate", "properties", "reit", "property", "housing")),
+                ("Healthcare", ("health", "hospital", "pharma", "biotech", "medical", "therapeut")),
+                ("Consumer Cyclical", ("retail", "auto", "luxury", "hotel", "restaurant", "e-commerce", "consumer")),
+                ("Consumer Defensive", ("food", "beverage", "grocery", "tobacco", "household")),
+                ("Industrials", ("industrial", "aerospace", "defense", "transport", "logistics", "construction", "engineering")),
+                ("Utilities", ("utility", "electric", "water", "waste")),
+                ("Basic Materials", ("mining", "chemical", "steel", "cement", "material", "metal")),
+            ]:
+                if any(k in n for k in keywords):
+                    return label
         return "Other"
 
     def _resolve_industry(t):
@@ -106,9 +129,17 @@ try:
         qt = str(_inf.get("quoteType", "EQUITY")).upper()
         if qt in ("ETF", "MUTUALFUND"):
             cat = _inf.get("category", "")
-            return cat if cat and str(cat) not in ("", "None", "nan") else "Fund / ETF"
+            if cat and str(cat) not in ("", "None", "nan"):
+                return cat
+            # Fallback: use fund name for classification
+            name = str(_inf.get("shortName", "")).lower()
+            if "bond" in name or "income" in name or "fixed" in name:
+                return "Fixed Income Fund"
+            if "equity" in name or "stock" in name or "growth" in name:
+                return "Equity Fund"
+            return "Fund / ETF"
         industry = _inf.get("industry")
-        return industry if industry and str(industry) not in ("", "None", "nan") else "Other"
+        return industry if industry and str(industry) not in ("", "None", "nan") else _resolve_sector(t)
 
     _CURRENCY_COUNTRY = {
         "AED": "United Arab Emirates", "USD": "United States", "EUR": "Europe",

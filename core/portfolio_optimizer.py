@@ -168,8 +168,39 @@ def _classify_asset_class(ticker: str, info: dict) -> str:
 
 
 def _normalise_sector(info: dict) -> str:
-    raw = info.get("sector") or "Unknown"
-    return _SECTOR_MAP.get(raw, raw)
+    raw = info.get("sector") or ""
+    if raw and raw != "None":
+        return _SECTOR_MAP.get(raw, raw)
+    # Fallback: try to classify from company/fund name
+    name = (info.get("shortName") or info.get("longName") or "").lower()
+    qt = (info.get("quoteType") or "").upper()
+    if qt in ("ETF", "MUTUALFUND"):
+        cat = (info.get("category") or "").lower()
+        for label, keywords in [
+            ("Technology", ("tech", "semiconductor", "software")),
+            ("Healthcare", ("health", "biotech", "pharma")),
+            ("Financials", ("financ", "bank")),
+            ("Energy", ("energy", "oil")),
+            ("Real Estate", ("real estate", "reit")),
+            ("Fixed Income", ("bond", "income", "fixed", "treasury", "credit")),
+        ]:
+            if any(k in cat or k in name for k in keywords):
+                return label
+        return "Funds & ETFs"
+    if name:
+        for label, keywords in [
+            ("Financials", ("bank", "finance", "insurance", "capital")),
+            ("Technology", ("tech", "software", "digital", "semiconductor")),
+            ("Energy", ("energy", "oil", "gas", "petrol", "drilling")),
+            ("Healthcare", ("health", "pharma", "biotech", "hospital")),
+            ("Communication", ("telecom", "communication", "media")),
+            ("Real Estate", ("real estate", "reit", "property")),
+            ("Industrials", ("industrial", "aerospace", "defense", "construction")),
+            ("Materials", ("mining", "chemical", "steel", "cement")),
+        ]:
+            if any(k in name for k in keywords):
+                return label
+    return "Unknown"
 
 
 def _get_country(info: dict) -> str:

@@ -50,6 +50,25 @@ if enriched.empty:
     st.warning("Could not load portfolio data. Try visiting the Portfolio Dashboard first.")
     st.stop()
 
+# ── Normalize column names ────────────────────────────────────────────────
+# Enrichment creates 'change_pct'; ensure 'day_change_pct' alias exists for charts
+if "change_pct" in enriched.columns and "day_change_pct" not in enriched.columns:
+    enriched["day_change_pct"] = enriched["change_pct"]
+
+# Enrich with sector data if not already present (needed for heatmap + allocation)
+if "sector" not in enriched.columns or enriched["sector"].isna().all():
+    from core.data_engine import get_ticker_info_batch
+    _cmd_tickers = enriched["ticker"].tolist()
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _cmd_sector_fetch(tickers_tuple):
+        return get_ticker_info_batch(list(tickers_tuple))
+
+    _cmd_info = _cmd_sector_fetch(tuple(_cmd_tickers))
+    enriched["sector"] = enriched["ticker"].map(
+        lambda t: _cmd_info.get(t, {}).get("sector") or "Other"
+    ).replace({"": "Other", "None": "Other"})
+
 # ── Compute Key Metrics ──────────────────────────────────────────────────────
 total_value = pd.to_numeric(enriched.get("market_value"), errors="coerce").dropna().sum()
 total_cost = pd.to_numeric(enriched.get("cost_basis"), errors="coerce").dropna().sum()
@@ -85,22 +104,52 @@ try:
 except Exception:
     pass
 
+# Regime explanation mapping
+_REGIME_EXPLAIN = {
+    "Expansion": ("🟢", "Economy growing, markets favour risk. Good for equities."),
+    "Overheating": ("🟡", "Late-cycle: inflation rising, volatility increasing. Tighten stops, trim winners."),
+    "Contraction": ("🔴", "Economic weakness: reduce risk, hold more cash, avoid new positions."),
+    "Recovery": ("🔵", "Early recovery signs. Gradually increase equity exposure."),
+}
+_regime_icon, _regime_tip = _REGIME_EXPLAIN.get(regime_name, ("⚪", ""))
+
 # Market context bar
 st.markdown(
-    f"<div style='display:flex;gap:24px;padding:10px 16px;background:rgba(255,255,255,0.03);"
-    f"border-radius:10px;border:1px solid rgba(255,255,255,0.08);margin-bottom:16px;flex-wrap:wrap;align-items:center'>"
-    f"<span style='font-size:0.85rem;color:#999'>FORTRESS Regime:</span>"
+    f"<div style='display:flex;gap:20px;padding:12px 16px;background:rgba(255,255,255,0.03);"
+    f"border-radius:10px;border:1px solid rgba(255,255,255,0.08);margin-bottom:4px;flex-wrap:wrap;align-items:center'>"
+    f"<div><span style='font-size:0.75rem;color:#777'>Market Regime</span><br>"
     f"<span style='background:{regime_color};color:white;padding:3px 12px;border-radius:12px;"
-    f"font-weight:700;font-size:0.85rem'>{regime_name}</span>"
-    f"<span style='color:#666'>|</span>"
-    f"<span style='font-size:0.85rem;color:#999'>Holdings: <b style=\"color:#eee\">{holdings_count}</b></span>"
-    f"<span style='color:#666'>|</span>"
-    f"<span style='font-size:0.85rem;color:#999'>Currencies: <b style=\"color:#eee\">"
-    f"{len(enriched['currency'].unique()) if 'currency' in enriched.columns else 1}</b></span>"
-    f"<span style='color:#666'>|</span>"
-    f"<span style='font-size:0.85rem;color:#999'>Cash: <b style=\"color:#eee\">"
-    f"{base_currency} {total_cash:,.0f}</b></span>"
+    f"font-weight:700;font-size:0.85rem'>{regime_name}</span></div>"
+    f"<div><span style='font-size:0.75rem;color:#777'>Holdings</span><br>"
+    f"<b style='color:#eee;font-size:0.95rem'>{holdings_count}</b></div>"
+    f"<div><span style='font-size:0.75rem;color:#777'>Currencies</span><br>"
+    f"<b style='color:#eee;font-size:0.95rem'>"
+    f"{len(enriched['currency'].unique()) if 'currency' in enriched.columns else 1}</b></div>"
+    f"<div><span style='font-size:0.75rem;color:#777'>Cash</span><br>"
+    f"<b style='color:#eee;font-size:0.95rem'>"
+    f"{base_currency} {total_cash:,.0f}</b></div>"
     f"</div>",
+    unsafe_allow_html=True,
+)
+# Regime scale (always visible, shows where we are on the spectrum)
+_regime_phases = [
+    ("Recovery", "#2196F3", regime_name == "Recovery"),
+    ("Expansion", "#4CAF50", regime_name == "Expansion"),
+    ("Overheating", "#FF9800", regime_name == "Overheating"),
+    ("Contraction", "#f44336", regime_name == "Contraction"),
+]
+_phase_html = "".join(
+    f"<span style='padding:3px 10px;border-radius:10px;font-size:0.75rem;font-weight:{'700' if active else '400'};"
+    f"background:{color if active else 'rgba(255,255,255,0.04)'};color:{'white' if active else '#666'};"
+    f"border:1px solid {color if active else 'transparent'}'>{name}</span>"
+    for name, color, active in _regime_phases
+)
+st.markdown(
+    f"<div style='display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap'>"
+    f"<span style='font-size:0.75rem;color:#666;margin-right:4px'>Cycle:</span>"
+    f"{_phase_html}</div>"
+    f"<div style='font-size:0.8rem;color:#999;margin-bottom:12px'>"
+    f"{_regime_icon} {_regime_tip}</div>",
     unsafe_allow_html=True,
 )
 
@@ -194,11 +243,16 @@ with col_attrib:
     if "day_gain" in enriched.columns:
         attrib_df = enriched[["ticker", "day_gain", "market_value"]].copy()
         attrib_df["day_gain"] = pd.to_numeric(attrib_df["day_gain"], errors="coerce").fillna(0)
+        attrib_df["market_value"] = pd.to_numeric(attrib_df["market_value"], errors="coerce").fillna(0)
         attrib_df = attrib_df[attrib_df["day_gain"] != 0].sort_values("day_gain")
 
         if not attrib_df.empty:
-            top_contrib = attrib_df.tail(5)  # top 5 positive
-            bot_contrib = attrib_df.head(5)  # top 5 negative
+            # Calculate % contribution to total day P&L
+            total_day_pnl = attrib_df["day_gain"].sum()
+            attrib_df["pct_contrib"] = (attrib_df["day_gain"] / attrib_df["market_value"] * 100).round(2)
+
+            top_contrib = attrib_df.tail(5)
+            bot_contrib = attrib_df.head(5)
             show_df = pd.concat([bot_contrib, top_contrib]).drop_duplicates()
             show_df = show_df.sort_values("day_gain")
 
@@ -208,15 +262,17 @@ with col_attrib:
                 y=show_df["ticker"],
                 orientation="h",
                 marker_color=colors,
-                text=show_df["day_gain"].apply(lambda x: f"{x:+,.0f}"),
+                text=show_df.apply(
+                    lambda r: f"{r['day_gain']:+,.0f} ({r['pct_contrib']:+.1f}%)", axis=1
+                ),
                 textposition="outside",
             ))
             fig_attr.update_layout(
-                height=220, margin=dict(t=5, l=5, r=40, b=5),
+                height=280, margin=dict(t=5, l=5, r=80, b=5),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 xaxis_title="", yaxis_title="",
                 xaxis=dict(showgrid=False, zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-                yaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=False, tickfont=dict(size=12)),
                 font=dict(size=11),
             )
             st.plotly_chart(fig_attr, use_container_width=True, key="cmd_attrib")
@@ -365,25 +421,34 @@ with col_hm:
                 st.plotly_chart(fig, use_container_width=True, key="cmd_heatmap_fallback")
 
 with col_alloc:
-    st.markdown("#### Allocation")
+    st.markdown("#### Allocation by Sector")
 
     if "market_value" in enriched.columns and "sector" in enriched.columns:
         alloc_df = enriched[["sector", "market_value"]].copy()
         alloc_df["market_value"] = pd.to_numeric(alloc_df["market_value"], errors="coerce").fillna(0)
         alloc_df = alloc_df.groupby("sector")["market_value"].sum().reset_index()
-        alloc_df = alloc_df[alloc_df["market_value"] > 0].sort_values("market_value", ascending=False)
+        alloc_df = alloc_df[alloc_df["market_value"] > 0].sort_values("market_value", ascending=True)
+        total_alloc = alloc_df["market_value"].sum()
+        alloc_df["pct"] = (alloc_df["market_value"] / total_alloc * 100).round(1)
 
         if not alloc_df.empty:
-            fig_alloc = px.pie(
-                alloc_df, names="sector", values="market_value", hole=0.5,
-                color_discrete_sequence=px.colors.qualitative.Set2,
-            )
-            fig_alloc.update_traces(textposition="inside", textinfo="percent")
+            fig_alloc = go.Figure(go.Bar(
+                x=alloc_df["pct"],
+                y=alloc_df["sector"],
+                orientation="h",
+                marker_color=px.colors.qualitative.Set2[:len(alloc_df)],
+                text=alloc_df.apply(
+                    lambda r: f"{r['pct']:.0f}% · {base_currency} {r['market_value']:,.0f}", axis=1
+                ),
+                textposition="auto",
+                textfont=dict(size=11),
+            ))
             fig_alloc.update_layout(
                 height=350, margin=dict(t=5, l=5, r=5, b=5),
-                paper_bgcolor="rgba(0,0,0,0)",
-                showlegend=True,
-                legend=dict(font=dict(size=10), orientation="h", y=-0.1),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(showgrid=False, showticklabels=False),
+                yaxis=dict(showgrid=False, tickfont=dict(size=11)),
+                font=dict(size=11),
             )
             st.plotly_chart(fig_alloc, use_container_width=True, key="cmd_alloc")
     elif "market_value" in enriched.columns:
@@ -419,11 +484,10 @@ def generate_briefing():
         client = anthropic.Anthropic(api_key=api_key)
 
         # Build context
+        _briefing_df = enriched.copy()
+        _briefing_df["_mv_sort"] = pd.to_numeric(_briefing_df.get("market_value"), errors="coerce")
         portfolio_summary = []
-        for _, row in enriched.sort_values(
-            pd.to_numeric(enriched.get("market_value"), errors="coerce"),
-            ascending=False
-        ).head(25).iterrows():
+        for _, row in _briefing_df.nlargest(25, "_mv_sort").iterrows():
             ticker = row.get("ticker", "?")
             name = str(row.get("name", ""))[:25]
             mv = pd.to_numeric(row.get("market_value"), errors="coerce")
