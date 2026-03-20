@@ -336,9 +336,19 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
 # ─────────────────────────────────────────
 # TICKER INFO (fundamentals)
 # ─────────────────────────────────────────
+@st.cache_data(ttl=INFO_TTL, show_spinner=False)
+def _yf_fetch_info(ticker: str) -> Dict:
+    """Raw yfinance info fetch — cached by Streamlit across all pages/reruns."""
+    try:
+        import yfinance as yf
+        return yf.Ticker(ticker).info or {}
+    except Exception:
+        return {}
+
+
 def get_ticker_info(ticker: str) -> Dict:
     """
-    Fetch comprehensive ticker info from yfinance (cached 1h).
+    Fetch comprehensive ticker info from yfinance (cached 24h via @st.cache_data).
 
     Returns a dict with keys like:
       sector, industry, country, city, marketCap, enterpriseValue,
@@ -347,17 +357,16 @@ def get_ticker_info(ticker: str) -> Dict:
       profitMargins, ebitda, totalRevenue, trailingEps, forwardEps,
       returnOnEquity, debtToEquity, dividendYield, beta, etc.
     """
+    # Session-state cache (fast in-memory check)
     cached = _cache_get(f"info_{ticker}", INFO_TTL)
     if cached is not None:
         return cached
 
-    try:
-        import yfinance as yf
-        info = yf.Ticker(ticker).info or {}
+    # Streamlit decorator cache (persists across reruns/pages)
+    info = _yf_fetch_info(ticker)
+    if info:
         _cache_set(f"info_{ticker}", info)
-        return info
-    except Exception:
-        return {}
+    return info
 
 
 def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
@@ -1129,22 +1138,29 @@ def get_mutualfund_holders(ticker: str) -> pd.DataFrame:
 # ─────────────────────────────────────────
 # HISTORICAL DATA (for performance charts)
 # ─────────────────────────────────────────
-def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    """Fetch OHLCV history for a ticker (cached 5 min)."""
-    cached = _cache_get(f"hist_{ticker}_{period}", HISTORY_TTL)
-    if cached is not None:
-        return cached
-
+@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
+def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
+    """Raw yfinance history fetch — cached by Streamlit across all pages."""
     try:
         import yfinance as yf
         hist = yf.Ticker(ticker).history(period=period)
         if hist is not None and not hist.empty:
-            _cache_set(f"hist_{ticker}_{period}", hist)
             return hist
     except Exception:
         pass
-
     return pd.DataFrame()
+
+
+def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
+    """Fetch OHLCV history for a ticker (cached via @st.cache_data)."""
+    cached = _cache_get(f"hist_{ticker}_{period}", HISTORY_TTL)
+    if cached is not None:
+        return cached
+
+    hist = _yf_fetch_history(ticker, period)
+    if not hist.empty:
+        _cache_set(f"hist_{ticker}_{period}", hist)
+    return hist
 
 
 def get_benchmark_history(benchmark_name: str, period: str = "1y") -> pd.DataFrame:
