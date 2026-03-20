@@ -87,14 +87,21 @@ if enriched.empty:
     st.warning("No holdings with valid market values.")
     st.stop()
 
-# ── Fetch Ticker Info (cached) ──
-tickers = enriched["ticker"].tolist()
+# ── Fetch Ticker Info (cached) — use resolved tickers for yfinance coverage ──
+_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+tickers = enriched[_t_col].tolist()
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_info(tickers_tuple):
     return get_ticker_info_batch(list(tickers_tuple))
 
 info_map = _get_info(tuple(tickers))
+# Also map original tickers to info for functions that use original ticker names
+if _t_col != "ticker":
+    _orig_to_resolved = dict(zip(enriched["ticker"], enriched[_t_col]))
+    for orig, resolved in _orig_to_resolved.items():
+        if orig not in info_map and resolved in info_map:
+            info_map[orig] = info_map[resolved]
 
 # ── PROSPER analyses ──
 prosper_df = get_all_prosper_analyses()
@@ -103,7 +110,11 @@ prosper_map = prosper_df.set_index("ticker").to_dict("index") if not prosper_df.
 # ── Portfolio metrics ──
 total_mv = enriched["market_value"].sum()
 enriched["weight_pct"] = enriched["market_value"] / total_mv * 100
-current_alloc = analyze_current_allocation(enriched, info_map)
+# Use resolved tickers for allocation analysis (info_map is keyed by resolved tickers)
+_alloc_df = enriched.copy()
+if _t_col != "ticker" and _t_col in _alloc_df.columns:
+    _alloc_df["ticker"] = _alloc_df[_t_col]
+current_alloc = analyze_current_allocation(_alloc_df, info_map)
 
 cash_positions = get_all_cash_positions()
 total_cash = float(cash_positions["amount"].sum()) if not cash_positions.empty else 0.0
@@ -193,7 +204,23 @@ st.markdown(
     f"</div>",
     unsafe_allow_html=True,
 )
-st.caption(f"*{simple_desc}*")
+# Plain-English summary of what this means
+_combined_summary = {
+    ("Growing", "Calm"): "Markets are favourable. You can take full-size positions in high-conviction stocks. No need to reduce exposure.",
+    ("Growing", "Elevated"): "Economy is strong but geopolitical tensions exist. Maintain positions but keep extra cash as buffer.",
+    ("Growing", "Critical"): "Economy is strong but world events are dangerous. Move to defensive positioning despite good fundamentals.",
+    ("Heating Up", "Calm"): "Economy is showing late-cycle signals (rising inflation, stretched valuations). Start tightening stop-losses and trim overweight winners.",
+    ("Heating Up", "Elevated"): "Late cycle + geopolitical risk. Be defensive: reduce position sizes, increase cash, avoid new speculative bets.",
+    ("Heating Up", "Critical"): "Multiple risk factors converging. Move aggressively to cash and defensive holdings.",
+    ("Slowing Down", "Calm"): "Economy weakening. Reduce equity exposure, increase cash, focus on quality defensive names.",
+    ("Slowing Down", "Elevated"): "Economic weakness + geopolitical risk. Significantly reduce exposure. Cash is king.",
+    ("Slowing Down", "Critical"): "Maximum caution. Minimize equity exposure. Preserve capital.",
+    ("Bouncing Back", "Calm"): "Early recovery. Gradually build positions in quality growth stocks. Best risk/reward phase of the cycle.",
+    ("Bouncing Back", "Elevated"): "Recovery underway but with geopolitical caution. Add selectively to high-conviction names.",
+    ("Bouncing Back", "Critical"): "Recovery signals but world events are dangerous. Stay cautious despite improving fundamentals.",
+}
+_summary_text = _combined_summary.get((simple_name, geo_simple), simple_desc)
+st.info(f"**What this means:** {_summary_text}")
 
 if geo_tier == GEO_RED:
     st.error("**World Risk: Critical** — All parameters forced to defensive mode. Reduce exposure immediately.")
@@ -350,11 +377,11 @@ with tab_health:
             st.markdown(f"{urgency_icon} **{t['trigger']}** — {t['action']}")
         has_alerts = True
 
-    # Concentration warnings
+    # Concentration warnings (use resolved tickers for info lookup)
     risk_df = enriched.copy()
     from core.portfolio_optimizer import _normalise_sector
-    risk_df["sector"] = risk_df["ticker"].apply(lambda t: _normalise_sector(info_map.get(t, {})))
-    risk_df["country"] = risk_df["ticker"].apply(lambda t: (info_map.get(t, {}).get("country") or "Unknown"))
+    risk_df["sector"] = risk_df[_t_col].apply(lambda t: _normalise_sector(info_map.get(t, {})))
+    risk_df["country"] = risk_df[_t_col].apply(lambda t: (info_map.get(t, {}).get("country") or "Unknown"))
     conc_warnings = concentration_risk_check(risk_df)
     if conc_warnings:
         for w in conc_warnings[:3]:
@@ -364,32 +391,42 @@ with tab_health:
     if not has_alerts:
         st.success("No alerts — portfolio looks healthy.")
 
-    # ── Exposure Governor (compact) ──
-    with st.expander("Exposure Limits Detail"):
+    # ── Exposure Governor (with explanations) ──
+    with st.expander("Exposure Limits — What do these mean?"):
+        _param_explain = {
+            "Gross Exposure": "Total value of all positions as % of portfolio. 100% = fully invested.",
+            "Net Exposure": "Long positions minus short positions. 100% = all long, no hedging.",
+            "Cash Pct": "Cash as % of total portfolio. Higher = more defensive.",
+            "Max Single Name Pct": "Largest single stock as % of portfolio. Over 10% = concentrated risk.",
+            "Max Sector Pct": "Largest sector as % of portfolio. Over 30% = sector concentration.",
+            "Max Geo Pct": "Largest country as % of portfolio. Over 50% = geographic concentration.",
+        }
         exp_rows = []
         for v in violations:
             status_icon = {"OK": "🟢", "BELOW_MIN": "🟡", "ABOVE_MAX": "🔴"}.get(v["status"], "⚪")
+            param_name = v["param"].replace("_", " ").title()
             exp_rows.append({
-                "Parameter": v["param"].replace("_", " ").title(),
+                "Parameter": param_name,
                 "Current": f"{v['current']:.1f}%",
                 "Min": f"{v['limit_min']:.0f}%",
                 "Max": f"{v['limit_max']:.0f}%",
                 "Status": f"{status_icon} {v['status'].replace('_', ' ')}",
             })
         st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
+        st.caption("Limits auto-adjust based on market regime. In 'Slowing Down' mode, limits get tighter (more defensive).")
+        for name, explain in _param_explain.items():
+            st.markdown(f"- **{name}:** {explain}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2: POSITION GUIDANCE (sizing + per-stock actions)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_sizing:
-    st.markdown("#### Position Sizing")
-    st.caption(
-        f"Regime: **{simple_name}** — position sizes adjusted by "
-        f"**{REGIME_SCALAR.get(effective_regime, 0.75):.0%}** vs normal"
-    )
+    st.markdown("#### Position Guidance")
 
+    # Build guidance data
     sizing_rows = []
+    action_counts = {"Hold": 0, "Trim": 0, "Add": 0, "Sell": 0}
     for _, row in enriched.iterrows():
         ticker = row["ticker"]
         current_weight = row["weight_pct"]
@@ -411,8 +448,8 @@ with tab_sizing:
             action = "Trim"
         else:
             action = "Add"
+        action_counts[action] = action_counts.get(action, 0) + 1
 
-        # Simplified conviction labels
         conv_simple = {
             "MAXIMUM": "Very High", "HIGH": "High",
             "MODERATE": "Medium", "LOW": "Low", "NO_POSITION": "Sell"
@@ -420,21 +457,90 @@ with tab_sizing:
 
         sizing_rows.append({
             "Ticker": ticker,
-            "Score": f"{prosper_score:.0f}" if pd.notna(prosper_score) else "—",
+            "Name": str(row.get("name", ""))[:20],
+            "Score": prosper_score if pd.notna(prosper_score) else 50,
             "Confidence": conv_simple,
-            "Current %": f"{current_weight:.1f}%",
-            "Target %": f"{target:.1f}%" if target > 0 else "Exit",
+            "Current %": current_weight,
+            "Target %": target,
             "Action": action,
         })
 
     sizing_df = pd.DataFrame(sizing_rows)
+
+    # ── Visual Action Summary (cards) ──
+    regime_scalar = REGIME_SCALAR.get(effective_regime, 0.75)
+    st.markdown(
+        f"<div style='padding:12px 16px;border-radius:10px;background:rgba(255,255,255,0.03);"
+        f"border:1px solid rgba(255,255,255,0.08);margin-bottom:12px'>"
+        f"<p style='margin:0 0 8px 0;color:#999;font-size:0.85rem'>"
+        f"Regime: <b>{simple_name}</b> — positions scaled to <b>{regime_scalar:.0%}</b> of normal. "
+        f"Guidance is based on your Prosper AI score for each stock.</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    _action_colors = {"Hold": "#4CAF50", "Add": "#2196F3", "Trim": "#FF9800", "Sell": "#f44336"}
+    _action_icons = {"Hold": "✅", "Add": "📈", "Trim": "✂️", "Sell": "🚫"}
+    action_cols = st.columns(4)
+    for i, (act, cnt) in enumerate(action_counts.items()):
+        with action_cols[i]:
+            st.markdown(
+                f"<div style='text-align:center;padding:10px;border-radius:8px;"
+                f"border:2px solid {_action_colors[act]};background:rgba(255,255,255,0.02)'>"
+                f"<div style='font-size:1.5rem'>{_action_icons[act]}</div>"
+                f"<div style='font-size:1.4rem;font-weight:700;color:{_action_colors[act]}'>{cnt}</div>"
+                f"<div style='font-size:0.8rem;color:#999'>{act}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── Visual chart: action-colored scatter plot ──
+    if not sizing_df.empty:
+        fig_guide = go.Figure()
+        for act in ["Sell", "Trim", "Hold", "Add"]:
+            mask = sizing_df["Action"] == act
+            subset = sizing_df[mask]
+            if not subset.empty:
+                fig_guide.add_trace(go.Scatter(
+                    x=subset["Current %"], y=subset["Target %"],
+                    mode="markers+text", text=subset["Ticker"],
+                    textposition="top center", textfont=dict(size=9),
+                    marker=dict(size=10, color=_action_colors[act]),
+                    name=f"{act} ({len(subset)})",
+                ))
+        # Add diagonal line (current = target)
+        max_val = max(sizing_df["Current %"].max(), sizing_df["Target %"].max(), 5)
+        fig_guide.add_trace(go.Scatter(
+            x=[0, max_val], y=[0, max_val], mode="lines",
+            line=dict(dash="dash", color="rgba(255,255,255,0.2)"),
+            showlegend=False,
+        ))
+        fig_guide.update_layout(
+            height=350, margin=dict(t=10, l=40, r=10, b=40),
+            xaxis_title="Current Weight %", yaxis_title="Target Weight %",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=-0.15),
+        )
+        st.plotly_chart(fig_guide, use_container_width=True)
+        st.caption("*Stocks above the line need adding, below need trimming.*")
+
+    st.divider()
+
+    # ── Detailed Table ──
+    st.markdown("#### Detailed Guidance")
+    display_sizing = sizing_df.copy()
+    display_sizing["Score"] = display_sizing["Score"].apply(lambda x: f"{x:.0f}")
+    display_sizing["Current %"] = display_sizing["Current %"].apply(lambda x: f"{x:.1f}%")
+    display_sizing["Target %"] = display_sizing["Target %"].apply(lambda x: f"{x:.1f}%" if x > 0 else "Exit")
 
     def _color_action(val):
         colors = {"Trim": "color:#ff9800;font-weight:600", "Add": "color:#2196f3;font-weight:600",
                   "Sell": "color:#d63031;font-weight:700", "Hold": "color:#4caf50"}
         return colors.get(val, "")
 
-    styled = sizing_df.style.map(_color_action, subset=["Action"])
+    styled = display_sizing[["Ticker", "Name", "Score", "Confidence", "Current %", "Target %", "Action"]].style.map(
+        _color_action, subset=["Action"]
+    )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # Quick sizing calculator

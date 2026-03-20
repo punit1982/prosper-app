@@ -30,9 +30,13 @@ cache_key = f"enriched_{base_currency}"
 if cache_key in st.session_state:
     from core.data_engine import apply_global_filter
     enriched = apply_global_filter(st.session_state[cache_key])
-    t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-    tickers = sorted(enriched[t_col].dropna().tolist(), key=str.upper)
-    names = dict(zip(enriched[t_col], enriched["name"]))
+    _t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+    tickers = sorted(enriched[_t_col].dropna().tolist(), key=str.upper)
+    # Build name map: resolved ticker → display name
+    names = dict(zip(enriched[_t_col], enriched["name"]))
+    # Also map original ticker → name for display
+    if _t_col != "ticker":
+        names.update(dict(zip(enriched["ticker"], enriched["name"])))
 else:
     tickers = sorted(holdings["ticker"].dropna().tolist(), key=str.upper)
     names = dict(zip(holdings["ticker"], holdings["name"]))
