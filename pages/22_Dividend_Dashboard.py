@@ -42,7 +42,11 @@ if enriched.empty:
     st.warning("Portfolio data not ready. Visit the Portfolio Dashboard first.")
     st.stop()
 
-tickers = enriched["ticker"].tolist()
+# Use resolved tickers for better yfinance coverage (e.g. EMAAR.AE vs EMAAR)
+_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+tickers = enriched[_t_col].tolist()
+# Keep mapping from resolved → original ticker for display
+_ticker_display = dict(zip(enriched[_t_col], enriched["ticker"]))
 
 # ── Fetch Dividend Data ──
 @st.cache_data(ttl=3600, show_spinner="Fetching dividend data…")
@@ -83,13 +87,13 @@ div_df = _get_dividend_info(tuple(tickers))
 
 # ── Merge with portfolio data ──
 if "quantity" in enriched.columns:
-    qty_map = dict(zip(enriched["ticker"], pd.to_numeric(enriched["quantity"], errors="coerce")))
+    qty_map = dict(zip(enriched[_t_col], pd.to_numeric(enriched["quantity"], errors="coerce")))
     div_df["quantity"] = div_df["ticker"].map(qty_map).fillna(0)
 else:
     div_df["quantity"] = 0
 
 if "market_value" in enriched.columns:
-    mv_map = dict(zip(enriched["ticker"], pd.to_numeric(enriched["market_value"], errors="coerce")))
+    mv_map = dict(zip(enriched[_t_col], pd.to_numeric(enriched["market_value"], errors="coerce")))
     div_df["market_value"] = div_df["ticker"].map(mv_map).fillna(0)
     total_mv = div_df["market_value"].sum()
 else:
@@ -97,7 +101,7 @@ else:
     total_mv = 0
 
 if "avg_cost" in enriched.columns:
-    cost_map = dict(zip(enriched["ticker"], pd.to_numeric(enriched["avg_cost"], errors="coerce")))
+    cost_map = dict(zip(enriched[_t_col], pd.to_numeric(enriched["avg_cost"], errors="coerce")))
     div_df["avg_cost"] = div_df["ticker"].map(cost_map).fillna(0)
 
 # ── Calculate annual income ──

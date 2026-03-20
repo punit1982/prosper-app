@@ -305,3 +305,110 @@ with met_cols[4]:
         st.metric("ATR (14)", f"{latest['ATR']:.2f} ({atr_pct:.1f}%)")
     else:
         st.metric("ATR (14)", "—")
+
+# ── Actionable Trading Summary ──────────────────────────────────────────────
+st.divider()
+st.markdown("### 🎯 Action Plan")
+
+# Count bullish vs bearish signals
+bullish = sum(1 for icon, _, _ in signals if icon in ("🟢", "⭐"))
+bearish = sum(1 for icon, _, _ in signals if icon in ("🔴", "💀"))
+total_signals = bullish + bearish
+
+if total_signals > 0:
+    score = bullish / total_signals * 100  # 0=fully bearish, 100=fully bullish
+else:
+    score = 50
+
+# Determine action
+if score >= 70:
+    action, action_color, action_icon = "BUY / ADD", "#4CAF50", "🟢"
+    action_desc = "Technical indicators are predominantly bullish. Consider building a position."
+elif score >= 55:
+    action, action_color, action_icon = "LEAN BULLISH", "#8BC34A", "🟢"
+    action_desc = "Slight bullish edge. Hold existing positions, small adds on dips."
+elif score >= 45:
+    action, action_color, action_icon = "HOLD / NEUTRAL", "#FF9800", "🟡"
+    action_desc = "Mixed signals. Hold positions but avoid adding. Wait for clarity."
+elif score >= 30:
+    action, action_color, action_icon = "LEAN BEARISH", "#FF5722", "🟠"
+    action_desc = "Slight bearish edge. Tighten stops, consider trimming."
+else:
+    action, action_color, action_icon = "SELL / REDUCE", "#f44336", "🔴"
+    action_desc = "Technical indicators are predominantly bearish. Consider reducing exposure."
+
+# Calculate key levels
+support_levels = []
+resistance_levels = []
+if pd.notna(latest.get("SMA_50")):
+    lvl = latest["SMA_50"]
+    if lvl < current_price:
+        support_levels.append(("50-DMA", lvl))
+    else:
+        resistance_levels.append(("50-DMA", lvl))
+if pd.notna(latest.get("SMA_200")):
+    lvl = latest["SMA_200"]
+    if lvl < current_price:
+        support_levels.append(("200-DMA", lvl))
+    else:
+        resistance_levels.append(("200-DMA", lvl))
+if pd.notna(latest.get("BB_lower")):
+    support_levels.append(("Lower BB", latest["BB_lower"]))
+if pd.notna(latest.get("BB_upper")):
+    resistance_levels.append(("Upper BB", latest["BB_upper"]))
+
+# Recent swing high/low (last 20 days)
+recent = df.tail(20)
+swing_low = recent["low"].min()
+swing_high = recent["high"].max()
+support_levels.append(("20D Low", swing_low))
+resistance_levels.append(("20D High", swing_high))
+
+# Sort by proximity to current price
+support_levels.sort(key=lambda x: current_price - x[1])
+resistance_levels.sort(key=lambda x: x[1] - current_price)
+
+# ATR-based stop loss
+atr_val = latest["ATR"] if pd.notna(latest.get("ATR")) else 0
+stop_loss = current_price - 2 * atr_val if atr_val > 0 else None
+take_profit_1 = current_price + 1.5 * atr_val if atr_val > 0 else None
+take_profit_2 = current_price + 3 * atr_val if atr_val > 0 else None
+
+# Display action card
+st.markdown(
+    f"<div style='padding:16px 20px;border-radius:12px;border:2px solid {action_color};"
+    f"background:rgba(255,255,255,0.03);margin-bottom:16px'>"
+    f"<div style='display:flex;align-items:center;gap:12px;margin-bottom:8px'>"
+    f"<span style='font-size:1.8rem'>{action_icon}</span>"
+    f"<span style='font-size:1.4rem;font-weight:700;color:{action_color}'>{action}</span>"
+    f"<span style='font-size:0.9rem;color:#999;margin-left:auto'>"
+    f"Signal Score: {score:.0f}/100 ({bullish}B / {bearish}S)</span></div>"
+    f"<p style='margin:0;color:#ccc;font-size:0.95rem'>{action_desc}</p>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+# Key levels table
+lev_c1, lev_c2, lev_c3 = st.columns(3)
+with lev_c1:
+    st.markdown("**Support Levels**")
+    for name, lvl in support_levels[:3]:
+        dist = (current_price - lvl) / current_price * 100
+        st.markdown(f"- {name}: **{lvl:.2f}** ({dist:+.1f}% away)")
+
+with lev_c2:
+    st.markdown("**Resistance Levels**")
+    for name, lvl in resistance_levels[:3]:
+        dist = (lvl - current_price) / current_price * 100
+        st.markdown(f"- {name}: **{lvl:.2f}** (+{dist:.1f}% away)")
+
+with lev_c3:
+    st.markdown("**Trade Levels (ATR-based)**")
+    if stop_loss:
+        st.markdown(f"- Stop Loss: **{stop_loss:.2f}** ({(stop_loss/current_price-1)*100:+.1f}%)")
+        st.markdown(f"- Target 1 (1.5R): **{take_profit_1:.2f}** ({(take_profit_1/current_price-1)*100:+.1f}%)")
+        st.markdown(f"- Target 2 (3R): **{take_profit_2:.2f}** ({(take_profit_2/current_price-1)*100:+.1f}%)")
+    else:
+        st.caption("Insufficient data for ATR-based levels.")
+
+st.caption("*Technical signals are informational only. Always combine with fundamental analysis and risk management.*")

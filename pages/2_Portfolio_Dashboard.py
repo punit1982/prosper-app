@@ -299,6 +299,10 @@ if load_extended_btn:
 if auto_ext and "extended_df" not in st.session_state and cache_key in st.session_state:
     _load_extended_metrics()
 
+# Re-load extended metrics after manual price refresh (preserves extended view)
+if st.session_state.pop("_reload_extended", False) and cache_key in st.session_state:
+    _load_extended_metrics()
+
 
 # ─────────────────────────────────────────
 # FORMATTING HELPERS
@@ -632,8 +636,9 @@ def portfolio_section():
             enriched = enrich_portfolio(holdings, base_currency)
         st.session_state[cache_key] = enriched
         st.session_state["last_refresh_time"] = time.time()
-        if manual_refresh:
-            st.session_state.pop("extended_df", None)
+        # Re-load extended metrics if they were previously loaded (preserve user's extended view)
+        if manual_refresh and "extended_df" in st.session_state:
+            st.session_state["_reload_extended"] = True
 
     if cache_key not in st.session_state:
         st.info("No price data available. Click 🔄 to retry.")

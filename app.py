@@ -22,6 +22,42 @@ st.set_page_config(
 
 init_db()
 
+# ── Modern Font + Global Styling ─────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+html, body, [class*="css"], .stMarkdown, .stMetricValue, .stMetricLabel,
+.stDataFrame, .stTextInput input, .stSelectbox select, .stButton button,
+[data-testid="stSidebar"], [data-testid="stHeader"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    letter-spacing: -0.5px;
+}
+/* Tighter metric cards */
+[data-testid="stMetricValue"] { font-weight: 600; }
+/* Scrollable dataframes on all screens */
+.stDataFrame { overflow-x: auto; }
+/* Mobile responsive */
+@media (max-width: 768px) {
+    [data-testid="stSidebar"] { min-width: 180px !important; max-width: 220px !important; }
+    .stDataFrame { font-size: 0.75rem; }
+    h1 { font-size: 1.4rem !important; }
+    h2 { font-size: 1.2rem !important; }
+    h3 { font-size: 1.05rem !important; }
+    /* Stack metric columns vertically */
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 4px !important; }
+    [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+    /* Plotly charts: ensure they don't overflow */
+    .js-plotly-plot { max-width: 100vw !important; overflow: hidden; }
+    /* Tabs: smaller text */
+    button[data-baseweb="tab"] { font-size: 0.8rem !important; padding: 4px 8px !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── Authentication ────────────────────────────────────────────────────────────
 # 3-tier auth: (1) Streamlit Cloud native → (2) streamlit-authenticator fallback → (3) disabled
 # Set PROSPER_AUTH_ENABLED=false in .env to skip all auth.

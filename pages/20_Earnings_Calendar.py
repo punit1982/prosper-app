@@ -39,7 +39,9 @@ if enriched.empty:
     st.warning("Portfolio data not ready. Visit the Portfolio Dashboard first.")
     st.stop()
 
-tickers = enriched["ticker"].tolist()
+# Use resolved tickers for better yfinance coverage
+_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+tickers = enriched[_t_col].tolist()
 
 # ── Fetch Earnings Data ──
 @st.cache_data(ttl=3600, show_spinner="Fetching earnings data…")
@@ -82,7 +84,7 @@ earnings_df = _get_earnings_info(tuple(tickers))
 # ── Merge with portfolio weights ──
 if "market_value" in enriched.columns:
     total_mv = pd.to_numeric(enriched["market_value"], errors="coerce").sum()
-    weight_map = dict(zip(enriched["ticker"],
+    weight_map = dict(zip(enriched[_t_col],
                           pd.to_numeric(enriched["market_value"], errors="coerce") / total_mv * 100))
     earnings_df["weight_pct"] = earnings_df["ticker"].map(weight_map).fillna(0)
 else:
