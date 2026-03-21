@@ -1140,9 +1140,20 @@ def get_mutualfund_holders(ticker: str) -> pd.DataFrame:
 # ─────────────────────────────────────────
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
-    """Raw yfinance history fetch — cached by Streamlit across all pages."""
+    """Raw yfinance history fetch with multiple fallback approaches."""
+    import yfinance as yf
+    # Approach 1: yf.download (more reliable on newer Python/yfinance)
     try:
-        import yfinance as yf
+        data = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        if data is not None and not data.empty:
+            # yf.download for single ticker may return MultiIndex or flat columns
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            return data
+    except Exception:
+        pass
+    # Approach 2: Ticker.history (legacy approach)
+    try:
         hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
         if hist is not None and not hist.empty:
             return hist

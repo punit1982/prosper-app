@@ -201,7 +201,7 @@ c1, c2, c3, c4 = st.columns(4)
 with c1:
     if price:
         delta_str = f"{day_change:+.2f} ({day_pct:+.1f}%)" if day_change is not None else None
-        st.metric("Price", f"\\${price:,.2f}", delta=delta_str)
+        st.metric("Price", f"USD {price:,.2f}", delta=delta_str)
 
 with c2:
     if mcap:
@@ -340,7 +340,7 @@ with tab_chart:
         st.caption(f"**Dividend Summary — {ticker}**")
         _d1, _d2, _d3, _d4 = st.columns(4)
         with _d1:
-            st.metric("Dividend/Share", f"\\${_div_rate:.2f}" if _div_rate else "---", key=f"div_rate_{ticker}")
+            st.metric("Dividend/Share", f"USD {_div_rate:.2f}" if _div_rate else "---", key=f"div_rate_{ticker}")
         with _d2:
             _dy = _div_yield * 100 if _div_yield and _div_yield < 1 else _div_yield
             st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy else "---", key=f"div_yield_{ticker}")
@@ -554,7 +554,7 @@ with tab_analyst:
         with info_col:
             upside = ((target_mean - price) / price * 100) if target_mean and price else None
             st.metric("Consensus", consensus or "—")
-            st.metric("Mean Target", f"\\${target_mean:,.2f}" if target_mean else "—",
+            st.metric("Mean Target", f"USD {target_mean:,.2f}" if target_mean else "—",
                       delta=f"{upside:+.1f}% upside" if upside else None)
             if target_low and target_high:
                 st.caption(f"Range: \\${target_low:,.2f} — \\${target_high:,.2f}")
@@ -924,7 +924,7 @@ with tab_ai:
                     st.metric("Shares", f"{row.get('quantity', 0):,.2f}")
                 with p2:
                     avg = row.get("avg_cost")
-                    st.metric("Avg Cost", f"\\${avg:,.2f}" if avg else "—")
+                    st.metric("Avg Cost", f"USD {avg:,.2f}" if avg else "—")
                 with p3:
                     mv = row.get("market_value")
                     st.metric("Market Value", fmt_large(mv) if mv else "—")
@@ -1086,7 +1086,7 @@ with tab_ai:
         # SECTION 3: INVESTMENT THESIS
         # ─────────────────────────────────────────────────────────────
         if thesis:
-            thesis_safe = thesis.replace("$", "\\$")
+            thesis_safe = thesis.replace("$", "USD ")
             st.markdown(
                 f'<div style="background:rgba(26,158,92,0.06); border:1px solid rgba(26,158,92,0.15); '
                 f'border-radius:10px; padding:16px 20px; margin:8px 0 16px 0;">'
@@ -1324,17 +1324,17 @@ with tab_ai:
                 _m1, _m2, _m3 = st.columns(3)
                 with _m1:
                     _bear_upside = ((_bear - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Bear Case", f"\\${_bear:,.2f}",
+                    st.metric("Bear Case", f"USD {_bear:,.2f}",
                               delta=f"{_bear_upside:+.1f}%" if _bear_upside is not None else None,
                               help=f"{_p_bear}% probability")
                 with _m2:
                     _base_upside = ((_base - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Base Case", f"\\${_base:,.2f}",
+                    st.metric("Base Case", f"USD {_base:,.2f}",
                               delta=f"{_base_upside:+.1f}%" if _base_upside is not None else None,
                               help=f"{_p_base}% probability")
                 with _m3:
                     _bull_upside = ((_bull - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Bull Case", f"\\${_bull:,.2f}",
+                    st.metric("Bull Case", f"USD {_bull:,.2f}",
                               delta=f"{_bull_upside:+.1f}%" if _bull_upside is not None else None,
                               help=f"{_p_bull}% probability")
 
@@ -1359,7 +1359,7 @@ with tab_ai:
                 # Probability-weighted FV + overall upside
                 if _pw_fv > 0 and _current > 0:
                     _overall_upside = ((_pw_fv - _current) / _current) * 100
-                    st.metric("Prob-Weighted FV", f"\\${_pw_fv:,.2f}",
+                    st.metric("Prob-Weighted FV", f"USD {_pw_fv:,.2f}",
                               delta=f"{_overall_upside:+.1f}% upside" if _overall_upside else None)
 
         # ─────────────────────────────────────────────────────────────
@@ -1369,7 +1369,7 @@ with tab_ai:
             st.markdown("---")
             st.markdown("#### Risk Factors")
             for _ri, _risk in enumerate(risks):
-                _risk_safe = str(_risk).replace("$", "\\$")
+                _risk_safe = str(_risk).replace("$", "USD ")
                 # Assign severity color based on position (first = highest)
                 _sev_colors = ["#DD2C00", "#FF6D00", "#f39c12", "#f39c12", "#888"]
                 _sev_labels = ["HIGH", "HIGH", "MEDIUM", "MEDIUM", "LOW"]
@@ -1390,7 +1390,7 @@ with tab_ai:
             st.markdown("---")
             st.markdown("#### Catalysts")
             for _ci, _cat in enumerate(catalysts):
-                _cat_safe = str(_cat).replace("$", "\\$")
+                _cat_safe = str(_cat).replace("$", "USD ")
                 st.markdown(
                     f'<div style="border-left:3px solid #1a9e5c; padding:6px 12px; margin-bottom:6px; '
                     f'background:rgba(26,158,92,0.04); border-radius:0 6px 6px 0;">'
@@ -1602,6 +1602,6 @@ with tab_ai:
                 save_prosper_analysis(ticker, result)
                 st.success(
                     f"Analysis complete — {result.get('rating')} | Score: {result.get('score', 0):.0f}/100 | "
-                    f"\\${result.get('cost_estimate', 0):.4f}"
+                    f"USD {result.get('cost_estimate', 0):.4f}"
                 )
                 st.rerun()
