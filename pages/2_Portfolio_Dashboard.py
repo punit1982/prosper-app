@@ -632,12 +632,14 @@ def portfolio_section():
             if s < 86400: return f"{s//3600}h {(s%3600)//60}m ago"
             return f"{s//86400}d ago"
 
-        if has_cache:
+        if has_cache and cache_age < 86400 * 30:  # Sane value (< 30 days)
             st.caption(f"📡 Prices: **{_fmt_age(cache_age)}** · Base: **{sym}**")
-        elif sqlite_age is not None:
-            st.caption(f"📡 Prices: **{_fmt_age(sqlite_age)}** (from cache) · Base: **{sym}**")
+        elif sqlite_age is not None and sqlite_age < 86400 * 30:  # Sane value
+            st.caption(f"📡 Prices: **{_fmt_age(sqlite_age)}** (cached) · Base: **{sym}**")
+        elif has_cache or sqlite_age is not None:
+            st.caption(f"📡 Prices: **refreshing…** · Base: **{sym}**")
         else:
-            st.caption(f"📡 Loading prices for the first time… · Base: **{sym}**")
+            st.caption(f"📡 Loading prices… · Base: **{sym}**")
     with hdr2:
         manual_refresh = st.button("🔄", use_container_width=True, key="frag_refresh",
                                     help="Refresh prices now")
