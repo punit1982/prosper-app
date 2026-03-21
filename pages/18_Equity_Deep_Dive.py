@@ -899,6 +899,7 @@ with tab_technical:
     st.caption("For detailed technical analysis with MACD, Bollinger Bands, and more patterns, visit the Technical Analysis page.")
 
 with tab_ai:
+    # ── Portfolio position display (if user holds this stock) ──
     if not holdings.empty:
         base_currency = SETTINGS.get("base_currency", "USD")
         enriched_key = f"enriched_{base_currency}"
@@ -940,14 +941,12 @@ with tab_ai:
                 st.divider()
 
     # ═══════════════════════════════════════════════════════════════════
-    # SECTION 9 — PROSPER AI ANALYSIS (on-demand)
+    # PROSPER AI ANALYSIS — Full Framework Display
     # ═══════════════════════════════════════════════════════════════════
-    st.subheader("Prosper AI Analysis")
 
     # Also check original ticker for saved analysis
     analysis = get_prosper_analysis(ticker)
     if not analysis and ticker in _resolve_map.values():
-        # Try original ticker (e.g. user saved as EMAAR, now looking up EMAAR.AE)
         _orig = next((k for k, v in _resolve_map.items() if v == ticker), None)
         if _orig:
             analysis = get_prosper_analysis(_orig)
@@ -972,7 +971,7 @@ with tab_ai:
         elif _dq_warning == "LOW":
             st.warning("**Low confidence analysis** — Limited data sources available. Results should be interpreted with caution.")
 
-        # ── Display existing analysis ──
+        # ── Extract all analysis fields ──
         rating = analysis.get("rating", "N/A")
         ai_score = analysis.get("score", 0)
         arch = analysis.get("archetype", "")
@@ -980,183 +979,569 @@ with tab_ai:
         conviction = analysis.get("conviction", "N/A")
         thesis = analysis.get("thesis", "")
         env_net = analysis.get("env_net", "")
+        full_resp = analysis.get("full_response", {})
+        if isinstance(full_resp, str):
+            try:
+                import json as _json
+                full_resp = _json.loads(full_resp)
+            except Exception:
+                full_resp = {}
 
-        # Header row
-        r1, r2, r3, r4 = st.columns([2, 2, 2, 1])
-        with r1:
-            color = _RATING_COLORS.get(rating, "#888")
-            st.markdown(
-                f'<span style="background:{color}; color:white; padding:6px 16px; border-radius:6px; '
-                f'font-weight:700; font-size:1.2em;">{rating}</span>',
-                unsafe_allow_html=True,
-            )
-            st.caption(f"Analyzed: {analysis.get('analysis_date', '—')}")
-        with r2:
-            # Score bar
-            s_color = "#00C853" if ai_score >= 80 else "#1a9e5c" if ai_score >= 65 else "#f39c12" if ai_score >= 50 else "#FF6D00" if ai_score >= 35 else "#DD2C00"
-            st.metric("Prosper Score", f"{ai_score:.0f} / 100")
-            st.markdown(
-                f'<div style="background:#333; border-radius:4px; height:12px;">'
-                f'<div style="background:{s_color}; height:12px; border-radius:4px; width:{min(ai_score, 100):.0f}%;"></div></div>',
-                unsafe_allow_html=True,
-            )
-        with r3:
-            st.metric("Archetype", f"{arch}: {arch_name}" if arch else "—")
-            st.caption(f"Environment: **{env_net}**")
-        with r4:
-            conv_color = {"HIGH": "#00C853", "MEDIUM": "#f39c12", "LOW": "#FF6D00"}.get(conviction, "#888")
-            st.metric("Conviction", conviction)
-            st.markdown(f'<div style="height:4px;background:{conv_color};border-radius:2px;"></div>', unsafe_allow_html=True)
-
-        if thesis:
-            thesis_safe = thesis.replace("$", "\\$")
-            st.info(f"**Thesis:** {thesis_safe}")
-
-        # Fair value
-        fv = analysis.get("full_response", {}).get("fair_value", {})
-        if not fv:
-            fv = {"bear": analysis.get("fair_value_bear"), "base": analysis.get("fair_value_base"),
-                  "bull": analysis.get("fair_value_bull")}
-
-        if fv.get("base"):
-            fv1, fv2, fv3, fv4 = st.columns(4)
-            with fv1:
-                st.metric("Bear", f"${fv.get('bear', 0):,.2f}", help=f"{fv.get('prob_bear', '?')}% probability")
-            with fv2:
-                st.metric("Base", f"${fv.get('base', 0):,.2f}", help=f"{fv.get('prob_base', '?')}% probability")
-            with fv3:
-                st.metric("Bull", f"${fv.get('bull', 0):,.2f}", help=f"{fv.get('prob_bull', '?')}% probability")
-            with fv4:
-                upside = analysis.get("upside_pct")
-                if upside is not None:
-                    st.metric("Upside", f"{upside:+.1f}%", delta=f"{upside:+.1f}%")
-
-        # Score breakdown — detailed CIO criteria with visual bars and data context
-        scores = analysis.get("score_breakdown")
-        if scores and isinstance(scores, dict):
-            st.markdown("**CIO Score Breakdown**")
-            arch_key = analysis.get("archetype", "A")
-            weights = ARCHETYPE_WEIGHTS.get(arch_key, {}).get("weights", {})
-            score_labels = {
-                "revenue_growth": ("Revenue Growth", "📈"),
-                "margins": ("Margins", "📊"),
-                "moat_ip": ("Moat / IP", "🏰"),
-                "balance_sheet": ("Balance Sheet", "🏦"),
-                "valuation": ("Valuation", "💰"),
-                "execution": ("Execution", "⚡"),
-                "risk_adj_upside": ("Risk-Adj Upside", "🎯"),
+        fv = full_resp.get("fair_value", {})
+        if not fv or not isinstance(fv, dict):
+            fv = {
+                "bear": analysis.get("fair_value_bear"),
+                "base": analysis.get("fair_value_base"),
+                "bull": analysis.get("fair_value_bull"),
             }
 
-            # Generate data-driven context for each factor
-            _factor_context = {}
-            rev_g = info.get("revenueGrowth")
-            earn_g = info.get("earningsGrowth")
-            if rev_g is not None:
-                pct = rev_g * 100 if abs(rev_g) < 1 else rev_g
-                _factor_context["revenue_growth"] = f"Rev growth: {pct:+.1f}%" + (f", Earnings: {earn_g*100:+.1f}%" if earn_g else "")
-            pm = info.get("profitMargins")
-            om = info.get("operatingMargins")
-            if pm is not None:
-                _factor_context["margins"] = f"Profit: {pm*100:.1f}%" + (f", Operating: {om*100:.1f}%" if om else "")
-            if info.get("debtToEquity") is not None or info.get("currentRatio") is not None:
-                parts = []
-                if info.get("debtToEquity") is not None:
-                    parts.append(f"D/E: {info['debtToEquity']:.1f}")
-                if info.get("currentRatio") is not None:
-                    parts.append(f"Current: {info['currentRatio']:.1f}")
-                _factor_context["balance_sheet"] = ", ".join(parts)
-            pe = info.get("trailingPE")
-            fwd_pe_val = info.get("forwardPE")
-            if pe is not None:
-                _factor_context["valuation"] = f"P/E: {pe:.1f}" + (f", Fwd P/E: {fwd_pe_val:.1f}" if fwd_pe_val else "")
-            roe_val = info.get("returnOnEquity")
-            if roe_val is not None:
-                _factor_context["execution"] = f"ROE: {roe_val*100:.1f}%"
+        scores = analysis.get("score_breakdown")
+        if not scores or not isinstance(scores, dict):
+            scores = full_resp.get("scores", {})
 
-            for factor, (flabel, icon) in score_labels.items():
-                s = scores.get(factor, 0)
-                w = weights.get(factor, 0)
-                weighted = s * w / 10
-                s_color = "#00C853" if s >= 8 else "#1a9e5c" if s >= 6 else "#f39c12" if s >= 5 else "#FF6D00" if s >= 3 else "#DD2C00"
-                context_note = _factor_context.get(factor, "")
+        risks = analysis.get("key_risks")
+        if not risks or not isinstance(risks, list):
+            risks = full_resp.get("risks", [])
 
-                st.markdown(
-                    f'{icon} **{flabel}** — **{s}/10** (weight: {w}%, contribution: {weighted:.1f})'
-                    + (f'  ·  *{context_note}*' if context_note else '')
+        catalysts = analysis.get("key_catalysts")
+        if not catalysts or not isinstance(catalysts, list):
+            catalysts = full_resp.get("catalysts", [])
+
+        data_sources = analysis.get("data_sources", [])
+        if isinstance(data_sources, str):
+            try:
+                import json as _json
+                data_sources = _json.loads(data_sources)
+            except Exception:
+                data_sources = [data_sources]
+
+        tier_used = analysis.get("model_used", "")
+        cost = analysis.get("cost_estimate", 0)
+        upside_pct = analysis.get("upside_pct")
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 1: HEADER CARD — Rating badge, score, conviction, archetype
+        # ─────────────────────────────────────────────────────────────
+        _rating_color = _RATING_COLORS.get(rating, "#888")
+        _score_color = "#00C853" if ai_score >= 80 else "#1a9e5c" if ai_score >= 65 else "#f39c12" if ai_score >= 50 else "#FF6D00" if ai_score >= 35 else "#DD2C00"
+        _conv_color = {"HIGH": "#00C853", "MEDIUM": "#f39c12", "LOW": "#FF6D00"}.get(conviction, "#888")
+
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg, rgba(26,158,92,0.08), rgba(26,158,92,0.02)); '
+            f'border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:20px 24px; margin-bottom:16px;">'
+            f'<div style="display:flex; align-items:center; flex-wrap:wrap; gap:20px;">'
+            # Rating badge
+            f'<div style="text-align:center;">'
+            f'<div style="background:{_rating_color}; color:white; padding:10px 24px; border-radius:8px; '
+            f'font-weight:800; font-size:1.5em; letter-spacing:0.5px;">{rating}</div>'
+            f'<div style="color:#999; font-size:0.75em; margin-top:4px;">PROSPER Rating</div></div>'
+            # Score
+            f'<div style="text-align:center; min-width:100px;">'
+            f'<div style="font-size:2.2em; font-weight:800; color:{_score_color};">{ai_score:.0f}</div>'
+            f'<div style="background:#333; border-radius:4px; height:6px; width:100px; margin:4px auto;">'
+            f'<div style="background:{_score_color}; height:6px; border-radius:4px; width:{min(ai_score, 100):.0f}%;"></div></div>'
+            f'<div style="color:#999; font-size:0.75em;">Score / 100</div></div>'
+            # Archetype
+            f'<div style="text-align:center; flex:1;">'
+            f'<div style="font-size:1.1em; font-weight:600;">{arch}: {arch_name}</div>'
+            f'<div style="color:#999; font-size:0.75em;">Archetype</div></div>'
+            # Conviction
+            f'<div style="text-align:center;">'
+            f'<div style="font-size:1.3em; font-weight:700; color:{_conv_color};">{conviction}</div>'
+            f'<div style="background:{_conv_color}; height:3px; border-radius:2px; width:60px; margin:4px auto;"></div>'
+            f'<div style="color:#999; font-size:0.75em;">Conviction</div></div>'
+            f'</div>'
+            f'<div style="color:#777; font-size:0.8em; margin-top:10px;">Analyzed: {analysis.get("analysis_date", "N/A")}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 2: ENVIRONMENTAL SCAN
+        # ─────────────────────────────────────────────────────────────
+        if env_net:
+            _env_colors = {"NET POSITIVE": "#00C853", "NET NEGATIVE": "#DD2C00", "NEUTRAL": "#f39c12"}
+            _env_icons = {"NET POSITIVE": "+", "NET NEGATIVE": "-", "NEUTRAL": "~"}
+            _env_color = _env_colors.get(env_net, "#888")
+            _env_icon = _env_icons.get(env_net, "?")
+            _env_descriptions = {
+                "NET POSITIVE": "Macro, regulatory, and industry conditions are broadly favorable for this stock. Tailwinds outweigh headwinds.",
+                "NET NEGATIVE": "Macro, regulatory, or industry conditions present significant headwinds. Caution warranted.",
+                "NEUTRAL": "Macro and industry conditions are mixed. No strong directional bias from external environment.",
+            }
+            _env_desc = _env_descriptions.get(env_net, "Environmental assessment based on macro, geopolitical, regulatory, tech disruption, industry cycle, and thematic factors.")
+
+            st.markdown(
+                f'<div style="border-left:4px solid {_env_color}; padding:12px 16px; margin:8px 0 16px 0; '
+                f'background:rgba(255,255,255,0.02); border-radius:0 8px 8px 0;">'
+                f'<div style="font-weight:700; font-size:1em; margin-bottom:4px;">'
+                f'Environmental Scan: <span style="color:{_env_color};">{env_net}</span></div>'
+                f'<div style="color:#aaa; font-size:0.9em;">{_env_desc}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 3: INVESTMENT THESIS
+        # ─────────────────────────────────────────────────────────────
+        if thesis:
+            thesis_safe = thesis.replace("$", "\\$")
+            st.markdown(
+                f'<div style="background:rgba(26,158,92,0.06); border:1px solid rgba(26,158,92,0.15); '
+                f'border-radius:10px; padding:16px 20px; margin:8px 0 16px 0;">'
+                f'<div style="font-weight:700; font-size:0.85em; color:#1a9e5c; margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;">Investment Thesis</div>'
+                f'<div style="font-size:1.05em; line-height:1.6;">{thesis_safe}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 4: ARCHETYPE CLASSIFICATION
+        # ─────────────────────────────────────────────────────────────
+        if arch:
+            _archetype_descriptions = {
+                "A": "Mature, cash-generative businesses with durable competitive advantages. Emphasis on margin stability, moat durability, and capital allocation discipline.",
+                "B": "High-growth platforms with network effects or marketplace dynamics. Revenue growth and TAM expansion are primary drivers, with path to profitability as secondary factor.",
+                "C": "Early-stage companies with breakthrough potential but limited revenue. Evaluation centers on IP strength, execution capability, and risk-adjusted upside potential.",
+                "D": "Clinical-stage biotech or pharma companies. Pipeline IP and balance sheet runway are critical; traditional revenue metrics are less relevant.",
+                "E": "Companies tied to commodity cycles or economic cycles. Balance sheet resilience and valuation discipline are key, with timing of cycle turns as the primary catalyst.",
+                "F": "Distressed or underperforming companies with restructuring potential. Execution of the turnaround plan and balance sheet repair are the primary focus areas.",
+                "G": "High-growth companies with elevated volatility. Revenue growth trajectory and risk-adjusted upside potential are heavily weighted, with valuation as a secondary concern.",
+                "H": "Deep technology or frontier science companies (AI, quantum, space, etc.). IP moat and long-term vision are paramount; near-term financials are less indicative of value.",
+            }
+            with st.expander(f"Archetype: {arch} - {arch_name}", expanded=False):
+                _arch_desc = _archetype_descriptions.get(arch, "Custom archetype classification.")
+                st.markdown(f"**{arch_name}** (Category {arch})")
+                st.markdown(f"*{_arch_desc}*")
+
+                # Show archetype-specific weights
+                _arch_weights = ARCHETYPE_WEIGHTS.get(arch, {}).get("weights", {})
+                if _arch_weights:
+                    st.markdown("**Scoring Weights for this Archetype:**")
+                    _weight_labels = {
+                        "revenue_growth": "Revenue Growth", "margins": "Margins",
+                        "moat_ip": "Moat / IP", "balance_sheet": "Balance Sheet",
+                        "valuation": "Valuation", "execution": "Execution",
+                        "risk_adj_upside": "Risk-Adj Upside",
+                    }
+                    _sorted_weights = sorted(_arch_weights.items(), key=lambda x: x[1], reverse=True)
+                    for _wk, _wv in _sorted_weights:
+                        _wlabel = _weight_labels.get(_wk, _wk.replace("_", " ").title())
+                        _bar_w = _wv * 3  # scale for visual
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                            f'<span style="min-width:130px;font-size:0.85em;">{_wlabel}</span>'
+                            f'<div style="flex:1;background:#333;border-radius:3px;height:14px;">'
+                            f'<div style="background:#1a9e5c;height:14px;border-radius:3px;width:{_bar_w}%;'
+                            f'display:flex;align-items:center;justify-content:center;">'
+                            f'<span style="font-size:0.7em;color:white;font-weight:600;">{_wv}%</span></div></div></div>',
+                            unsafe_allow_html=True,
+                        )
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 5: SCORE BREAKDOWN — Radar chart + bars
+        # ─────────────────────────────────────────────────────────────
+        if scores and isinstance(scores, dict):
+            st.markdown("---")
+            st.markdown("#### Score Breakdown")
+
+            _score_labels_map = {
+                "revenue_growth": "Revenue Growth", "margins": "Margins",
+                "moat_ip": "Moat / IP", "balance_sheet": "Balance Sheet",
+                "valuation": "Valuation", "execution": "Execution",
+                "risk_adj_upside": "Risk-Adj Upside",
+            }
+            _dim_order = ["revenue_growth", "margins", "moat_ip", "balance_sheet", "valuation", "execution", "risk_adj_upside"]
+            _radar_labels = [_score_labels_map.get(d, d) for d in _dim_order]
+            _radar_values = [scores.get(d, 0) for d in _dim_order]
+
+            arch_key = analysis.get("archetype", "A")
+            weights = ARCHETYPE_WEIGHTS.get(arch_key, {}).get("weights", {})
+
+            radar_col, bars_col = st.columns([1, 1])
+
+            with radar_col:
+                # Radar / spider chart
+                _rv_closed = _radar_values + [_radar_values[0]]
+                _rl_closed = _radar_labels + [_radar_labels[0]]
+
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=_rv_closed,
+                    theta=_rl_closed,
+                    fill="toself",
+                    fillcolor="rgba(26,158,92,0.15)",
+                    line=dict(color="#1a9e5c", width=2),
+                    name="Score",
+                ))
+                fig_radar.update_layout(
+                    polar=dict(
+                        radialaxis=dict(visible=True, range=[0, 10], tickvals=[2, 4, 6, 8, 10],
+                                        gridcolor="rgba(255,255,255,0.1)"),
+                        angularaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
+                        bgcolor="rgba(0,0,0,0)",
+                    ),
+                    height=340,
+                    margin=dict(l=60, r=60, t=30, b=30),
+                    template="plotly_dark",
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
                 )
+                st.plotly_chart(fig_radar, use_container_width=True)
+
+            with bars_col:
+                # Individual score bars with weights and data context
+                _factor_context = {}
+                rev_g = info.get("revenueGrowth")
+                earn_g = info.get("earningsGrowth")
+                if rev_g is not None:
+                    _pct_rg = rev_g * 100 if abs(rev_g) < 1 else rev_g
+                    _factor_context["revenue_growth"] = f"Rev: {_pct_rg:+.1f}%" + (f", Earn: {earn_g*100:+.1f}%" if earn_g else "")
+                pm = info.get("profitMargins")
+                om = info.get("operatingMargins")
+                if pm is not None:
+                    _factor_context["margins"] = f"Profit: {pm*100:.1f}%" + (f", Op: {om*100:.1f}%" if om else "")
+                if info.get("debtToEquity") is not None or info.get("currentRatio") is not None:
+                    _bs_parts = []
+                    if info.get("debtToEquity") is not None:
+                        _bs_parts.append(f"D/E: {info['debtToEquity']:.1f}")
+                    if info.get("currentRatio") is not None:
+                        _bs_parts.append(f"CR: {info['currentRatio']:.1f}")
+                    _factor_context["balance_sheet"] = ", ".join(_bs_parts)
+                _pe_v = info.get("trailingPE")
+                _fwd_pe_v = info.get("forwardPE")
+                if _pe_v is not None:
+                    _factor_context["valuation"] = f"P/E: {_pe_v:.1f}" + (f", Fwd: {_fwd_pe_v:.1f}" if _fwd_pe_v else "")
+                _roe_v = info.get("returnOnEquity")
+                if _roe_v is not None:
+                    _factor_context["execution"] = f"ROE: {_roe_v*100:.1f}%"
+
+                for _dim in _dim_order:
+                    s = scores.get(_dim, 0)
+                    w = weights.get(_dim, 0)
+                    weighted = s * w / 10
+                    s_color = "#00C853" if s >= 8 else "#1a9e5c" if s >= 6 else "#f39c12" if s >= 5 else "#FF6D00" if s >= 3 else "#DD2C00"
+                    _dlabel = _score_labels_map.get(_dim, _dim)
+                    _ctx = _factor_context.get(_dim, "")
+
+                    st.markdown(
+                        f'<div style="margin-bottom:6px;">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+                        f'<span style="font-size:0.85em;font-weight:600;">{_dlabel}</span>'
+                        f'<span style="font-size:0.8em;color:#aaa;">{s}/10 (wt:{w}%, +{weighted:.1f})</span></div>'
+                        + (f'<div style="font-size:0.72em;color:#777;margin-bottom:2px;">{_ctx}</div>' if _ctx else '')
+                        + f'<div style="background:#333;border-radius:3px;height:8px;">'
+                        f'<div style="background:{s_color};height:8px;border-radius:3px;width:{s*10}%;"></div></div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 6: FAIR VALUE ANALYSIS — Visual chart + probabilities
+        # ─────────────────────────────────────────────────────────────
+        if fv and fv.get("base"):
+            st.markdown("---")
+            st.markdown("#### Fair Value Analysis")
+
+            _bear = fv.get("bear", 0) or 0
+            _base = fv.get("base", 0) or 0
+            _bull = fv.get("bull", 0) or 0
+            _p_bear = fv.get("prob_bear", 0) or 0
+            _p_base = fv.get("prob_base", 0) or 0
+            _p_bull = fv.get("prob_bull", 0) or 0
+            _current = price or 0
+
+            # Probability-weighted fair value
+            _pw_fv = (_bear * _p_bear + _base * _p_base + _bull * _p_bull) / 100 if (_p_bear + _p_base + _p_bull) > 0 else _base
+
+            fv_chart_col, fv_metrics_col = st.columns([3, 2])
+
+            with fv_chart_col:
+                # Horizontal bar chart showing bear/base/bull ranges
+                fig_fv = go.Figure()
+
+                # Background range bar (bear to bull)
+                fig_fv.add_trace(go.Bar(
+                    y=["Fair Value"], x=[_bull - _bear], base=_bear,
+                    orientation="h", marker_color="rgba(26,158,92,0.12)",
+                    showlegend=False, hoverinfo="skip",
+                ))
+
+                # Bear marker
+                fig_fv.add_trace(go.Scatter(
+                    x=[_bear], y=["Fair Value"], mode="markers+text",
+                    marker=dict(size=14, color="#DD2C00", symbol="diamond"),
+                    text=[f"Bear<br>${_bear:,.0f}"], textposition="bottom center",
+                    textfont=dict(size=10, color="#DD2C00"),
+                    name=f"Bear (${_bear:,.2f})", showlegend=False,
+                ))
+
+                # Base marker
+                fig_fv.add_trace(go.Scatter(
+                    x=[_base], y=["Fair Value"], mode="markers+text",
+                    marker=dict(size=18, color="#1a9e5c", symbol="diamond"),
+                    text=[f"Base<br>${_base:,.0f}"], textposition="top center",
+                    textfont=dict(size=11, color="#1a9e5c"),
+                    name=f"Base (${_base:,.2f})", showlegend=False,
+                ))
+
+                # Bull marker
+                fig_fv.add_trace(go.Scatter(
+                    x=[_bull], y=["Fair Value"], mode="markers+text",
+                    marker=dict(size=14, color="#00C853", symbol="diamond"),
+                    text=[f"Bull<br>${_bull:,.0f}"], textposition="bottom center",
+                    textfont=dict(size=10, color="#00C853"),
+                    name=f"Bull (${_bull:,.2f})", showlegend=False,
+                ))
+
+                # Current price line
+                if _current > 0:
+                    fig_fv.add_vline(x=_current, line_dash="dash", line_color="white", line_width=2,
+                                     annotation_text=f"Current: ${_current:,.0f}",
+                                     annotation_position="top right",
+                                     annotation_font_color="white")
+
+                # Probability-weighted FV line
+                if _pw_fv > 0:
+                    fig_fv.add_vline(x=_pw_fv, line_dash="dot", line_color="#f39c12", line_width=1.5,
+                                     annotation_text=f"PW FV: ${_pw_fv:,.0f}",
+                                     annotation_position="bottom right",
+                                     annotation_font_color="#f39c12")
+
+                _range_min = min(_bear, _current) * 0.9 if _current > 0 else _bear * 0.9
+                _range_max = max(_bull, _current) * 1.1 if _current > 0 else _bull * 1.1
+                fig_fv.update_layout(
+                    height=160, margin=dict(l=0, r=0, t=30, b=40),
+                    template="plotly_dark",
+                    xaxis=dict(range=[_range_min, _range_max], title="Price"),
+                    yaxis=dict(visible=False),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_fv, use_container_width=True)
+
+            with fv_metrics_col:
+                # Metrics cards
+                _m1, _m2, _m3 = st.columns(3)
+                with _m1:
+                    _bear_upside = ((_bear - _current) / _current * 100) if _current > 0 else None
+                    st.metric("Bear Case", f"${_bear:,.2f}",
+                              delta=f"{_bear_upside:+.1f}%" if _bear_upside is not None else None,
+                              help=f"{_p_bear}% probability")
+                with _m2:
+                    _base_upside = ((_base - _current) / _current * 100) if _current > 0 else None
+                    st.metric("Base Case", f"${_base:,.2f}",
+                              delta=f"{_base_upside:+.1f}%" if _base_upside is not None else None,
+                              help=f"{_p_base}% probability")
+                with _m3:
+                    _bull_upside = ((_bull - _current) / _current * 100) if _current > 0 else None
+                    st.metric("Bull Case", f"${_bull:,.2f}",
+                              delta=f"{_bull_upside:+.1f}%" if _bull_upside is not None else None,
+                              help=f"{_p_bull}% probability")
+
+                # Probability distribution bar
+                if _p_bear + _p_base + _p_bull > 0:
+                    st.markdown(
+                        f'<div style="margin-top:8px;">'
+                        f'<div style="font-size:0.8em;color:#999;margin-bottom:4px;">Probability Distribution</div>'
+                        f'<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;">'
+                        f'<div style="width:{_p_bear}%;background:#DD2C00;display:flex;align-items:center;justify-content:center;">'
+                        f'<span style="font-size:0.7em;color:white;">{_p_bear}%</span></div>'
+                        f'<div style="width:{_p_base}%;background:#1a9e5c;display:flex;align-items:center;justify-content:center;">'
+                        f'<span style="font-size:0.7em;color:white;">{_p_base}%</span></div>'
+                        f'<div style="width:{_p_bull}%;background:#00C853;display:flex;align-items:center;justify-content:center;">'
+                        f'<span style="font-size:0.7em;color:white;">{_p_bull}%</span></div>'
+                        f'</div>'
+                        f'<div style="display:flex;justify-content:space-between;font-size:0.7em;color:#777;margin-top:2px;">'
+                        f'<span>Bear</span><span>Base</span><span>Bull</span></div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Probability-weighted FV + overall upside
+                if _pw_fv > 0 and _current > 0:
+                    _overall_upside = ((_pw_fv - _current) / _current) * 100
+                    st.metric("Prob-Weighted FV", f"${_pw_fv:,.2f}",
+                              delta=f"{_overall_upside:+.1f}% upside" if _overall_upside else None)
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 7: RISK FACTORS
+        # ─────────────────────────────────────────────────────────────
+        if risks and isinstance(risks, list):
+            st.markdown("---")
+            st.markdown("#### Risk Factors")
+            for _ri, _risk in enumerate(risks):
+                _risk_safe = str(_risk).replace("$", "\\$")
+                # Assign severity color based on position (first = highest)
+                _sev_colors = ["#DD2C00", "#FF6D00", "#f39c12", "#f39c12", "#888"]
+                _sev_labels = ["HIGH", "HIGH", "MEDIUM", "MEDIUM", "LOW"]
+                _sc = _sev_colors[min(_ri, len(_sev_colors) - 1)]
+                _sl = _sev_labels[min(_ri, len(_sev_labels) - 1)]
                 st.markdown(
-                    f'<div style="background:#333; border-radius:3px; height:8px; margin-bottom:8px;">'
-                    f'<div style="background:{s_color}; height:8px; border-radius:3px; width:{s*10}%;"></div></div>',
+                    f'<div style="border-left:3px solid {_sc}; padding:6px 12px; margin-bottom:6px; '
+                    f'background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">'
+                    f'<span style="font-size:0.7em; font-weight:700; color:{_sc}; margin-right:8px;">{_sl}</span>'
+                    f'<span style="font-size:0.9em;">{_risk_safe}</span></div>',
                     unsafe_allow_html=True,
                 )
 
-        # Risks & catalysts
-        risks = analysis.get("key_risks")
-        catalysts = analysis.get("key_catalysts")
-        if risks or catalysts:
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                if risks and isinstance(risks, list):
-                    st.markdown("**Key Risks**")
-                    for r in risks:
-                        st.markdown(f"- {r}")
-            with rc2:
-                if catalysts and isinstance(catalysts, list):
-                    st.markdown("**Key Catalysts**")
-                    for c in catalysts:
-                        st.markdown(f"- {c}")
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 8: CATALYSTS
+        # ─────────────────────────────────────────────────────────────
+        if catalysts and isinstance(catalysts, list):
+            st.markdown("---")
+            st.markdown("#### Catalysts")
+            for _ci, _cat in enumerate(catalysts):
+                _cat_safe = str(_cat).replace("$", "\\$")
+                st.markdown(
+                    f'<div style="border-left:3px solid #1a9e5c; padding:6px 12px; margin-bottom:6px; '
+                    f'background:rgba(26,158,92,0.04); border-radius:0 6px 6px 0;">'
+                    f'<span style="font-size:0.9em;">{_cat_safe}</span></div>',
+                    unsafe_allow_html=True,
+                )
 
-        # Data sources
-        sources = analysis.get("data_sources", [])
-        tier_used = analysis.get("model_used", "")
-        cost = analysis.get("cost_estimate", 0)
-        st.caption(
-            f"Tier: **{tier_used}** · Cost: **${cost:.4f}**"
-            + (f" · Sources: {', '.join(sources)}" if sources else "")
-            + (f" · Analysed: {_analysis_date[:10]}" if _analysis_date else "")
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 9: DATA QUALITY & SOURCES
+        # ─────────────────────────────────────────────────────────────
+        with st.expander("Data Quality & Sources", expanded=False):
+            _dq = analysis.get("data_quality_warning")
+            _dq_color = {"HIGH": "#DD2C00", "MEDIUM": "#f39c12", "LOW": "#FF6D00", "INSUFFICIENT": "#DD2C00"}.get(_dq or "", "#00C853")
+            _dq_label = _dq if _dq else "GOOD"
+
+            dq1, dq2 = st.columns([1, 2])
+            with dq1:
+                st.markdown(f"**Data Confidence:** <span style='color:{_dq_color};font-weight:700;'>{_dq_label}</span>",
+                            unsafe_allow_html=True)
+                st.markdown(f"**Analysis Tier:** {tier_used.title() if tier_used else 'N/A'}")
+                st.markdown(f"**Cost:** ${cost:.4f}" if cost else "**Cost:** N/A")
+                if _analysis_date:
+                    st.markdown(f"**Analysis Date:** {_analysis_date[:10]}")
+                if _days_old is not None:
+                    st.markdown(f"**Age:** {_days_old} day{'s' if _days_old != 1 else ''}")
+
+            with dq2:
+                if data_sources:
+                    st.markdown("**Data Sources Used:**")
+                    for _src in data_sources:
+                        _src_icons = {
+                            "yfinance": "Yahoo Finance (fundamentals, price, ratios)",
+                            "Finnhub": "Finnhub (analyst consensus, upgrades/downgrades)",
+                            "Serper": "Serper/Google (web search context, recent analysis)",
+                            "Google News": "Google News (headline sentiment, breaking news)",
+                            "Portfolio": "Portfolio (user holdings data)",
+                        }
+                        _desc = _src_icons.get(_src, _src)
+                        st.markdown(f"- **{_src}** — {_desc}")
+                else:
+                    st.caption("No source information recorded for this analysis.")
+
+                # Model info
+                _full_resp_meta = full_resp
+                _input_tok = _full_resp_meta.get("input_tokens") or analysis.get("input_tokens")
+                _output_tok = _full_resp_meta.get("output_tokens") or analysis.get("output_tokens")
+                _elapsed = _full_resp_meta.get("elapsed_seconds") or analysis.get("elapsed_seconds")
+                _meta_parts = []
+                if _input_tok:
+                    _meta_parts.append(f"Input: {_input_tok:,} tokens")
+                if _output_tok:
+                    _meta_parts.append(f"Output: {_output_tok:,} tokens")
+                if _elapsed:
+                    _meta_parts.append(f"Elapsed: {_elapsed}s")
+                if _meta_parts:
+                    st.caption(" | ".join(_meta_parts))
+
+        # ─────────────────────────────────────────────────────────────
+        # SECTION 14: ACTION SUMMARY — Clear recommendation + sizing
+        # ─────────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### Action Summary")
+
+        _action_bg = {
+            "STRONG BUY": "rgba(0,200,83,0.08)", "BUY": "rgba(26,158,92,0.08)",
+            "HOLD": "rgba(243,156,18,0.08)", "SELL": "rgba(255,109,0,0.08)",
+            "STRONG SELL": "rgba(221,44,0,0.08)",
+        }
+        _action_border = {
+            "STRONG BUY": "#00C853", "BUY": "#1a9e5c",
+            "HOLD": "#f39c12", "SELL": "#FF6D00", "STRONG SELL": "#DD2C00",
+        }
+        _action_guidance = {
+            "STRONG BUY": "Strong conviction to accumulate. Consider building a full position (3-5% of portfolio). Dollar-cost average on any pullbacks.",
+            "BUY": "Favorable risk/reward. Consider initiating or adding to position (2-4% of portfolio). Set a target entry zone near the base case.",
+            "HOLD": "Maintain current position. Risk/reward is balanced at current levels. Monitor for catalyst-driven re-rating opportunities.",
+            "SELL": "Consider reducing position. Risk/reward has deteriorated. Trim to reduce exposure while monitoring for potential turnaround.",
+            "STRONG SELL": "High conviction to exit. Consider closing position entirely. Downside risks outweigh potential upside significantly.",
+        }
+
+        _ab = _action_bg.get(rating, "rgba(128,128,128,0.08)")
+        _abr = _action_border.get(rating, "#888")
+        _ag = _action_guidance.get(rating, "Review the full analysis above to determine appropriate action.")
+
+        _upside_text = ""
+        if upside_pct is not None:
+            _upside_text = f"Estimated upside to base case: <strong>{upside_pct:+.1f}%</strong>. "
+        elif fv and fv.get("base") and price and price > 0:
+            _calc_upside = ((fv["base"] - price) / price) * 100
+            _upside_text = f"Estimated upside to base case: <strong>{_calc_upside:+.1f}%</strong>. "
+
+        st.markdown(
+            f'<div style="background:{_ab}; border:1px solid {_abr}; border-radius:10px; padding:16px 20px;">'
+            f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">'
+            f'<span style="background:{_abr}; color:white; padding:6px 16px; border-radius:6px; '
+            f'font-weight:800; font-size:1.1em;">{rating}</span>'
+            f'<span style="font-size:0.9em;color:#aaa;">Conviction: {conviction} | Score: {ai_score:.0f}/100</span></div>'
+            f'<div style="font-size:0.95em;line-height:1.6;">{_upside_text}{_ag}</div>'
+            f'<div style="font-size:0.75em;color:#777;margin-top:8px;font-style:italic;">'
+            f'This is AI-generated analysis for informational purposes only. Not financial advice. '
+            f'Always conduct your own due diligence before making investment decisions.</div></div>',
+            unsafe_allow_html=True,
         )
 
-        # ── Export & Re-run buttons ──
+        # ─────────────────────────────────────────────────────────────
+        # Export & Re-run buttons
+        # ─────────────────────────────────────────────────────────────
+        st.markdown("")
         _exp_col, _rerun_col = st.columns([1, 1])
         with _exp_col:
-            # Build export text
             _export_lines = [
                 f"PROSPER AI ANALYSIS — {ticker}",
-                f"{'=' * 40}",
+                f"{'=' * 50}",
                 f"Rating: {rating} | Score: {ai_score:.0f}/100 | Conviction: {conviction}",
                 f"Archetype: {arch} — {arch_name}",
                 f"Environment: {env_net}",
                 "",
-                f"Thesis: {thesis}",
+                f"INVESTMENT THESIS:",
+                f"{thesis}",
                 "",
             ]
-            _fv = analysis.get("fair_value_base") or analysis.get("fair_value", {})
-            if isinstance(_fv, dict):
-                _export_lines.append(f"Fair Value — Bear: {_fv.get('bear', 'N/A')} | Base: {_fv.get('base', 'N/A')} | Bull: {_fv.get('bull', 'N/A')}")
-            elif _fv:
-                _export_lines.append(f"Fair Value (Base): {_fv}")
-            _export_lines.append("")
+            if fv and fv.get("base"):
+                _export_lines.append(f"FAIR VALUE:")
+                _export_lines.append(f"  Bear: ${fv.get('bear', 0):,.2f} ({fv.get('prob_bear', '?')}% prob)")
+                _export_lines.append(f"  Base: ${fv.get('base', 0):,.2f} ({fv.get('prob_base', '?')}% prob)")
+                _export_lines.append(f"  Bull: ${fv.get('bull', 0):,.2f} ({fv.get('prob_bull', '?')}% prob)")
+                if _current and _current > 0:
+                    _pw = (fv.get('bear',0) * fv.get('prob_bear',0) + fv.get('base',0) * fv.get('prob_base',0) + fv.get('bull',0) * fv.get('prob_bull',0)) / 100
+                    _export_lines.append(f"  Prob-Weighted FV: ${_pw:,.2f} ({((_pw - _current)/_current*100):+.1f}% from current)")
+                _export_lines.append("")
 
-            _sb = analysis.get("score_breakdown", {})
-            if isinstance(_sb, dict) and _sb:
-                _export_lines.append("Score Breakdown:")
-                for _f, _s in _sb.items():
-                    _export_lines.append(f"  {_f.replace('_', ' ').title()}: {_s}/10")
+            if scores and isinstance(scores, dict):
+                _export_lines.append("SCORE BREAKDOWN:")
+                for _f, _s in scores.items():
+                    _w = weights.get(_f, 0) if weights else 0
+                    _export_lines.append(f"  {_f.replace('_', ' ').title()}: {_s}/10 (weight: {_w}%)")
                 _export_lines.append("")
 
             if risks:
-                _export_lines.append("Key Risks:")
+                _export_lines.append("KEY RISKS:")
                 for r in risks:
                     _export_lines.append(f"  - {r}")
                 _export_lines.append("")
             if catalysts:
-                _export_lines.append("Key Catalysts:")
+                _export_lines.append("KEY CATALYSTS:")
                 for c in catalysts:
                     _export_lines.append(f"  - {c}")
                 _export_lines.append("")
 
             _export_lines.append(f"Analysis date: {_analysis_date[:10] if _analysis_date else 'N/A'}")
             _export_lines.append(f"Tier: {tier_used} | Cost: ${cost:.4f}")
+            if data_sources:
+                _export_lines.append(f"Sources: {', '.join(data_sources)}")
             _export_text = "\n".join(_export_lines)
             st.download_button(
                 "Export Analysis (.txt)", _export_text, file_name=f"prosper_{ticker}_analysis.txt",
@@ -1167,12 +1552,22 @@ with tab_ai:
                 st.session_state["_dd_force_rerun"] = True
                 st.rerun()
 
+    # ─────────────────────────────────────────────────────────────
+    # RUN ANALYSIS SECTION (no analysis exists, or force re-run)
+    # ─────────────────────────────────────────────────────────────
     _force_rerun = st.session_state.pop("_dd_force_rerun", False)
 
     if not analysis or _force_rerun:
-        # No analysis — show run button
         if not analysis:
-            st.info(f"No Prosper AI analysis found for **{ticker}**. Run one below.")
+            st.markdown("---")
+            st.markdown(
+                f'<div style="text-align:center; padding:30px; background:rgba(26,158,92,0.05); '
+                f'border:1px dashed rgba(26,158,92,0.3); border-radius:12px; margin:16px 0;">'
+                f'<div style="font-size:1.2em; font-weight:600; margin-bottom:8px;">No PROSPER Analysis Found</div>'
+                f'<div style="color:#999;">Run a PROSPER analysis for <strong>{ticker}</strong> to see the full CIO-grade equity breakdown: '
+                f'rating, score, fair value, risk factors, catalysts, and more.</div></div>',
+                unsafe_allow_html=True,
+            )
 
         tier_col, btn_col = st.columns([2, 1])
         with tier_col:
@@ -1185,10 +1580,10 @@ with tab_ai:
             )
         with btn_col:
             st.markdown("<br>", unsafe_allow_html=True)
-            run_btn = st.button("Run Analysis", type="primary", use_container_width=True, key="dd_run_btn")
+            run_btn = st.button("Run PROSPER Analysis", type="primary", use_container_width=True, key="dd_run_btn")
 
         if run_btn:
-            with st.spinner(f"Running {MODEL_TIERS[run_tier]['label']} analysis on **{ticker}**…"):
+            with st.spinner(f"Running {MODEL_TIERS[run_tier]['label']} analysis on **{ticker}**..."):
                 enriched_row = None
                 ext_df = st.session_state.get("extended_df")
                 if ext_df is not None and not ext_df.empty:
@@ -1204,7 +1599,7 @@ with tab_ai:
             elif result:
                 save_prosper_analysis(ticker, result)
                 st.success(
-                    f"Analysis complete — {result.get('rating')} · Score: {result.get('score', 0):.0f} · "
+                    f"Analysis complete — {result.get('rating')} | Score: {result.get('score', 0):.0f}/100 | "
                     f"${result.get('cost_estimate', 0):.4f}"
                 )
                 st.rerun()

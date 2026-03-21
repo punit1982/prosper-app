@@ -114,9 +114,17 @@ try:
         REGIME_EXPANSION, REGIME_OVERHEATING, REGIME_CONTRACTION, REGIME_RECOVERY,
     )
     from core.database import get_fortress_state
+    # Use ALL saved fortress inputs — must match Risk & Strategy exactly
     vix_val = float(get_fortress_state("vix") or 18)
     pmi_val = float(get_fortress_state("pmi") or 52)
-    regime_result = detect_regime(vix=vix_val, pmi=pmi_val)
+    _cs = float(get_fortress_state("credit_spread") or 110)
+    _yc = float(get_fortress_state("yield_curve") or 0.3)
+    _inf = float(get_fortress_state("inflation") or 2.8)
+    _fed = get_fortress_state("fed_trajectory") or "On hold"
+    regime_result = detect_regime(
+        vix=vix_val, pmi=pmi_val, credit_spread=_cs,
+        yield_curve=_yc, inflation_yoy=_inf, fed_trajectory=_fed,
+    )
     _regime_key = regime_result["regime"]
     regime_color = REGIME_COLORS.get(_regime_key, "#888")
 except Exception:
