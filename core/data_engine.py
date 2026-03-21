@@ -1143,7 +1143,7 @@ def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
     """Raw yfinance history fetch — cached by Streamlit across all pages."""
     try:
         import yfinance as yf
-        hist = yf.Ticker(ticker).history(period=period)
+        hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
         if hist is not None and not hist.empty:
             return hist
     except Exception:
@@ -1151,16 +1151,93 @@ def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _adx_history_to_df(csv_text: str) -> pd.DataFrame:
+    """Parse ADX/Mubasher CSV text into a DataFrame matching yfinance format."""
+    try:
+        from io import StringIO
+        lines = [l.strip() for l in csv_text.strip().split("\n") if l.strip()]
+        if not lines:
+            return pd.DataFrame()
+        # CSV format: datetime, open, high, low, close, volume
+        df = pd.read_csv(
+            StringIO("\n".join(lines)),
+            header=None,
+            names=["Date", "Open", "High", "Low", "Close", "Volume"],
+        )
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"])
+        df = df.set_index("Date").sort_index()
+        for col in ("Open", "High", "Low", "Close", "Volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.dropna(subset=["Close"])
+    except Exception:
+        return pd.DataFrame()
+
+
 def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    """Fetch OHLCV history for a ticker (cached via @st.cache_data)."""
+    """Fetch OHLCV history for a ticker.
+
+    Resolution order:
+      1. In-memory cache
+      2. ADX/Mubasher CSV (for UAE ADX tickers)
+      3. yfinance with the resolved ticker as-is
+      4. yfinance fallback: try stripping Twelve Data format (EMAAR:DFM -> EMAAR)
+      5. yfinance fallback: try with .AE suffix for bare UAE tickers
+    """
     cached = _cache_get(f"hist_{ticker}_{period}", HISTORY_TTL)
     if cached is not None:
         return cached
 
+    # ── ADX tickers: use Mubasher CSV history ──
+    try:
+        from core.adx_client import is_adx_ticker, get_history_csv
+        if is_adx_ticker(ticker):
+            csv_text = get_history_csv(ticker)
+            if csv_text:
+                hist = _adx_history_to_df(csv_text)
+                if not hist.empty:
+                    # Filter by period
+                    from datetime import datetime, timedelta
+                    period_days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
+                    days = period_days.get(period, 365)
+                    cutoff = datetime.now() - timedelta(days=days)
+                    hist = hist[hist.index >= pd.Timestamp(cutoff)]
+                    if not hist.empty:
+                        _cache_set(f"hist_{ticker}_{period}", hist)
+                        return hist
+    except Exception:
+        pass
+
+    # ── Primary: yfinance with ticker as-is ──
     hist = _yf_fetch_history(ticker, period)
     if not hist.empty:
         _cache_set(f"hist_{ticker}_{period}", hist)
-    return hist
+        return hist
+
+    # ── Fallback 1: strip Twelve Data format (e.g. "EMAAR:DFM" -> try "EMAAR") ──
+    if ":" in ticker:
+        base = ticker.split(":")[0]
+        hist = _yf_fetch_history(base, period)
+        if not hist.empty:
+            _cache_set(f"hist_{ticker}_{period}", hist)
+            return hist
+
+    # ── Fallback 2: strip .AE suffix and try bare ticker on yfinance ──
+    if ticker.endswith(".AE"):
+        bare = ticker[:-3]
+        hist = _yf_fetch_history(bare, period)
+        if not hist.empty:
+            _cache_set(f"hist_{ticker}_{period}", hist)
+            return hist
+
+    # ── Fallback 3: for bare tickers, try adding .AE suffix ──
+    if "." not in ticker and ":" not in ticker:
+        hist = _yf_fetch_history(f"{ticker}.AE", period)
+        if not hist.empty:
+            _cache_set(f"hist_{ticker}_{period}", hist)
+            return hist
+
+    return pd.DataFrame()
 
 
 def get_benchmark_history(benchmark_name: str, period: str = "1y") -> pd.DataFrame:
@@ -1430,8 +1507,21 @@ def clean_nan(df: pd.DataFrame) -> pd.DataFrame:
     # Convert nullable integer/float extension types to object first
     # to avoid 'Invalid value for dtype Int64' errors on fillna("")
     for col in result.columns:
-        if pd.api.types.is_extension_array_dtype(result[col].dtype):
-            result[col] = result[col].astype(object)
+        try:
+            # is_extension_array_dtype may not exist in all pandas versions
+            if hasattr(pd.api.types, "is_extension_array_dtype"):
+                is_ext = pd.api.types.is_extension_array_dtype(result[col].dtype)
+            else:
+                # Fallback: check if dtype has na_value (extension array indicator)
+                is_ext = hasattr(result[col].dtype, "na_value")
+            if is_ext:
+                result[col] = result[col].astype(object)
+        except Exception:
+            # Safety net: convert to object on any dtype inspection failure
+            try:
+                result[col] = result[col].astype(object)
+            except Exception:
+                pass
     result = result.fillna("")
     # Also catch string 'nan' that can appear after conversion
     result = result.replace("nan", "")

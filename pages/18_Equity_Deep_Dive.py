@@ -201,7 +201,7 @@ c1, c2, c3, c4 = st.columns(4)
 with c1:
     if price:
         delta_str = f"{day_change:+.2f} ({day_pct:+.1f}%)" if day_change is not None else None
-        st.metric("Price", f"${price:,.2f}", delta=delta_str)
+        st.metric("Price", f"\\${price:,.2f}", delta=delta_str)
 
 with c2:
     if mcap:
@@ -340,7 +340,7 @@ with tab_chart:
         st.caption(f"**Dividend Summary — {ticker}**")
         _d1, _d2, _d3, _d4 = st.columns(4)
         with _d1:
-            st.metric("Dividend/Share", f"${_div_rate:.2f}" if _div_rate else "---", key=f"div_rate_{ticker}")
+            st.metric("Dividend/Share", f"\\${_div_rate:.2f}" if _div_rate else "---", key=f"div_rate_{ticker}")
         with _d2:
             _dy = _div_yield * 100 if _div_yield and _div_yield < 1 else _div_yield
             st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy else "---", key=f"div_yield_{ticker}")
@@ -554,10 +554,10 @@ with tab_analyst:
         with info_col:
             upside = ((target_mean - price) / price * 100) if target_mean and price else None
             st.metric("Consensus", consensus or "—")
-            st.metric("Mean Target", f"${target_mean:,.2f}" if target_mean else "—",
+            st.metric("Mean Target", f"\\${target_mean:,.2f}" if target_mean else "—",
                       delta=f"{upside:+.1f}% upside" if upside else None)
             if target_low and target_high:
-                st.caption(f"Range: ${target_low:,.2f} — ${target_high:,.2f}")
+                st.caption(f"Range: \\${target_low:,.2f} — \\${target_high:,.2f}")
 
         # Recent upgrades/downgrades
         upgrades = get_upgrade_downgrade(ticker)
@@ -814,6 +814,8 @@ with tab_ownership:
                 if "Value" in recent_txns.columns:
                     display_cols.append("Value")
 
+                # Filter to only columns that actually exist in the DataFrame
+                display_cols = [c for c in display_cols if c in recent_txns.columns]
                 if display_cols:
                     st.dataframe(clean_nan(recent_txns[display_cols]), use_container_width=True, hide_index=True)
                 else:
@@ -922,7 +924,7 @@ with tab_ai:
                     st.metric("Shares", f"{row.get('quantity', 0):,.2f}")
                 with p2:
                     avg = row.get("avg_cost")
-                    st.metric("Avg Cost", f"${avg:,.2f}" if avg else "—")
+                    st.metric("Avg Cost", f"\\${avg:,.2f}" if avg else "—")
                 with p3:
                     mv = row.get("market_value")
                     st.metric("Market Value", fmt_large(mv) if mv else "—")
@@ -1322,17 +1324,17 @@ with tab_ai:
                 _m1, _m2, _m3 = st.columns(3)
                 with _m1:
                     _bear_upside = ((_bear - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Bear Case", f"${_bear:,.2f}",
+                    st.metric("Bear Case", f"\\${_bear:,.2f}",
                               delta=f"{_bear_upside:+.1f}%" if _bear_upside is not None else None,
                               help=f"{_p_bear}% probability")
                 with _m2:
                     _base_upside = ((_base - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Base Case", f"${_base:,.2f}",
+                    st.metric("Base Case", f"\\${_base:,.2f}",
                               delta=f"{_base_upside:+.1f}%" if _base_upside is not None else None,
                               help=f"{_p_base}% probability")
                 with _m3:
                     _bull_upside = ((_bull - _current) / _current * 100) if _current > 0 else None
-                    st.metric("Bull Case", f"${_bull:,.2f}",
+                    st.metric("Bull Case", f"\\${_bull:,.2f}",
                               delta=f"{_bull_upside:+.1f}%" if _bull_upside is not None else None,
                               help=f"{_p_bull}% probability")
 
@@ -1357,7 +1359,7 @@ with tab_ai:
                 # Probability-weighted FV + overall upside
                 if _pw_fv > 0 and _current > 0:
                     _overall_upside = ((_pw_fv - _current) / _current) * 100
-                    st.metric("Prob-Weighted FV", f"${_pw_fv:,.2f}",
+                    st.metric("Prob-Weighted FV", f"\\${_pw_fv:,.2f}",
                               delta=f"{_overall_upside:+.1f}% upside" if _overall_upside else None)
 
         # ─────────────────────────────────────────────────────────────
@@ -1409,7 +1411,7 @@ with tab_ai:
                 st.markdown(f"**Data Confidence:** <span style='color:{_dq_color};font-weight:700;'>{_dq_label}</span>",
                             unsafe_allow_html=True)
                 st.markdown(f"**Analysis Tier:** {tier_used.title() if tier_used else 'N/A'}")
-                st.markdown(f"**Cost:** ${cost:.4f}" if cost else "**Cost:** N/A")
+                st.markdown(f"**Cost:** \\${cost:.4f}" if cost else "**Cost:** N/A")
                 if _analysis_date:
                     st.markdown(f"**Analysis Date:** {_analysis_date[:10]}")
                 if _days_old is not None:
@@ -1600,6 +1602,6 @@ with tab_ai:
                 save_prosper_analysis(ticker, result)
                 st.success(
                     f"Analysis complete — {result.get('rating')} | Score: {result.get('score', 0):.0f}/100 | "
-                    f"${result.get('cost_estimate', 0):.4f}"
+                    f"\\${result.get('cost_estimate', 0):.4f}"
                 )
                 st.rerun()

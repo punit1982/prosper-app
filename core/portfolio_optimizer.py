@@ -389,6 +389,12 @@ _RISK_FREE_RATE = 0.05  # 5% annualised (US T-bills)
 def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame, list[str]]:
     """Fetch daily close prices via get_history and compute daily returns.
 
+    Resolution strategy:
+      1. Try each ticker individually via get_history() (which already
+         handles ADX tickers, Twelve Data format, and yfinance fallbacks).
+      2. For any tickers that still fail, attempt a batch yf.download()
+         which can sometimes resolve tickers that individual Ticker.history() misses.
+
     Returns
     -------
     (returns_df, failed_tickers) – the daily returns DataFrame and a list
@@ -405,6 +411,47 @@ def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame
             frames[t] = close
         else:
             failed.append(t)
+
+    # ── Batch fallback: try yf.download for failed tickers ──
+    if failed:
+        try:
+            import yfinance as yf
+            # Build list of yfinance-compatible symbols to try
+            yf_candidates = {}  # yf_symbol -> original_ticker
+            for t in failed:
+                # Skip tickers with Twelve Data format (not yfinance compatible)
+                if ":" in t:
+                    base = t.split(":")[0]
+                    yf_candidates[base] = t
+                else:
+                    yf_candidates[t] = t
+
+            if yf_candidates:
+                yf_symbols = list(yf_candidates.keys())
+                batch_data = yf.download(
+                    yf_symbols, period=period, auto_adjust=True,
+                    progress=False, threads=True,
+                )
+                if batch_data is not None and not batch_data.empty:
+                    # yf.download returns multi-level columns for multiple tickers
+                    if isinstance(batch_data.columns, pd.MultiIndex):
+                        close_df = batch_data["Close"] if "Close" in batch_data.columns.get_level_values(0) else batch_data.iloc[:, :len(yf_symbols)]
+                    else:
+                        # Single ticker returns flat columns
+                        close_df = batch_data[["Close"]].rename(columns={"Close": yf_symbols[0]}) if len(yf_symbols) == 1 else batch_data
+
+                    rescued = []
+                    for yf_sym in yf_symbols:
+                        orig_t = yf_candidates[yf_sym]
+                        if yf_sym in close_df.columns:
+                            col = close_df[yf_sym].dropna()
+                            if not col.empty:
+                                frames[orig_t] = col
+                                rescued.append(orig_t)
+                    failed = [t for t in failed if t not in rescued]
+        except Exception:
+            pass  # batch fallback is best-effort
+
     if not frames:
         return pd.DataFrame(), failed
     prices = pd.DataFrame(frames).dropna()

@@ -447,7 +447,7 @@ def get_parse_cache_stats() -> dict:
 # PRICE CACHE  (persists across restarts)
 # ─────────────────────────────────────────
 
-PRICE_CACHE_TTL = 300   # 5 minutes — re-fetch if older than this
+PRICE_CACHE_TTL = 900   # 15 minutes — re-fetch if older than this (was 5min, too aggressive for 116+ tickers)
 
 
 def get_price_cache(tickers: List[str]) -> Dict[str, dict]:
@@ -579,29 +579,37 @@ def get_stale_tickers(tickers: List[str], max_age: float = PRICE_CACHE_TTL) -> L
 
 
 def get_price_cache_age() -> Optional[float]:
-    """Return age in seconds of the oldest cached price, or None if empty.
+    """Return age in seconds of the MOST RECENT cached price, or None if empty.
 
-    Uses a cached timestamp so we only hit the DB once per session.
+    Uses MAX (most recent) instead of MIN to show when data was last refreshed.
+    Excludes fetched_at=0 (default/unset values).
     """
     try:
-        cached_ts = st.session_state.get("_price_cache_min_ts")
+        cached_ts = st.session_state.get("_price_cache_max_ts")
         if cached_ts is not None:
-            return time.time() - cached_ts if cached_ts > 0 else None
+            return time.time() - cached_ts if cached_ts > 1000000000 else None  # Sanity: must be a valid epoch
     except Exception:
         pass
 
     try:
         conn = _get_connection()
-        row = conn.execute("SELECT MIN(fetched_at) FROM price_cache WHERE price IS NOT NULL").fetchone()
+        # Use MAX to get the most recent fetch time; exclude 0s and very old values
+        row = conn.execute(
+            "SELECT MAX(fetched_at) FROM price_cache WHERE price IS NOT NULL AND fetched_at > 1000000000"
+        ).fetchone()
         conn.close()
-        if row and row[0]:
-            try:
-                st.session_state["_price_cache_min_ts"] = row[0]
-            except Exception:
-                pass
-            return time.time() - row[0]
+        val = row[0] if row else None
+        # Handle Turso returning string or numeric
+        if val is not None:
+            ts = float(val)
+            if ts > 1000000000:  # Valid UNIX epoch (post-2001)
+                try:
+                    st.session_state["_price_cache_max_ts"] = ts
+                except Exception:
+                    pass
+                return time.time() - ts
         try:
-            st.session_state["_price_cache_min_ts"] = 0
+            st.session_state["_price_cache_max_ts"] = 0
         except Exception:
             pass
         return None
