@@ -20,7 +20,7 @@ from core.settings import SETTINGS
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch
 from core.fortress import (
-    detect_regime, get_geopolitical_tier, REGIME_NAMES, REGIME_COLORS,
+    detect_regime, get_geopolitical_tier, REGIME_NAMES, REGIME_COLORS, REGIME_DISPLAY,
     REGIME_EXPANSION, REGIME_OVERHEATING, REGIME_CONTRACTION, REGIME_RECOVERY,
     GEO_GREEN, GEO_AMBER, GEO_RED,
     get_exposure_limits, check_exposure_compliance,
@@ -40,13 +40,11 @@ from core.portfolio_optimizer import (
 )
 
 # ─────────────────────────────────────────
-# Simplified labels for non-technical users
+# Simplified labels — pulled from shared REGIME_DISPLAY in core/fortress.py
 # ─────────────────────────────────────────
 _REGIME_SIMPLE = {
-    REGIME_EXPANSION: ("Growing", "Economy is healthy. Markets favour risk. Good time for equities."),
-    REGIME_OVERHEATING: ("Heating Up", "Late-cycle signals. Inflation rising. Be cautious with new positions."),
-    REGIME_CONTRACTION: ("Slowing Down", "Economic weakness. Reduce risk. Hold more cash."),
-    REGIME_RECOVERY: ("Bouncing Back", "Early recovery signs. Gradually increase equity exposure."),
+    k: (v["label"], v["explanation"])
+    for k, v in REGIME_DISPLAY.items()
 }
 
 _GEO_SIMPLE = {GEO_GREEN: "Calm", GEO_AMBER: "Elevated", GEO_RED: "Critical"}
@@ -186,8 +184,11 @@ effective_regime = REGIME_CONTRACTION if geo_tier == GEO_RED else current_regime
 
 # ── Top Status Bar (plain English) ──
 simple_name, simple_desc = _REGIME_SIMPLE.get(current_regime, ("Unknown", ""))
+_rd = REGIME_DISPLAY.get(current_regime, {})
+_regime_icon = _rd.get("icon", "")
+_regime_action = _rd.get("action", "")
 geo_simple = _GEO_SIMPLE.get(geo_tier, "Unknown")
-r_color = REGIME_COLORS.get(current_regime, "#888")
+r_color = _rd.get("color", REGIME_COLORS.get(current_regime, "#888"))
 
 st.markdown(
     f"<div style='display:flex;gap:20px;padding:12px 18px;background:rgba(255,255,255,0.03);"
@@ -204,7 +205,7 @@ st.markdown(
     f"</div>",
     unsafe_allow_html=True,
 )
-# Plain-English summary of what this means
+# Plain-English summary: combine regime explanation + geo context
 _combined_summary = {
     ("Growing", "Calm"): "Markets are favourable. You can take full-size positions in high-conviction stocks. No need to reduce exposure.",
     ("Growing", "Elevated"): "Economy is strong but geopolitical tensions exist. Maintain positions but keep extra cash as buffer.",
@@ -220,7 +221,19 @@ _combined_summary = {
     ("Bouncing Back", "Critical"): "Recovery signals but world events are dangerous. Stay cautious despite improving fundamentals.",
 }
 _summary_text = _combined_summary.get((simple_name, geo_simple), simple_desc)
-st.info(f"**What this means:** {_summary_text}")
+# Show regime explanation + action clearly (user complained they can't see what regime means)
+st.markdown(
+    f"<div style='margin:4px 0 12px 0;padding:12px 16px;border-radius:8px;"
+    f"background:rgba(255,255,255,0.03);border-left:4px solid {r_color}'>"
+    f"<div style='font-size:0.9rem;color:#ccc;margin-bottom:6px'>"
+    f"{_regime_icon} <b>{simple_name}</b> — {simple_desc}</div>"
+    f"<div style='font-size:0.85rem;color:#aaa;margin-bottom:6px'>"
+    f"<b>What to do:</b> {_regime_action}</div>"
+    f"<div style='font-size:0.85rem;color:#aaa'>"
+    f"<b>With current world risk ({geo_simple}):</b> {_summary_text}</div>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
 
 if geo_tier == GEO_RED:
     st.error("**World Risk: Critical** — All parameters forced to defensive mode. Reduce exposure immediately.")
@@ -705,13 +718,25 @@ with tab_advanced:
 
             if st.button("Compute Frontier", type="primary"):
                 with st.spinner("Computing..."):
-                    frontier = get_efficient_frontier(ticker_list, weight_list, period=period, n_points=200)
+                    frontier_result = get_efficient_frontier(ticker_list, weight_list, period=period, n_points=200)
                     optimal = get_optimal_portfolio(ticker_list, weight_list, period=period)
-                    st.session_state["mpt_frontier"] = frontier
+                    st.session_state["mpt_frontier"] = frontier_result
                     st.session_state["mpt_optimal"] = optimal
 
-            frontier = st.session_state.get("mpt_frontier")
+            frontier_result = st.session_state.get("mpt_frontier")
             optimal = st.session_state.get("mpt_optimal")
+
+            # Handle both old list format and new dict format for backward compat
+            if isinstance(frontier_result, list):
+                frontier_result = {"points": frontier_result, "failed_tickers": [], "error": None}
+
+            if frontier_result:
+                if frontier_result.get("error"):
+                    st.warning(f"Could not compute frontier: {frontier_result['error']}")
+                if frontier_result.get("failed_tickers"):
+                    st.info(f"No price data for: {', '.join(frontier_result['failed_tickers'])}")
+
+            frontier = frontier_result.get("points", []) if frontier_result else []
 
             if frontier:
                 current_pts = [p for p in frontier if p.get("is_current")]
@@ -861,12 +886,7 @@ with tab_advanced:
             "market signals (VIX, PMI, credit spreads, yield curve, inflation, Fed policy). "
             "The highest-scoring regime determines your portfolio's risk posture."
         )
-        _regime_labels = {
-            REGIME_EXPANSION: "Growing",
-            REGIME_OVERHEATING: "Heating Up",
-            REGIME_CONTRACTION: "Slowing Down",
-            REGIME_RECOVERY: "Bouncing Back",
-        }
+        _regime_labels = {k: v["label"] for k, v in REGIME_DISPLAY.items()}
         scores = regime_result["scores"]
         score_df = pd.DataFrame([
             {"Regime": _regime_labels.get(r, REGIME_NAMES.get(r, r)), "Score": s}

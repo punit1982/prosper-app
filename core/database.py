@@ -137,6 +137,12 @@ def init_db():
             name TEXT NOT NULL UNIQUE,
             description TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS briefing_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            briefing_date TEXT NOT NULL,
+            currency TEXT DEFAULT 'USD',
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
 
     conn = _get_connection()
@@ -227,6 +233,44 @@ def delete_portfolio(portfolio_id: int):
 def get_active_portfolio_id() -> int:
     """Return the currently selected portfolio ID from session state."""
     return st.session_state.get("active_portfolio_id", 1)
+
+
+# ─────────────────────────────────────────
+# BRIEFING CACHE
+# ─────────────────────────────────────────
+
+def save_briefing(briefing_date: str, currency: str, content: str):
+    """Save an AI briefing to the database for persistence across sessions."""
+    try:
+        conn = _get_connection()
+        # Delete old briefings for this date+currency to avoid duplicates
+        conn.execute("DELETE FROM briefing_cache WHERE briefing_date = ? AND currency = ?", (briefing_date, currency))
+        conn.execute(
+            "INSERT INTO briefing_cache (briefing_date, currency, content) VALUES (?, ?, ?)",
+            (briefing_date, currency, content),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Best-effort — app works without persistence
+
+
+def get_latest_briefing(currency: str = "USD") -> Optional[Dict]:
+    """Get the most recent briefing (today or yesterday) from the database."""
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT briefing_date, content, created_at FROM briefing_cache WHERE currency = ? ORDER BY briefing_date DESC, created_at DESC LIMIT 1",
+            (currency,),
+        ).fetchone()
+        conn.close()
+        if row:
+            if isinstance(row, dict):
+                return {"date": row.get("briefing_date", ""), "content": row.get("content", ""), "created_at": row.get("created_at", "")}
+            return {"date": row[0], "content": row[1], "created_at": row[2]}
+    except Exception:
+        pass
+    return None
 
 
 # ─────────────────────────────────────────

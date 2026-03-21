@@ -47,6 +47,42 @@ REGIME_COLORS = {
     REGIME_RECOVERY: "#0984e3",      # Blue
 }
 
+# ---------------------------------------------------------------------------
+# Shared plain-English regime display mapping
+# Used by Command Center, Risk & Strategy, and any other page showing regime.
+# Keys: regime constants. Values: dict with label, color, icon, explanation, action.
+# ---------------------------------------------------------------------------
+REGIME_DISPLAY = {
+    REGIME_EXPANSION: {
+        "label": "Growing",
+        "color": "#4CAF50",
+        "icon": "\U0001f7e2",       # green circle
+        "explanation": "Economy is healthy. Markets favour risk-taking and equities tend to do well.",
+        "action": "Stay invested. Full-size positions in high-conviction stocks. No need to raise extra cash.",
+    },
+    REGIME_OVERHEATING: {
+        "label": "Heating Up",
+        "color": "#FF9800",
+        "icon": "\U0001f7e1",       # yellow circle
+        "explanation": "Late-cycle signals: inflation rising, valuations stretched, volatility increasing.",
+        "action": "Tighten stop-losses, trim overweight winners, avoid new speculative bets. Build cash buffer.",
+    },
+    REGIME_CONTRACTION: {
+        "label": "Slowing Down",
+        "color": "#f44336",
+        "icon": "\U0001f534",       # red circle
+        "explanation": "Economic weakness detected. Corporate earnings under pressure, risk of further declines.",
+        "action": "Reduce equity exposure. Hold more cash. Focus on quality defensive names. Avoid new positions.",
+    },
+    REGIME_RECOVERY: {
+        "label": "Bouncing Back",
+        "color": "#2196F3",
+        "icon": "\U0001f535",       # blue circle
+        "explanation": "Early recovery signs emerging. Best risk/reward phase of the market cycle.",
+        "action": "Gradually increase equity exposure. Add to quality growth stocks on pullbacks.",
+    },
+}
+
 # Geopolitical tiers
 GEO_GREEN = "GREEN"
 GEO_AMBER = "AMBER"

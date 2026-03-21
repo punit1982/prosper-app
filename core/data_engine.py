@@ -1034,7 +1034,7 @@ def get_insider_transactions(ticker: str) -> pd.DataFrame:
             if fh_data and "data" in fh_data and fh_data["data"]:
                 fh_df = pd.DataFrame(fh_data["data"])
                 fh_rename = {
-                    "name": "Insider Trading",
+                    "name": "Insider",
                     "share": "Shares",
                     "change": "Value",
                     "transactionDate": "Start Date",

@@ -7,6 +7,7 @@ v5.3 — Multi-portfolio, AI Chat, resolved ticker fixes
 import os
 from datetime import datetime
 import streamlit as st
+import pandas as pd
 from dotenv import load_dotenv
 from core.database import init_db, get_all_holdings, save_nav_snapshot, get_nav_snapshot_exists_today, get_total_realized_pnl
 try:
@@ -47,8 +48,50 @@ h1, h2, h3, h4, h5, h6 {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     letter-spacing: -0.5px;
 }
-/* Tighter metric cards */
-[data-testid="stMetricValue"] { font-weight: 600; }
+/* Tighter metric cards — NEVER truncate values */
+[data-testid="stMetricValue"] {
+    font-weight: 600 !important;
+    font-size: clamp(1rem, 2.2vw, 1.8rem) !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    min-width: 0;
+    line-height: 1.3 !important;
+}
+[data-testid="stMetricValue"] > div {
+    overflow: visible !important;
+    text-overflow: unset !important;
+    white-space: nowrap !important;
+}
+[data-testid="stMetricLabel"] {
+    overflow: visible !important;
+    text-overflow: unset !important;
+    white-space: nowrap !important;
+    font-size: 0.8rem !important;
+}
+[data-testid="stMetricDelta"] {
+    overflow: visible !important;
+    text-overflow: unset !important;
+    white-space: nowrap !important;
+}
+/* Ensure metric containers and ALL parents don't clip content */
+[data-testid="stMetric"],
+[data-testid="metric-container"],
+[data-testid="stMetric"] > div,
+[data-testid="stMetric"] > div > div,
+[data-testid="stMetric"] label,
+[data-testid="stMetric"] label > div {
+    overflow: visible !important;
+    min-width: 0;
+    text-overflow: unset !important;
+}
+/* Column containers must not clip */
+[data-testid="stColumn"],
+[data-testid="stColumn"] > div,
+[data-testid="stHorizontalBlock"] > div {
+    overflow: visible !important;
+}
 /* Scrollable dataframes on all screens */
 .stDataFrame { overflow-x: auto; }
 /* Mobile responsive */
@@ -60,8 +103,9 @@ h1, h2, h3, h4, h5, h6 {
     h3 { font-size: 1.05rem !important; }
     /* Stack metric columns vertically */
     [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 4px !important; }
-    [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
-    [data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1rem !important; overflow: visible !important; text-overflow: unset !important; white-space: nowrap !important; }
+    [data-testid="stMetricValue"] > div { overflow: visible !important; text-overflow: unset !important; white-space: nowrap !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.7rem !important; overflow: visible !important; text-overflow: unset !important; white-space: nowrap !important; }
     /* Plotly charts: ensure they don't overflow */
     .js-plotly-plot { max-width: 100vw !important; overflow: hidden; }
     /* Tabs: smaller text */
@@ -362,3 +406,84 @@ pg = st.navigation({
 })
 
 pg.run()
+
+# ── Floating "Ask Prosper" Chat Widget (appears on every page) ────────────────
+# Uses a popover anchored to bottom-right corner via CSS
+_chat_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+if _chat_api_key and _chat_api_key != "your_anthropic_api_key_here":
+    # Floating button CSS
+    st.markdown("""
+    <style>
+    /* Position the last popover as floating bottom-right chat button */
+    div[data-testid="stPopover"]:last-of-type {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        z-index: 9999 !important;
+    }
+    div[data-testid="stPopover"]:last-of-type button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 50px !important;
+        padding: 12px 20px !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+    }
+    div[data-testid="stPopover"]:last-of-type button:hover {
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
+        transform: translateY(-1px);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    with st.popover("💬 Ask Prosper", use_container_width=False):
+        st.markdown("**Ask Prosper AI**")
+        st.caption("Quick questions about your portfolio")
+
+        # Initialize mini chat
+        if "mini_chat" not in st.session_state:
+            st.session_state["mini_chat"] = []
+
+        # Show last 3 messages
+        for msg in st.session_state["mini_chat"][-6:]:
+            if msg["role"] == "user":
+                st.markdown(f"**You:** {msg['content']}")
+            else:
+                st.markdown(f"**Prosper:** {msg['content']}")
+
+        _q = st.text_input("Ask anything...", key="_mini_chat_input", label_visibility="collapsed")
+        if _q:
+            st.session_state["mini_chat"].append({"role": "user", "content": _q})
+            try:
+                import anthropic
+                from core.settings import call_claude, SETTINGS as _s
+
+                _base = _s.get("base_currency", "USD")
+                _enr = st.session_state.get(f"enriched_{_base}")
+                _ctx = "No portfolio loaded."
+                if _enr is not None and not _enr.empty:
+                    _tv = pd.to_numeric(_enr.get("market_value"), errors="coerce").sum()
+                    _ctx = f"Portfolio: {len(_enr)} holdings, {_base} {_tv:,.0f} total value."
+
+                _client = anthropic.Anthropic(api_key=_chat_api_key)
+                _msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state["mini_chat"][-6:]]
+                _resp = call_claude(
+                    _client,
+                    system=f"You are Prosper AI, a concise investment assistant. {_ctx} Be brief (2-3 sentences max).",
+                    messages=_msgs,
+                    max_tokens=300,
+                    preferred_model="claude-sonnet-4-20250514",
+                )
+                _reply = _resp.content[0].text
+                st.session_state["mini_chat"].append({"role": "assistant", "content": _reply})
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Error: {str(_e)[:80]}")
+
+        if st.session_state.get("mini_chat"):
+            if st.button("Clear", key="_mini_clear"):
+                st.session_state["mini_chat"] = []
+                st.rerun()
+        st.page_link("pages/24_AI_Chat.py", label="Open Full Chat →", icon="💬")

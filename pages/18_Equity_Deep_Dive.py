@@ -330,31 +330,32 @@ with tab_chart:
     st.divider()
 
     # ═══════════════════════════════════════════════════════════════════
-    # -- Dividend snapshot --
+    # -- Dividend snapshot (uses current ticker's info) --
     _div_rate = info.get("dividendRate")
     _div_yield = info.get("dividendYield")
     _ex_date = info.get("exDividendDate")
     _payout = info.get("payoutRatio")
     if _div_rate or _div_yield:
         st.markdown("---")
+        st.caption(f"**Dividend Summary — {ticker}**")
         _d1, _d2, _d3, _d4 = st.columns(4)
         with _d1:
-            st.metric("Dividend/Share", f"${_div_rate:.2f}" if _div_rate else "---")
+            st.metric("Dividend/Share", f"${_div_rate:.2f}" if _div_rate else "---", key=f"div_rate_{ticker}")
         with _d2:
             _dy = _div_yield * 100 if _div_yield and _div_yield < 1 else _div_yield
-            st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy else "---")
+            st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy else "---", key=f"div_yield_{ticker}")
         with _d3:
             if _ex_date:
                 try:
                     from datetime import datetime as _dt
                     _ed = _dt.fromtimestamp(_ex_date).strftime("%b %d, %Y")
-                    st.metric("Ex-Dividend Date", _ed)
+                    st.metric("Ex-Dividend Date", _ed, key=f"div_exdate_{ticker}")
                 except Exception:
-                    st.metric("Ex-Dividend Date", "---")
+                    st.metric("Ex-Dividend Date", "---", key=f"div_exdate_{ticker}")
             else:
-                st.metric("Ex-Dividend Date", "---")
+                st.metric("Ex-Dividend Date", "---", key=f"div_exdate_{ticker}")
         with _d4:
-            st.metric("Payout Ratio", f"{_payout*100:.0f}%" if _payout else "---")
+            st.metric("Payout Ratio", f"{_payout*100:.0f}%" if _payout else "---", key=f"div_payout_{ticker}")
 
 with tab_fundamentals:
     st.subheader("Key Fundamentals")
@@ -772,10 +773,52 @@ with tab_ownership:
             if not transactions.empty:
                 st.markdown("**Recent Insider Transactions**")
                 recent_txns = transactions.head(5).copy()
-                cols_available = [c for c in ["Insider Trading", "Text", "Start Date", "Shares", "Value"]
-                                  if c in recent_txns.columns]
-                if cols_available:
-                    st.dataframe(clean_nan(recent_txns[cols_available]), use_container_width=True, hide_index=True)
+
+                # Normalize column names across data sources
+                # yfinance uses "Insider", legacy Finnhub mapping used "Insider Trading"
+                if "Insider Trading" in recent_txns.columns and "Insider" not in recent_txns.columns:
+                    recent_txns = recent_txns.rename(columns={"Insider Trading": "Insider"})
+
+                # Rename "Insider" to a clearer display label
+                if "Insider" in recent_txns.columns:
+                    recent_txns = recent_txns.rename(columns={"Insider": "Name"})
+
+                # Rename "Text" to "Transaction" for clarity
+                if "Text" in recent_txns.columns:
+                    recent_txns = recent_txns.rename(columns={"Text": "Transaction"})
+
+                # Build display columns — name, title/position, transaction type, date, shares, value
+                display_cols = []
+
+                # Insider name
+                if "Name" in recent_txns.columns:
+                    display_cols.append("Name")
+
+                # Title/Position (yfinance sometimes provides this)
+                for title_col in ["Title", "Position", "Relationship"]:
+                    if title_col in recent_txns.columns:
+                        display_cols.append(title_col)
+                        break
+
+                # Transaction type
+                if "Transaction" in recent_txns.columns:
+                    display_cols.append("Transaction")
+
+                # Date
+                if "Start Date" in recent_txns.columns:
+                    display_cols.append("Start Date")
+
+                # Shares and Value
+                if "Shares" in recent_txns.columns:
+                    display_cols.append("Shares")
+                if "Value" in recent_txns.columns:
+                    display_cols.append("Value")
+
+                if display_cols:
+                    st.dataframe(clean_nan(recent_txns[display_cols]), use_container_width=True, hide_index=True)
+                else:
+                    # Fallback: show whatever columns exist
+                    st.dataframe(clean_nan(recent_txns), use_container_width=True, hide_index=True)
             elif not purchases.empty:
                 st.markdown("**Insider Purchase Summary**")
                 st.dataframe(purchases.head(3), use_container_width=True, hide_index=True)

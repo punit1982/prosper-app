@@ -200,22 +200,35 @@ with tab_mpt:
         "The orange dot is your current portfolio; the star is the optimal (max Sharpe) portfolio."
     )
 
-    # Compute weights
+    # Compute weights — use resolved tickers for reliable yfinance lookups
     total_mv = enriched["market_value"].sum()
-    ticker_list = enriched["ticker"].tolist()
+    _t_col_opt = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
+    ticker_list = enriched[_t_col_opt].tolist()
     weight_list = (enriched["market_value"] / total_mv).tolist()
 
     period = st.selectbox("Lookback Period", ["6mo", "1y", "2y"], index=1)
 
     if st.button("🔬 Compute Efficient Frontier", type="primary"):
         with st.spinner("Fetching historical returns and computing frontier…"):
-            frontier = get_efficient_frontier(ticker_list, weight_list, period=period, n_points=200)
+            frontier_result = get_efficient_frontier(ticker_list, weight_list, period=period, n_points=200)
             optimal = get_optimal_portfolio(ticker_list, weight_list, period=period)
-            st.session_state["mpt_frontier"] = frontier
+            st.session_state["mpt_frontier"] = frontier_result
             st.session_state["mpt_optimal"] = optimal
 
-    frontier = st.session_state.get("mpt_frontier")
+    frontier_result = st.session_state.get("mpt_frontier")
     optimal = st.session_state.get("mpt_optimal")
+
+    # Handle both old list format and new dict format for backward compat
+    if isinstance(frontier_result, list):
+        frontier_result = {"points": frontier_result, "failed_tickers": [], "error": None}
+
+    if frontier_result:
+        if frontier_result.get("error"):
+            st.warning(f"Could not compute frontier: {frontier_result['error']}")
+        if frontier_result.get("failed_tickers"):
+            st.info(f"No price data for: {', '.join(frontier_result['failed_tickers'])}")
+
+    frontier = frontier_result.get("points", []) if frontier_result else []
 
     if frontier:
         # Separate current portfolio from random points
