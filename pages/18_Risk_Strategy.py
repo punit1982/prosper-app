@@ -276,16 +276,23 @@ with tab_health:
     total_cost = pd.to_numeric(enriched.get("cost_basis", pd.Series(dtype=float)), errors="coerce").sum()
     portfolio_drawdown = ((total_mv - total_cost) / total_cost * 100) if total_cost > 0 else 0
 
-    health = compute_health_score(
-        regime=effective_regime,
-        portfolio_df=enriched,
-        exposure_violations=violations,
-        factor_analysis=factor_analysis,
-        correlation_data=corr_data,
-        drawdown_pct=min(portfolio_drawdown, 0),
-        avg_prosper_score=avg_prosper,
-        kill_risk_count=0,
-    )
+    # Cache health score per session to avoid fluctuation on reloads
+    _health_cache_key = f"_health_cache_{base_currency}"
+    if _health_cache_key in st.session_state and not st.session_state.get("_force_health_recalc"):
+        health = st.session_state[_health_cache_key]
+    else:
+        health = compute_health_score(
+            regime=effective_regime,
+            portfolio_df=enriched,
+            exposure_violations=violations,
+            factor_analysis=factor_analysis,
+            correlation_data=corr_data,
+            drawdown_pct=min(portfolio_drawdown, 0),
+            avg_prosper_score=avg_prosper,
+            kill_risk_count=0,
+        )
+        st.session_state[_health_cache_key] = health
+        st.session_state.pop("_force_health_recalc", None)
 
     # Big score + plain English assessment
     score = health["score"]

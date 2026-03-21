@@ -119,9 +119,10 @@ h1, h2, h3, h4, h5, h6 {
 # Set PROSPER_AUTH_ENABLED=false in .env to skip all auth.
 # Default: disabled on Streamlit Cloud (use Cloud's built-in auth), enabled locally
 
-_is_cloud = os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD") or os.path.exists("/mount/src")
-_auth_default = "false" if _is_cloud else "true"
-AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", _auth_default).lower() in ("true", "1", "yes")
+_is_cloud = (os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD")
+             or os.path.exists("/mount/src") or os.path.exists("/home/adminuser"))
+# On Cloud: skip all custom auth (Cloud handles auth at the platform level)
+AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "false" if _is_cloud else "true").lower() in ("true", "1", "yes")
 _auth_method = None  # Track which auth method is active
 
 if AUTH_ENABLED:
