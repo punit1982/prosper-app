@@ -7,7 +7,10 @@ import os
 from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
-from core.database import init_db, get_all_holdings, save_nav_snapshot, get_nav_snapshot_exists_today, get_total_realized_pnl
+from core.database import (
+    init_db, get_all_holdings, save_nav_snapshot, get_nav_snapshot_exists_today,
+    get_total_realized_pnl, get_all_portfolios, create_portfolio, get_active_portfolio_id,
+)
 
 # Load .env from the same directory as app.py — works regardless of cwd
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -230,6 +233,41 @@ if AUTH_ENABLED:
             AUTH_ENABLED = False
 
 
+# ── Portfolio Selector ─────────────────────────────────────────────────────────
+_portfolios_df = get_all_portfolios()
+if not _portfolios_df.empty:
+    _pf_names = _portfolios_df["name"].tolist()
+    _pf_ids = _portfolios_df["id"].tolist()
+    _current_pid = get_active_portfolio_id()
+    _current_idx = _pf_ids.index(_current_pid) if _current_pid in _pf_ids else 0
+
+    with st.sidebar:
+        _selected_pf = st.selectbox(
+            "Portfolio",
+            _pf_names,
+            index=_current_idx,
+            key="_portfolio_selector",
+        )
+        _new_pid = _pf_ids[_pf_names.index(_selected_pf)]
+        if _new_pid != st.session_state.get("active_portfolio_id"):
+            st.session_state["active_portfolio_id"] = _new_pid
+            # Clear cached data for old portfolio
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("enriched_") or _k.startswith("_prosper_holdings_cache") or _k in ("extended_df", "last_refresh_time"):
+                    del st.session_state[_k]
+            st.rerun()
+
+        with st.expander("Manage Portfolios", expanded=False):
+            _new_pf_name = st.text_input("New portfolio name", key="_new_pf_name", placeholder="e.g. Retirement Fund")
+            if st.button("Create", key="_create_pf_btn", use_container_width=True) and _new_pf_name.strip():
+                try:
+                    _new_id = create_portfolio(_new_pf_name.strip())
+                    st.session_state["active_portfolio_id"] = _new_id
+                    st.success(f"Created: {_new_pf_name.strip()}")
+                    st.rerun()
+                except Exception as _pf_err:
+                    st.error(f"Could not create: {_pf_err}")
+
 # ── Global currency filter (visible on every page) ────────────────────────────
 _holdings_for_filter = get_all_holdings()
 if not _holdings_for_filter.empty:
@@ -300,6 +338,9 @@ pg = st.navigation({
         st.Page("pages/3_Portfolio_News.py",      title="Portfolio News",      icon="📰"),
         st.Page("pages/6_Market_News.py",         title="Market News",         icon="🌍"),
         st.Page("pages/12_Transaction_Log.py",   title="Transactions",        icon="📝"),
+    ],
+    "AI": [
+        st.Page("pages/24_AI_Chat.py",           title="Ask Prosper",         icon="💬"),
     ],
     "Settings": [
         st.Page("pages/0_Settings.py",           title="Settings",            icon="⚙️"),

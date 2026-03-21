@@ -33,6 +33,13 @@ st.caption("Comprehensive 360° view of any stock — fundamentals, analyst cons
 holdings = get_all_holdings()
 portfolio_tickers = sorted(holdings["ticker"].dropna().unique().tolist()) if not holdings.empty else []
 
+# Build resolved ticker map from enriched data if available
+base_currency = SETTINGS.get("base_currency", "USD")
+_enriched_cache = st.session_state.get(f"enriched_{base_currency}")
+_resolve_map = {}
+if _enriched_cache is not None and not _enriched_cache.empty and "ticker_resolved" in _enriched_cache.columns:
+    _resolve_map = dict(zip(_enriched_cache["ticker"], _enriched_cache["ticker_resolved"]))
+
 pick_col1, pick_col2, pick_col3 = st.columns([1, 2, 2])
 with pick_col1:
     source = st.radio("Source", ["Portfolio", "Manual"], horizontal=True, key="dd_source")
@@ -52,9 +59,11 @@ with pick_col2:
 with pick_col3:
     if source == "Portfolio" and filtered:
         names_map = dict(zip(holdings["ticker"], holdings["name"])) if not holdings.empty else {}
-        ticker = st.selectbox("Ticker", filtered, key="dd_ticker_select",
+        _display_ticker = st.selectbox("Ticker", filtered, key="dd_ticker_select",
                               format_func=lambda t: f"{t} — {names_map.get(t, '')}",
                               label_visibility="collapsed")
+        # Use resolved ticker for data fetching (e.g. EMAAR → EMAAR.AE)
+        ticker = _resolve_map.get(_display_ticker, _display_ticker) if _display_ticker else _display_ticker
     elif source == "Portfolio" and not filtered and search:
         st.warning("No matches")
         ticker = None
@@ -892,9 +901,27 @@ with tab_ai:
     # ═══════════════════════════════════════════════════════════════════
     st.subheader("Prosper AI Analysis")
 
+    # Also check original ticker for saved analysis
     analysis = get_prosper_analysis(ticker)
+    if not analysis and ticker in _resolve_map.values():
+        # Try original ticker (e.g. user saved as EMAAR, now looking up EMAAR.AE)
+        _orig = next((k for k, v in _resolve_map.items() if v == ticker), None)
+        if _orig:
+            analysis = get_prosper_analysis(_orig)
 
     if analysis:
+        # ── Analysis age + staleness warning ──
+        _analysis_date = analysis.get("analysis_date") or analysis.get("updated_at", "")
+        _days_old = None
+        if _analysis_date:
+            try:
+                _ad = pd.to_datetime(_analysis_date)
+                _days_old = (pd.Timestamp.now() - _ad).days
+            except Exception:
+                pass
+        if _days_old is not None and _days_old > 30:
+            st.warning(f"This analysis is **{_days_old} days old**. Consider re-running for up-to-date insights.")
+
         # ── Data quality warning banner ──
         _dq_warning = analysis.get("data_quality_warning")
         if _dq_warning == "INSUFFICIENT":
@@ -1043,11 +1070,66 @@ with tab_ai:
         st.caption(
             f"Tier: **{tier_used}** · Cost: **${cost:.4f}**"
             + (f" · Sources: {', '.join(sources)}" if sources else "")
+            + (f" · Analysed: {_analysis_date[:10]}" if _analysis_date else "")
         )
 
-    else:
+        # ── Export & Re-run buttons ──
+        _exp_col, _rerun_col = st.columns([1, 1])
+        with _exp_col:
+            # Build export text
+            _export_lines = [
+                f"PROSPER AI ANALYSIS — {ticker}",
+                f"{'=' * 40}",
+                f"Rating: {rating} | Score: {ai_score:.0f}/100 | Conviction: {conviction}",
+                f"Archetype: {arch} — {arch_name}",
+                f"Environment: {env_net}",
+                "",
+                f"Thesis: {thesis}",
+                "",
+            ]
+            _fv = analysis.get("fair_value_base") or analysis.get("fair_value", {})
+            if isinstance(_fv, dict):
+                _export_lines.append(f"Fair Value — Bear: {_fv.get('bear', 'N/A')} | Base: {_fv.get('base', 'N/A')} | Bull: {_fv.get('bull', 'N/A')}")
+            elif _fv:
+                _export_lines.append(f"Fair Value (Base): {_fv}")
+            _export_lines.append("")
+
+            _sb = analysis.get("score_breakdown", {})
+            if isinstance(_sb, dict) and _sb:
+                _export_lines.append("Score Breakdown:")
+                for _f, _s in _sb.items():
+                    _export_lines.append(f"  {_f.replace('_', ' ').title()}: {_s}/10")
+                _export_lines.append("")
+
+            if risks:
+                _export_lines.append("Key Risks:")
+                for r in risks:
+                    _export_lines.append(f"  - {r}")
+                _export_lines.append("")
+            if catalysts:
+                _export_lines.append("Key Catalysts:")
+                for c in catalysts:
+                    _export_lines.append(f"  - {c}")
+                _export_lines.append("")
+
+            _export_lines.append(f"Analysis date: {_analysis_date[:10] if _analysis_date else 'N/A'}")
+            _export_lines.append(f"Tier: {tier_used} | Cost: ${cost:.4f}")
+            _export_text = "\n".join(_export_lines)
+            st.download_button(
+                "Export Analysis (.txt)", _export_text, file_name=f"prosper_{ticker}_analysis.txt",
+                mime="text/plain", use_container_width=True,
+            )
+        with _rerun_col:
+            if st.button("Re-run Analysis", use_container_width=True, key="dd_rerun_btn"):
+                st.session_state["_dd_force_rerun"] = True
+                st.rerun()
+
+    _force_rerun = st.session_state.pop("_dd_force_rerun", False)
+
+    if not analysis or _force_rerun:
         # No analysis — show run button
-        st.info(f"No Prosper AI analysis found for **{ticker}**. Run one below.")
+        if not analysis:
+            st.info(f"No Prosper AI analysis found for **{ticker}**. Run one below.")
 
         tier_col, btn_col = st.columns([2, 1])
         with tier_col:
