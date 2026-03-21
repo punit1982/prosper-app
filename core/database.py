@@ -153,15 +153,14 @@ def init_db():
     conn.close()
 
     # ── Migrations: add portfolio_id column if missing ──
+    # Use ALTER TABLE directly (works on both SQLite & Turso); catch "duplicate" error
     try:
         conn2 = _get_connection()
         try:
-            _cols = [r[1] if isinstance(r, (tuple, list)) else r.get("name", "") for r in conn2.execute("PRAGMA table_info(holdings)").fetchall()]
-            if "portfolio_id" not in _cols:
-                conn2.execute("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER DEFAULT 1")
-                conn2.commit()
+            conn2.execute("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER DEFAULT 1")
+            conn2.commit()
         except Exception:
-            pass
+            pass  # Column already exists — that's fine
         # Ensure default portfolio exists
         try:
             _default = conn2.execute("SELECT id FROM portfolios WHERE id = 1").fetchone()
@@ -212,8 +211,14 @@ def delete_portfolio(portfolio_id: int):
     if portfolio_id == 1:
         return  # Protect default
     conn = _get_connection()
-    conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (portfolio_id,))
-    conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
+    try:
+        conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (portfolio_id,))
+    except Exception:
+        pass  # portfolio_id column may not exist
+    try:
+        conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
+    except Exception:
+        pass
     conn.commit()
     conn.close()
     _invalidate_holdings_cache()
@@ -234,19 +239,25 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
     conn = _get_connection()
     try:
         for _, row in df.iterrows():
-            conn.execute(
-                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    str(row.get("ticker", "") or "").strip(),
-                    str(row.get("name", "") or "").strip(),
-                    float(row.get("quantity", 0) or 0),
-                    float(row.get("avg_cost", 0) or 0),
-                    str(row.get("currency", "USD") or "USD").strip(),
-                    broker_source or "",
-                    pid,
-                ),
-            )
+            _ticker = str(row.get("ticker", "") or "").strip()
+            _name = str(row.get("name", "") or "").strip()
+            _qty = float(row.get("quantity", 0) or 0)
+            _cost = float(row.get("avg_cost", 0) or 0)
+            _ccy = str(row.get("currency", "USD") or "USD").strip()
+            _src = broker_source or ""
+            try:
+                conn.execute(
+                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (_ticker, _name, _qty, _cost, _ccy, _src, pid),
+                )
+            except Exception:
+                # portfolio_id column may not exist — insert without it
+                conn.execute(
+                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (_ticker, _name, _qty, _cost, _ccy, _src),
+                )
         conn.commit()
         conn.close()
         _invalidate_holdings_cache()
@@ -272,10 +283,14 @@ def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
         pass
 
     conn = _get_connection()
-    df = _read_sql("SELECT * FROM holdings WHERE portfolio_id = ? ORDER BY ticker ASC", conn, params=(pid,))
+    try:
+        df = _read_sql("SELECT * FROM holdings WHERE portfolio_id = ? ORDER BY ticker ASC", conn, params=(pid,))
+    except Exception:
+        # portfolio_id column may not exist yet — fall back to unfiltered query
+        df = pd.DataFrame()
     conn.close()
 
-    # Fallback: if portfolio_id column doesn't exist yet, get all
+    # Fallback: if portfolio_id column doesn't exist or returned empty
     if df.empty:
         conn2 = _get_connection()
         df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn2)
@@ -316,7 +331,11 @@ def clear_all_holdings(portfolio_id: int = None):
     """Delete all holdings for the active portfolio."""
     pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (pid,))
+    try:
+        conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (pid,))
+    except Exception:
+        # portfolio_id column may not exist — delete all
+        conn.execute("DELETE FROM holdings")
     conn.commit()
     conn.close()
     _invalidate_holdings_cache()
