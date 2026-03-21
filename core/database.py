@@ -27,11 +27,10 @@ def _get_connection():
 def _invalidate_holdings_cache():
     """Clear cached holdings so next read hits the DB. Call after any write."""
     try:
-        for key in (_HOLDINGS_CACHE_KEY, _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY):
-            st.session_state.pop(key, None)
-        # Also clear enriched data that depends on holdings
         for key in list(st.session_state.keys()):
-            if key.startswith("enriched_") or key in ("extended_df", "last_refresh_time"):
+            if key.startswith(_HOLDINGS_CACHE_KEY) or key.startswith("enriched_") or key in (
+                "extended_df", "last_refresh_time", _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY,
+            ):
                 del st.session_state[key]
     except Exception:
         pass
@@ -133,6 +132,11 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS portfolios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
 
     conn = _get_connection()
@@ -146,22 +150,90 @@ def init_db():
             conn.execute(sql)
         conn.commit()
 
+    # ── Migrations: add portfolio_id column if missing ──
+    conn2 = _get_connection()
+    try:
+        _cols = [r[1] if isinstance(r, (tuple, list)) else r.get("name", "") for r in conn2.execute("PRAGMA table_info(holdings)").fetchall()]
+        if "portfolio_id" not in _cols:
+            conn2.execute("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER DEFAULT 1")
+            conn2.commit()
+    except Exception:
+        pass
+    # Ensure default portfolio exists
+    try:
+        _default = conn2.execute("SELECT id FROM portfolios WHERE id = 1").fetchone()
+        if not _default:
+            conn2.execute("INSERT INTO portfolios (id, name, description) VALUES (1, 'Main Portfolio', 'Default portfolio')")
+            conn2.commit()
+    except Exception:
+        pass
+    conn2.close()
+
     conn.close()
     st.session_state["_db_initialized"] = True
+
+
+# ─────────────────────────────────────────
+# PORTFOLIOS
+# ─────────────────────────────────────────
+
+def get_all_portfolios() -> pd.DataFrame:
+    """Return all portfolios."""
+    conn = _get_connection()
+    df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
+    conn.close()
+    return df
+
+
+def create_portfolio(name: str, description: str = "") -> int:
+    """Create a new portfolio. Returns its ID."""
+    conn = _get_connection()
+    conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)", (name.strip(), description.strip()))
+    conn.commit()
+    row = conn.execute("SELECT id FROM portfolios WHERE name = ?", (name.strip(),)).fetchone()
+    conn.close()
+    pid = row[0] if isinstance(row, (tuple, list)) else row["id"]
+    return pid
+
+
+def rename_portfolio(portfolio_id: int, new_name: str):
+    """Rename a portfolio."""
+    conn = _get_connection()
+    conn.execute("UPDATE portfolios SET name = ? WHERE id = ?", (new_name.strip(), portfolio_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_portfolio(portfolio_id: int):
+    """Delete a portfolio and all its holdings."""
+    if portfolio_id == 1:
+        return  # Protect default
+    conn = _get_connection()
+    conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (portfolio_id,))
+    conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
+    conn.commit()
+    conn.close()
+    _invalidate_holdings_cache()
+
+
+def get_active_portfolio_id() -> int:
+    """Return the currently selected portfolio ID from session state."""
+    return st.session_state.get("active_portfolio_id", 1)
 
 
 # ─────────────────────────────────────────
 # HOLDINGS
 # ─────────────────────────────────────────
 
-def save_holdings(df: pd.DataFrame, broker_source: str = None):
+def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int = None):
     """Insert holdings from a DataFrame into the database."""
+    pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
     try:
         for _, row in df.iterrows():
             conn.execute(
-                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(row.get("ticker", "") or "").strip(),
                     str(row.get("name", "") or "").strip(),
@@ -169,6 +241,7 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None):
                     float(row.get("avg_cost", 0) or 0),
                     str(row.get("currency", "USD") or "USD").strip(),
                     broker_source or "",
+                    pid,
                 ),
             )
         conn.commit()
@@ -180,25 +253,33 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None):
         raise
 
 
-def get_all_holdings() -> pd.DataFrame:
-    """Retrieve all holdings as a DataFrame.
+def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
+    """Retrieve holdings for the active portfolio as a DataFrame.
 
     PERFORMANCE: Returns session-cached copy if available.
     Cache is invalidated automatically by save/update/delete functions.
     """
+    pid = portfolio_id or get_active_portfolio_id()
+    cache_key = f"{_HOLDINGS_CACHE_KEY}_{pid}"
     try:
-        cached = st.session_state.get(_HOLDINGS_CACHE_KEY)
+        cached = st.session_state.get(cache_key)
         if cached is not None:
             return cached.copy()
     except Exception:
         pass
 
     conn = _get_connection()
-    df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn)
+    df = _read_sql("SELECT * FROM holdings WHERE portfolio_id = ? ORDER BY ticker ASC", conn, params=(pid,))
     conn.close()
 
+    # Fallback: if portfolio_id column doesn't exist yet, get all
+    if df.empty:
+        conn2 = _get_connection()
+        df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn2)
+        conn2.close()
+
     try:
-        st.session_state[_HOLDINGS_CACHE_KEY] = df.copy()
+        st.session_state[cache_key] = df.copy()
     except Exception:
         pass
     return df
@@ -228,10 +309,11 @@ def delete_holding(holding_id: int):
     _invalidate_holdings_cache()
 
 
-def clear_all_holdings():
-    """Delete all holdings from the database."""
+def clear_all_holdings(portfolio_id: int = None):
+    """Delete all holdings for the active portfolio."""
+    pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM holdings")
+    conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (pid,))
     conn.commit()
     conn.close()
     _invalidate_holdings_cache()

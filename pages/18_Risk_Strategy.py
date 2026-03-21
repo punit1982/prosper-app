@@ -692,8 +692,14 @@ with tab_advanced:
         if not HAS_SCIPY:
             st.warning("scipy required. Install with: `pip install scipy`")
         else:
-            st.caption("Orange = your portfolio, Green star = optimal (highest return per risk)")
-            ticker_list = enriched["ticker"].tolist()
+            st.markdown(
+                "**What is this?** The Efficient Frontier shows all possible portfolio mixes of your stocks, "
+                "plotted by risk (volatility) vs return. The *optimal* portfolio gives you the best return per "
+                "unit of risk (highest Sharpe ratio). If your portfolio is far from the frontier, you could "
+                "get better returns without taking more risk."
+            )
+            st.caption("🟠 Orange = your portfolio · ⭐ Green star = optimal (highest return per risk)")
+            ticker_list = enriched[_t_col].tolist()
             weight_list = (enriched["market_value"] / total_mv).tolist()
             period = st.selectbox("Lookback", ["6mo", "1y", "2y"], index=1)
 
@@ -755,6 +761,17 @@ with tab_advanced:
                                   f"{optimal['sharpe']-cp['sharpe']:+.2f}")
 
     elif adv_section == "Factor Exposure":
+        st.markdown(
+            "**What is this?** Factor exposure shows your portfolio's tilt towards different investment styles. "
+            "Over-concentration in one style increases risk if that style falls out of favour."
+        )
+        _factor_explain = {
+            "value": "Cheap stocks (low P/E, high dividend) — outperform in recoveries, lag in momentum markets",
+            "growth": "High-growth companies — outperform in expansion, risky in downturns",
+            "quality": "Profitable, low-debt companies — defensive, steady performers",
+            "momentum": "Recent winners — strong in trends, sharp reversals in regime shifts",
+            "size": "Small-cap tilt — higher return potential but more volatile",
+        }
         if factor_analysis["factors"]:
             factor_rows = []
             for factor, pct in factor_analysis["factors"].items():
@@ -765,15 +782,39 @@ with tab_advanced:
                     "Exposure": f"{pct:.1f}%",
                     "Limit": f"{limit}%",
                     "Status": status,
+                    "What it means": _factor_explain.get(factor, ""),
                 })
             st.dataframe(pd.DataFrame(factor_rows), use_container_width=True, hide_index=True)
+
+            # Radar chart for visual overview
+            f_names = [f.replace("_", " ").title() for f in factor_analysis["factors"].keys()]
+            f_vals = list(factor_analysis["factors"].values())
+            if len(f_names) >= 3:
+                fig_radar = go.Figure(go.Scatterpolar(
+                    r=f_vals + [f_vals[0]], theta=f_names + [f_names[0]],
+                    fill="toself", fillcolor="rgba(30,136,229,0.15)",
+                    line=dict(color="#1E88E5", width=2),
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=True, range=[0, max(f_vals) * 1.2])),
+                    height=300, margin=dict(t=20, l=40, r=40, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
         else:
-            st.info("Load Extended Metrics from Dashboard to see factor analysis.")
+            st.info(
+                "No factor data available yet. Visit the **Portfolio Dashboard** and click "
+                "**Load Extended Metrics** to enrich your holdings with style/factor data."
+            )
 
     elif adv_section == "Correlation Analysis":
-        st.caption("How independently your stocks move. High correlation = they all fall together.")
+        st.markdown(
+            "**What is this?** Correlation measures how your stocks move relative to each other. "
+            "If everything is highly correlated (dark red), a single bad event can drag down your "
+            "entire portfolio. Green/low values mean your stocks provide real diversification."
+        )
         if st.button("Compute Correlations", type="primary"):
-            with st.spinner("Computing..."):
+            with st.spinner("Fetching 3-month price data for top 20 holdings..."):
                 try:
                     from core.data_engine import get_history
                     from core.fortress import calculate_correlation_matrix
@@ -801,13 +842,34 @@ with tab_advanced:
             st.plotly_chart(fig_corr, use_container_width=True)
 
             zone = corr_data["overall_zone"]
-            zone_labels = {"green": "Stocks moving independently (good)", "amber": "Some herding (watch)", "red": "High herding (reduce exposure)"}
-            st.info(f"**Overall: {zone.upper()}** — {zone_labels.get(zone, '')}")
+            zone_labels = {
+                "green": "🟢 Your stocks move independently — good diversification",
+                "amber": "🟡 Some herding detected — consider adding uncorrelated assets",
+                "red": "🔴 High correlation — your portfolio may drop together in a downturn",
+            }
+            st.info(f"**{zone_labels.get(zone, zone.upper())}")
+
+            avg_corr = corr_data.get("average_correlation")
+            if avg_corr is not None:
+                st.caption(f"Average pairwise correlation: {avg_corr:.2f} (below 0.4 is ideal)")
+        else:
+            st.caption("Click the button above to compute correlations. Takes ~10 seconds for 20 holdings.")
 
     elif adv_section == "Regime Signals Detail":
+        st.markdown(
+            "**What is this?** The regime detector scores four possible economic states based on your "
+            "market signals (VIX, PMI, credit spreads, yield curve, inflation, Fed policy). "
+            "The highest-scoring regime determines your portfolio's risk posture."
+        )
+        _regime_labels = {
+            REGIME_EXPANSION: "Growing",
+            REGIME_OVERHEATING: "Heating Up",
+            REGIME_CONTRACTION: "Slowing Down",
+            REGIME_RECOVERY: "Bouncing Back",
+        }
         scores = regime_result["scores"]
         score_df = pd.DataFrame([
-            {"Regime": REGIME_NAMES[r], "Score": s}
+            {"Regime": _regime_labels.get(r, REGIME_NAMES.get(r, r)), "Score": s}
             for r, s in scores.items()
         ])
         fig_regime = go.Figure(go.Bar(
@@ -817,8 +879,17 @@ with tab_advanced:
         fig_regime.update_layout(height=250, margin=dict(t=10, l=10, r=40, b=10),
                                  paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_regime, use_container_width=True)
+
+        # Show which signals drove the decision
         if regime_result.get("signals_used"):
-            st.caption(f"Signals: {' · '.join(regime_result['signals_used'])}")
+            st.markdown("**Signals that drove this regime call:**")
+            for sig in regime_result["signals_used"]:
+                st.markdown(f"- {sig}")
+
+        st.caption(
+            "💡 Adjust signals in the sidebar and click *Save & Update* to recalculate. "
+            "The regime with the highest score wins."
+        )
 
     elif adv_section == "Cash & Margin":
         if not cash_positions.empty:

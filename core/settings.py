@@ -152,7 +152,7 @@ def get_api_key(key_name: str) -> str:
     return ""
 
 
-def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5"):
+def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5", system=None):
     """
     Call Claude API with automatic model fallback.
     Tries multiple model IDs until one works — handles different API tiers/regions.
@@ -170,6 +170,10 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
     # Put the preferred model first, deduplicate
     models_to_try = [preferred_model] + [m for m in _FALLBACK_MODELS if m != preferred_model]
 
+    _extra = {}
+    if system:
+        _extra["system"] = system
+
     last_error = None
     for model in models_to_try:
         try:
@@ -177,6 +181,7 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
                 model=model,
                 max_tokens=max_tokens,
                 messages=messages,
+                **_extra,
             )
             return response
         except Exception as e:
