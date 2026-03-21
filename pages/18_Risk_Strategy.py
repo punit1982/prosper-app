@@ -11,9 +11,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
 from core.database import (
-    get_all_holdings, get_all_prosper_analyses, get_all_cash_positions,
+    get_all_holdings, get_all_prosper_analyses, get_prosper_analysis, get_all_cash_positions,
     save_fortress_state, get_fortress_state, get_all_fortress_state,
 )
 from core.settings import SETTINGS
@@ -291,6 +292,41 @@ with tab_health:
     total = health["total"]
     score_color = "#1a9e5c" if score >= 8 else ("#f39c12" if score >= 5 else "#d63031")
 
+    # Track score over time in session state
+    prev_score = st.session_state.get("_health_score_prev")
+    prev_dims = st.session_state.get("_health_dims_prev", {})
+    st.session_state["_health_score_prev"] = score
+    st.session_state["_health_dims_prev"] = health.get("dimensions", {})
+
+    # Build change indicator
+    score_change_text = ""
+    change_reasons = []
+    if prev_score is not None and prev_score != score:
+        arrow = "\u2191" if score > prev_score else "\u2193"
+        score_change_text = f" ({arrow} from {prev_score}/{total})"
+        # Determine WHY score changed by comparing dimension statuses
+        dims_now = health.get("dimensions", {})
+        dim_labels_map = {
+            "regime_alignment": "Market positioning",
+            "exposure_compliance": "Risk limits",
+            "single_name_concentration": "Single-stock risk",
+            "sector_geo_concentration": "Sector/country spread",
+            "factor_balance": "Investment style mix",
+            "correlation": "Stock independence",
+            "liquidity_coverage": "Cash buffer",
+            "drawdown_status": "Loss control",
+            "prosper_score_avg": "Stock quality",
+            "open_kill_risks": "Deal-breaker risks",
+        }
+        status_rank = {"green": 0, "amber": 1, "red": 2}
+        for dim_key, dim_label in dim_labels_map.items():
+            old_status = prev_dims.get(dim_key, "green")
+            new_status = dims_now.get(dim_key, "green")
+            if status_rank.get(new_status, 0) > status_rank.get(old_status, 0):
+                change_reasons.append(f"{dim_label} worsened")
+            elif status_rank.get(new_status, 0) < status_rank.get(old_status, 0):
+                change_reasons.append(f"{dim_label} improved")
+
     # Simplified assessment
     if score >= 9:
         health_label = "Excellent"
@@ -309,13 +345,15 @@ with tab_health:
     with h1:
         st.markdown(
             f"<div style='text-align:center;padding:15px'>"
-            f"<div style='font-size:56px;font-weight:700;color:{score_color}'>{score}/{total}</div>"
+            f"<div style='font-size:56px;font-weight:700;color:{score_color}'>{score}/{total}{score_change_text}</div>"
             f"<div style='font-size:1.1rem;color:#ccc'>{health_label}</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
     with h2:
         st.markdown(f"**{health_advice}**")
+        if change_reasons:
+            st.caption(f"Score changed because: {', '.join(change_reasons[:3])}")
 
         # Dimension summary in plain English
         dims = health["dimensions"]
@@ -380,7 +418,64 @@ with tab_health:
         has_alerts = True
 
     for alert in cb_result.get("position_alerts", []):
-        st.warning(f"**{alert['ticker']}** is down {alert['drawdown']:.1f}% — {alert['action']}")
+        ticker = alert["ticker"]
+        drawdown = alert["drawdown"]
+        # Look up PROSPER analysis for this ticker
+        pa = prosper_map.get(ticker)
+        if pa:
+            analysis_date_str = pa.get("analysis_date", "")
+            is_recent = False
+            try:
+                analysis_dt = datetime.strptime(analysis_date_str[:10], "%Y-%m-%d")
+                is_recent = (datetime.now() - analysis_dt) <= timedelta(days=30)
+            except (ValueError, TypeError):
+                pass
+
+            if is_recent:
+                rating = pa.get("rating", "N/A")
+                p_score = pa.get("score", 0)
+                conviction = pa.get("conviction", "N/A")
+                thesis = pa.get("thesis", "No thesis available")
+                # Truncate thesis for display
+                thesis_short = thesis[:120] + "..." if len(str(thesis)) > 120 else thesis
+
+                # Cross-reference PROSPER score with drawdown severity
+                score_num = float(p_score) if p_score else 0
+                conv_upper = str(conviction).upper()
+
+                if score_num >= 70 and conv_upper in ("HIGH", "VERY HIGH"):
+                    if abs(drawdown) < 20:
+                        action_text = "Drawdown within tolerable range for a high-conviction position. Thesis intact — HOLD."
+                    else:
+                        action_text = "Drawdown exceeds normal range but thesis intact. Consider adding on weakness if cash allows."
+                elif score_num >= 50:
+                    if abs(drawdown) < 15:
+                        action_text = "Moderate-conviction position under pressure. Monitor closely for thesis deterioration."
+                    else:
+                        action_text = "Thesis may be weakening under sustained drawdown. Consider trimming 25-50% to reduce risk."
+                else:
+                    action_text = "Low PROSPER score combined with significant drawdown. Thesis weakened — consider exiting or trimming aggressively."
+
+                st.warning(
+                    f"**{ticker}** down {drawdown:.1f}% | "
+                    f"PROSPER: **{rating}** ({score_num:.0f}/100, {conviction} conviction) | "
+                    f"Thesis: {thesis_short} | "
+                    f"→ {action_text}"
+                )
+            else:
+                # Analysis exists but is stale (>30 days)
+                st.warning(
+                    f"**{ticker}** is down {drawdown:.1f}% — "
+                    f"PROSPER analysis is over 30 days old (from {analysis_date_str[:10]}). "
+                    f"Re-run PROSPER analysis to get current conviction-weighted guidance."
+                )
+        else:
+            # No PROSPER analysis exists
+            st.warning(
+                f"**{ticker}** is down {drawdown:.1f}% — "
+                f"No PROSPER analysis found. Run a PROSPER analysis on this ticker "
+                f"to get a specific recommendation on whether to hold, trim, or add."
+            )
         has_alerts = True
 
     # Rebalancing triggers (simplified language)
