@@ -353,24 +353,24 @@ with tab_chart:
             _d1, _d2, _d3, _d4 = st.columns(4)
             with _d1:
                 _div_rate_f = _sf(_div_rate)
-                st.metric("Dividend/Share", f"USD {_div_rate_f:.2f}" if _div_rate_f is not None else "---", key=f"div_rate_{ticker}")
+                st.metric("Dividend/Share", f"USD {_div_rate_f:.2f}" if _div_rate_f is not None else "---")
             with _d2:
                 _dy_f = _sf(_div_yield)
                 _dy = _dy_f * 100 if _dy_f is not None and _dy_f < 1 else _dy_f
-                st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy is not None else "---", key=f"div_yield_{ticker}")
+                st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy is not None else "---")
             with _d3:
                 if _ex_date:
                     try:
                         from datetime import datetime as _dt
                         _ed = _dt.fromtimestamp(_ex_date).strftime("%b %d, %Y")
-                        st.metric("Ex-Dividend Date", _ed, key=f"div_exdate_{ticker}")
+                        st.metric("Ex-Dividend Date", _ed)
                     except Exception:
-                        st.metric("Ex-Dividend Date", "---", key=f"div_exdate_{ticker}")
+                        st.metric("Ex-Dividend Date", "---")
                 else:
-                    st.metric("Ex-Dividend Date", "---", key=f"div_exdate_{ticker}")
+                    st.metric("Ex-Dividend Date", "---")
             with _d4:
                 _payout_f = _sf(_payout)
-                st.metric("Payout Ratio", f"{_payout_f*100:.0f}%" if _payout_f is not None else "---", key=f"div_payout_{ticker}")
+                st.metric("Payout Ratio", f"{_payout_f*100:.0f}%" if _payout_f is not None else "---")
     except Exception as e:
         st.error(f"Error loading this section: {e}")
 
@@ -807,9 +807,14 @@ with tab_ownership:
                     if "Insider" in recent_txns.columns:
                         recent_txns = recent_txns.rename(columns={"Insider": "Name"})
 
-                    # Rename "Text" to "Transaction" for clarity
-                    if "Text" in recent_txns.columns:
+                    # Rename "Text" to "Transaction" for clarity (only if no existing Transaction col)
+                    if "Text" in recent_txns.columns and "Transaction" not in recent_txns.columns:
                         recent_txns = recent_txns.rename(columns={"Text": "Transaction"})
+                    elif "Text" in recent_txns.columns:
+                        recent_txns = recent_txns.drop(columns=["Text"], errors="ignore")
+
+                    # Drop any duplicate columns
+                    recent_txns = recent_txns.loc[:, ~recent_txns.columns.duplicated()]
 
                     # Build display columns — name, title/position, transaction type, date, shares, value
                     display_cols = []
@@ -838,8 +843,8 @@ with tab_ownership:
                     if "Value" in recent_txns.columns:
                         display_cols.append("Value")
 
-                    # Filter to only columns that actually exist in the DataFrame
-                    display_cols = [c for c in display_cols if c in recent_txns.columns]
+                    # Filter to only existing, unique columns
+                    display_cols = list(dict.fromkeys(c for c in display_cols if c in recent_txns.columns))
                     if display_cols:
                         st.dataframe(clean_nan(recent_txns[display_cols]), use_container_width=True, hide_index=True)
                     else:
