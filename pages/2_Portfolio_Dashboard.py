@@ -624,12 +624,18 @@ def portfolio_section():
 
     hdr1, hdr2 = st.columns([7, 1])
     with hdr1:
+        def _fmt_age(secs):
+            """Human-friendly age string."""
+            s = int(secs)
+            if s < 60: return f"{s}s ago"
+            if s < 3600: return f"{s//60}m {s%60}s ago"
+            if s < 86400: return f"{s//3600}h {(s%3600)//60}m ago"
+            return f"{s//86400}d ago"
+
         if has_cache:
-            age = f"{int(cache_age)//60}m {int(cache_age)%60}s ago" if cache_age >= 60 else f"{int(cache_age)}s ago"
-            st.caption(f"📡 Prices: **{age}** · Base: **{sym}**")
+            st.caption(f"📡 Prices: **{_fmt_age(cache_age)}** · Base: **{sym}**")
         elif sqlite_age is not None:
-            db_age = f"{int(sqlite_age)//60}m {int(sqlite_age)%60}s ago" if sqlite_age >= 60 else f"{int(sqlite_age)}s ago"
-            st.caption(f"📡 Prices: **{db_age}** (from cache) · Base: **{sym}**")
+            st.caption(f"📡 Prices: **{_fmt_age(sqlite_age)}** (from cache) · Base: **{sym}**")
         else:
             st.caption(f"📡 Loading prices for the first time… · Base: **{sym}**")
     with hdr2:
@@ -673,7 +679,8 @@ def portfolio_section():
     margin_debt = float(cash_positions[cash_positions["is_margin"] == 1]["amount"].sum()) if not cash_positions.empty and "is_margin" in cash_positions.columns else 0.0
     net_portfolio_value = (total_value or 0) + total_cash
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    # Row 1: Big 3 metrics
+    c1, c2, c3 = st.columns(3)
     with c1:
         if total_value is not None:
             label = f"{sym} {fmt_large(net_portfolio_value)}" if total_cash != 0 else f"{sym} {fmt_large(total_value)}"
@@ -696,6 +703,8 @@ def portfolio_section():
                       delta=f"{total_unrealized:+,.0f} ({pct:+.1f}%)")
         else:
             st.metric("Unrealized P&L", "—")
+    # Row 2: Secondary metrics
+    c4, c5, c6 = st.columns(3)
     with c4:
         if total_realized != 0:
             st.metric("Realized P&L", f"{sym} {fmt_large(abs(total_realized))}",

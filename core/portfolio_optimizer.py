@@ -386,18 +386,31 @@ def suggest_rebalance(current_alloc: dict, target_model: str) -> list[dict]:
 _RISK_FREE_RATE = 0.05  # 5% annualised (US T-bills)
 
 
-def _fetch_returns(tickers: list[str], period: str = "1y") -> pd.DataFrame:
-    """Fetch daily close prices via get_history and compute daily returns."""
+def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame, list[str]]:
+    """Fetch daily close prices via get_history and compute daily returns.
+
+    Returns
+    -------
+    (returns_df, failed_tickers) – the daily returns DataFrame and a list
+    of tickers for which history could not be fetched.
+    """
     frames = {}
+    failed = []
     for t in tickers:
+        if t in frames:
+            continue  # skip duplicates already fetched
         hist = get_history(t, period=period)
         if hist is not None and not hist.empty:
             close = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
             frames[t] = close
+        else:
+            failed.append(t)
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame(), failed
     prices = pd.DataFrame(frames).dropna()
-    return prices.pct_change().dropna()
+    if prices.empty:
+        return pd.DataFrame(), failed
+    return prices.pct_change().dropna(), failed
 
 
 def _portfolio_stats(weights: np.ndarray, mean_ret: np.ndarray, cov: np.ndarray):
@@ -408,12 +421,24 @@ def _portfolio_stats(weights: np.ndarray, mean_ret: np.ndarray, cov: np.ndarray)
     return port_ret, port_vol, sharpe
 
 
+def _deduplicate_tickers_weights(
+    tickers: list[str], weights: list[float]
+) -> tuple[list[str], list[float]]:
+    """Merge duplicate tickers by summing their weights."""
+    combined: dict[str, float] = {}
+    for t, w in zip(tickers, weights):
+        combined[t] = combined.get(t, 0.0) + w
+    dedup_tickers = list(combined.keys())
+    dedup_weights = [combined[t] for t in dedup_tickers]
+    return dedup_tickers, dedup_weights
+
+
 def get_efficient_frontier(
     tickers: list[str],
     weights: list[float],
     period: str = "1y",
     n_points: int = 50,
-) -> list[dict]:
+) -> dict:
     """
     Generate efficient frontier data points.
 
@@ -426,24 +451,45 @@ def get_efficient_frontier(
 
     Returns
     -------
-    List of dicts with keys: risk, return_, sharpe, weights.
-    Also includes the *current* portfolio as a special entry with
-    ``is_current=True``.
+    dict with keys:
+      - ``points``: list of dicts with risk, return_, sharpe, weights, is_current.
+      - ``failed_tickers``: list of tickers that could not be fetched.
+      - ``error``: str or None describing why the frontier is empty.
     """
+    result = {"points": [], "failed_tickers": [], "error": None}
+
     if not HAS_SCIPY:
-        raise ImportError(
+        result["error"] = (
             "scipy is required for MPT calculations. "
             "Install it with: pip install scipy"
         )
+        return result
 
-    returns_df = _fetch_returns(tickers, period)
-    if returns_df.empty or len(returns_df.columns) < 2:
-        return []
+    # De-duplicate tickers (merge weights for the same ticker)
+    tickers, weights = _deduplicate_tickers_weights(tickers, weights)
+
+    if len(tickers) < 2:
+        result["error"] = f"Need at least 2 unique tickers, but got {len(tickers)}."
+        return result
+
+    returns_df, failed = _fetch_returns(tickers, period)
+    result["failed_tickers"] = failed
+
+    if returns_df.empty:
+        result["error"] = (
+            f"Could not fetch historical prices for any ticker. "
+            f"Failed tickers: {', '.join(failed) if failed else 'all'}."
+        )
+        return result
 
     # Align tickers to what we actually fetched
     available = [t for t in tickers if t in returns_df.columns]
     if len(available) < 2:
-        return []
+        result["error"] = (
+            f"Only {len(available)} ticker(s) returned price data "
+            f"(need at least 2). Failed: {', '.join(failed)}."
+        )
+        return result
     returns_df = returns_df[available]
 
     mean_ret = returns_df.mean().values
@@ -456,10 +502,10 @@ def get_efficient_frontier(
     cur_w = cur_w / cur_w.sum() if cur_w.sum() > 0 else np.ones(n) / n
     cur_ret, cur_vol, cur_sharpe = _portfolio_stats(cur_w, mean_ret, cov)
 
-    results = []
+    points = []
 
     # Add current portfolio marker
-    results.append({
+    points.append({
         "risk": round(cur_vol, 4),
         "return_": round(cur_ret, 4),
         "sharpe": round(cur_sharpe, 4),
@@ -472,7 +518,7 @@ def get_efficient_frontier(
     for _ in range(n_points):
         w = np.random.dirichlet(np.ones(n))
         r, v, s = _portfolio_stats(w, mean_ret, cov)
-        results.append({
+        points.append({
             "risk": round(v, 4),
             "return_": round(r, 4),
             "sharpe": round(s, 4),
@@ -480,7 +526,8 @@ def get_efficient_frontier(
             "is_current": False,
         })
 
-    return results
+    result["points"] = points
+    return result
 
 
 def get_optimal_portfolio(
@@ -494,14 +541,18 @@ def get_optimal_portfolio(
     Returns
     -------
     dict with keys: weights (dict ticker->weight), return_, risk, sharpe.
+    Empty dict on failure.
     """
     if not HAS_SCIPY:
-        raise ImportError(
-            "scipy is required for MPT calculations. "
-            "Install it with: pip install scipy"
-        )
+        return {}
 
-    returns_df = _fetch_returns(tickers, period)
+    # De-duplicate tickers
+    tickers, weights = _deduplicate_tickers_weights(tickers, weights)
+
+    if len(tickers) < 2:
+        return {}
+
+    returns_df, _failed = _fetch_returns(tickers, period)
     if returns_df.empty or len(returns_df.columns) < 2:
         return {}
 
@@ -522,7 +573,7 @@ def get_optimal_portfolio(
     bounds = [(0.0, 1.0)] * n
     x0 = np.ones(n) / n
 
-    result = minimize(
+    opt_result = minimize(
         neg_sharpe,
         x0,
         method="SLSQP",
@@ -530,10 +581,10 @@ def get_optimal_portfolio(
         constraints=constraints,
     )
 
-    if not result.success:
+    if not opt_result.success:
         return {}
 
-    opt_w = result.x
+    opt_w = opt_result.x
     opt_ret, opt_vol, opt_sharpe = _portfolio_stats(opt_w, mean_ret, cov)
 
     return {

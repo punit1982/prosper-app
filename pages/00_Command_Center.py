@@ -16,6 +16,11 @@ from core.database import (
     get_all_holdings, get_nav_history, get_all_prosper_analyses,
     get_total_realized_pnl, get_all_cash_positions,
 )
+try:
+    from core.database import save_briefing, get_latest_briefing
+except ImportError:
+    save_briefing = None
+    get_latest_briefing = None
 from core.settings import SETTINGS, get_api_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import fmt_large
@@ -105,7 +110,7 @@ regime_color = "#888"
 _regime_key = None  # The raw regime constant (e.g. REGIME_EXPANSION)
 try:
     from core.fortress import (
-        detect_regime, REGIME_NAMES, REGIME_COLORS,
+        detect_regime, REGIME_NAMES, REGIME_COLORS, REGIME_DISPLAY,
         REGIME_EXPANSION, REGIME_OVERHEATING, REGIME_CONTRACTION, REGIME_RECOVERY,
     )
     from core.database import get_fortress_state
@@ -117,18 +122,13 @@ try:
 except Exception:
     pass
 
-# Plain-English regime labels (replace jargon like "Overheating Late Cycle")
-_REGIME_SIMPLE = {
-    REGIME_EXPANSION: ("Growing", "#4CAF50", "🟢", "Economy healthy, markets favour risk. Good for equities."),
-    REGIME_OVERHEATING: ("Heating Up", "#FF9800", "🟡", "Late-cycle: inflation rising, volatility increasing. Tighten stops, trim winners."),
-    REGIME_CONTRACTION: ("Slowing Down", "#f44336", "🔴", "Economic weakness: reduce risk, hold more cash, avoid new positions."),
-    REGIME_RECOVERY: ("Bouncing Back", "#2196F3", "🔵", "Early recovery signs. Gradually increase equity exposure."),
-} if _regime_key is not None else {}
-_rs = _REGIME_SIMPLE.get(_regime_key, ("Unknown", "#888", "⚪", ""))
-regime_name = _rs[0]
-regime_color = _rs[1]
-_regime_icon = _rs[2]
-_regime_tip = _rs[3]
+# Plain-English regime labels — use shared REGIME_DISPLAY from fortress.py
+_rd = REGIME_DISPLAY.get(_regime_key, {}) if _regime_key is not None else {}
+regime_name = _rd.get("label", "Unknown")
+regime_color = _rd.get("color", "#888")
+_regime_icon = _rd.get("icon", "")
+_regime_explanation = _rd.get("explanation", "")
+_regime_action = _rd.get("action", "")
 
 # Market context bar
 st.markdown(
@@ -150,10 +150,14 @@ st.markdown(
 )
 # Regime scale (always visible, shows where we are on the spectrum)
 _regime_phases = [
-    ("Bouncing Back", "#2196F3", regime_name == "Bouncing Back"),
-    ("Growing", "#4CAF50", regime_name == "Growing"),
-    ("Heating Up", "#FF9800", regime_name == "Heating Up"),
-    ("Slowing Down", "#f44336", regime_name == "Slowing Down"),
+    (REGIME_DISPLAY[REGIME_RECOVERY]["label"], REGIME_DISPLAY[REGIME_RECOVERY]["color"],
+     regime_name == REGIME_DISPLAY[REGIME_RECOVERY]["label"]),
+    (REGIME_DISPLAY[REGIME_EXPANSION]["label"], REGIME_DISPLAY[REGIME_EXPANSION]["color"],
+     regime_name == REGIME_DISPLAY[REGIME_EXPANSION]["label"]),
+    (REGIME_DISPLAY[REGIME_OVERHEATING]["label"], REGIME_DISPLAY[REGIME_OVERHEATING]["color"],
+     regime_name == REGIME_DISPLAY[REGIME_OVERHEATING]["label"]),
+    (REGIME_DISPLAY[REGIME_CONTRACTION]["label"], REGIME_DISPLAY[REGIME_CONTRACTION]["color"],
+     regime_name == REGIME_DISPLAY[REGIME_CONTRACTION]["label"]),
 ]
 _phase_html = "".join(
     f"<span style='padding:3px 10px;border-radius:10px;font-size:0.75rem;font-weight:{'700' if active else '400'};"
@@ -161,37 +165,51 @@ _phase_html = "".join(
     f"border:1px solid {color if active else 'transparent'}'>{name}</span>"
     for name, color, active in _regime_phases
 )
+# Show cycle scale + explanation + action (user complained they can't see what regime means)
+_regime_detail_html = ""
+if _regime_explanation:
+    _regime_detail_html = (
+        f"<div style='margin:6px 0 12px 0;padding:10px 14px;border-radius:8px;"
+        f"background:rgba(255,255,255,0.03);border-left:3px solid {regime_color}'>"
+        f"<div style='font-size:0.85rem;color:#ccc;margin-bottom:4px'>"
+        f"{_regime_icon} <b>{regime_name}</b> — {_regime_explanation}</div>"
+        f"<div style='font-size:0.8rem;color:#aaa'>"
+        f"<b>What to do:</b> {_regime_action}</div>"
+        f"</div>"
+    )
 st.markdown(
     f"<div style='display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap'>"
     f"<span style='font-size:0.75rem;color:#666;margin-right:4px'>Cycle:</span>"
     f"{_phase_html}</div>"
-    f"<div style='font-size:0.8rem;color:#999;margin-bottom:12px'>"
-    f"{_regime_icon} {_regime_tip}</div>",
+    f"{_regime_detail_html}",
     unsafe_allow_html=True,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: HERO METRICS ROW
 # ══════════════════════════════════════════════════════════════════════════════
-m1, m2, m3, m4, m5 = st.columns(5)
+# Row 1: Primary metrics (3 cols for full-width numbers)
+m1, m2, m3 = st.columns(3)
 m1.metric(
     "Net Portfolio Value",
     f"{base_currency} {net_portfolio:,.0f}",
     f"{day_gain:+,.0f} today ({day_pct:+.1f}%)",
 )
 m2.metric(
+    "Today's P&L",
+    f"{base_currency} {day_gain:+,.0f}",
+    f"{day_pct:+.1f}%",
+)
+m3.metric(
     "Unrealized P&L",
     f"{base_currency} {unrealized_pnl:+,.0f}",
     f"{unrealized_pct:+.1f}%",
 )
-m3.metric(
+# Row 2: Secondary metrics
+m4, m5, _m6 = st.columns(3)
+m4.metric(
     "Realized P&L",
     f"{base_currency} {realized_pnl:+,.0f}" if realized_pnl != 0 else "---",
-)
-m4.metric(
-    "Today's P&L",
-    f"{base_currency} {day_gain:+,.0f}",
-    f"{day_pct:+.1f}%",
 )
 
 # Dividend income estimate — use cached value or show placeholder (avoid slow batch fetch on load)
@@ -350,10 +368,10 @@ with col_alerts:
     # FORTRESS regime warnings
     try:
         from core.fortress import check_circuit_breakers
-        if regime_name == "Contraction":
-            alerts.append(("🏰", "**Contraction** regime active"))
-        elif regime_name == "Overheating":
-            alerts.append(("🏰", "**Late cycle** — tighten stops"))
+        if regime_name == "Slowing Down":
+            alerts.append(("🏰", "**Slowing Down** regime active — reduce risk"))
+        elif regime_name == "Heating Up":
+            alerts.append(("🏰", "**Heating Up** — tighten stops, trim winners"))
 
         if total_cost > 0:
             dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
@@ -567,22 +585,49 @@ Be sharp, specific, actionable. No generic advice. This investor has {holdings_c
         return f"Could not generate briefing: {str(e)[:100]}"
 
 
-# Auto-show if cached, otherwise offer button
+# Auto-show: check session → DB → offer generate button
+_today_str = datetime.now().strftime("%Y-%m-%d")
+_briefing_shown = False
+
 if briefing_cache_key in st.session_state:
+    # Show today's session-cached briefing
     st.markdown(st.session_state[briefing_cache_key])
+    st.caption(f"Generated today · {_today_str}")
+    _briefing_shown = True
+elif get_latest_briefing:
+    # Try to load from database (persists across sessions)
+    _saved = get_latest_briefing(base_currency)
+    if _saved and _saved.get("content"):
+        st.session_state[briefing_cache_key] = _saved["content"]
+        st.markdown(_saved["content"])
+        _bdate = _saved.get("date", "")
+        _btimestamp = _saved.get("created_at", "")
+        if _bdate == _today_str:
+            st.caption(f"Generated today · {_btimestamp}")
+        else:
+            st.caption(f"Last briefing from **{_bdate}** · {_btimestamp} — click Refresh to update for today")
+        _briefing_shown = True
+
+if _briefing_shown:
     col_refresh, _ = st.columns([1, 5])
     with col_refresh:
-        if st.button("Refresh Briefing", key="refresh_brief"):
+        if st.button("🔄 Refresh Briefing", key="refresh_brief"):
             with st.spinner("Generating..."):
-                st.session_state[briefing_cache_key] = generate_briefing()
+                _new_briefing = generate_briefing()
+                st.session_state[briefing_cache_key] = _new_briefing
+                if save_briefing:
+                    save_briefing(_today_str, base_currency, _new_briefing)
                 st.rerun()
 else:
-    # Show generate button (don't auto-generate — it blocks page load)
+    # No briefing found anywhere — show generate button
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if api_key and api_key != "your_anthropic_api_key_here":
         if st.button("Generate Today's AI Briefing", type="primary", key="gen_briefing"):
             with st.spinner("Your AI CIO is preparing today's briefing..."):
-                st.session_state[briefing_cache_key] = generate_briefing()
+                _new_briefing = generate_briefing()
+                st.session_state[briefing_cache_key] = _new_briefing
+                if save_briefing:
+                    save_briefing(_today_str, base_currency, _new_briefing)
                 st.rerun()
         st.caption("Click to generate your personalized CIO briefing for today.")
     else:
