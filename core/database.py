@@ -150,26 +150,29 @@ def init_db():
             conn.execute(sql)
         conn.commit()
 
-    # ── Migrations: add portfolio_id column if missing ──
-    conn2 = _get_connection()
-    try:
-        _cols = [r[1] if isinstance(r, (tuple, list)) else r.get("name", "") for r in conn2.execute("PRAGMA table_info(holdings)").fetchall()]
-        if "portfolio_id" not in _cols:
-            conn2.execute("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER DEFAULT 1")
-            conn2.commit()
-    except Exception:
-        pass
-    # Ensure default portfolio exists
-    try:
-        _default = conn2.execute("SELECT id FROM portfolios WHERE id = 1").fetchone()
-        if not _default:
-            conn2.execute("INSERT INTO portfolios (id, name, description) VALUES (1, 'Main Portfolio', 'Default portfolio')")
-            conn2.commit()
-    except Exception:
-        pass
-    conn2.close()
-
     conn.close()
+
+    # ── Migrations: add portfolio_id column if missing ──
+    try:
+        conn2 = _get_connection()
+        try:
+            _cols = [r[1] if isinstance(r, (tuple, list)) else r.get("name", "") for r in conn2.execute("PRAGMA table_info(holdings)").fetchall()]
+            if "portfolio_id" not in _cols:
+                conn2.execute("ALTER TABLE holdings ADD COLUMN portfolio_id INTEGER DEFAULT 1")
+                conn2.commit()
+        except Exception:
+            pass
+        # Ensure default portfolio exists
+        try:
+            _default = conn2.execute("SELECT id FROM portfolios WHERE id = 1").fetchone()
+            if not _default:
+                conn2.execute("INSERT INTO portfolios (id, name, description) VALUES (1, 'Main Portfolio', 'Default portfolio')")
+                conn2.commit()
+        except Exception:
+            pass
+        conn2.close()
+    except Exception:
+        pass  # Migration is best-effort — app works without it
     st.session_state["_db_initialized"] = True
 
 

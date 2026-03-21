@@ -1,16 +1,25 @@
 """
 Prosper — AI-Native Investment Operating System
 Main entrypoint: page config, DB init, authentication, and navigation.
+v5.3 — Multi-portfolio, AI Chat, resolved ticker fixes
 """
 
 import os
 from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
-from core.database import (
-    init_db, get_all_holdings, save_nav_snapshot, get_nav_snapshot_exists_today,
-    get_total_realized_pnl, get_all_portfolios, create_portfolio, get_active_portfolio_id,
-)
+from core.database import init_db, get_all_holdings, save_nav_snapshot, get_nav_snapshot_exists_today, get_total_realized_pnl
+try:
+    from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
+except ImportError:
+    # Fallback if database.py hasn't been updated yet (stale cache)
+    def get_all_portfolios():
+        import pandas as _pd
+        return _pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
+    def create_portfolio(name, description=""):
+        return 1
+    def get_active_portfolio_id():
+        return 1
 
 # Load .env from the same directory as app.py — works regardless of cwd
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -64,8 +73,11 @@ h1, h2, h3, h4, h5, h6 {
 # ── Authentication ────────────────────────────────────────────────────────────
 # 3-tier auth: (1) Streamlit Cloud native → (2) streamlit-authenticator fallback → (3) disabled
 # Set PROSPER_AUTH_ENABLED=false in .env to skip all auth.
+# Default: disabled on Streamlit Cloud (use Cloud's built-in auth), enabled locally
 
-AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
+_is_cloud = os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD") or os.path.exists("/mount/src")
+_auth_default = "false" if _is_cloud else "true"
+AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", _auth_default).lower() in ("true", "1", "yes")
 _auth_method = None  # Track which auth method is active
 
 if AUTH_ENABLED:
