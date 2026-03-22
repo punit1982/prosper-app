@@ -408,6 +408,9 @@ def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame
         hist = get_history(t, period=period)
         if hist is not None and not hist.empty:
             close = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
+            # Ensure it's a Series, not a DataFrame (can happen with duplicate columns)
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
             frames[t] = close
         else:
             failed.append(t)
