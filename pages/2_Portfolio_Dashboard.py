@@ -86,6 +86,20 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
+    # ── Quick IBKR Sync (only if configured) ──
+    try:
+        from core.settings import get_api_key as _dash_get_api_key, load_user_settings as _dash_load_settings
+        _ibkr_token = _dash_get_api_key("IBKR_FLEX_TOKEN")
+        _ibkr_placeholder = "your_" in _ibkr_token.lower() if _ibkr_token else True
+        _ibkr_qid = _dash_load_settings().get("ibkr_flex_query_id", "")
+        if bool(_ibkr_token) and not _ibkr_placeholder and _ibkr_qid:
+            st.divider()
+            if st.button("🔗 Sync IBKR", use_container_width=True,
+                          help="Quick sync from Interactive Brokers via Flex Query"):
+                st.switch_page("pages/25_IBKR_Sync.py")
+    except Exception:
+        pass
+
     # ── Cash Management ──
     st.divider()
     st.subheader("💵 Cash & Margin")

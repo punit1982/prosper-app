@@ -140,6 +140,7 @@ optional_apis = {
     "Twelve Data (UAE/DFM quotes)":         get_api_key("TWELVE_DATA_API_KEY"),
     "Serper / Google Search (news + analysis)": get_api_key("SERPER_API_KEY"),
     "Financial Modeling Prep":              get_api_key("FMP_API_KEY"),
+    "IBKR Flex Token (broker sync)":        get_api_key("IBKR_FLEX_TOKEN"),
 }
 
 st.markdown("**Required:**")
