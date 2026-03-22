@@ -20,8 +20,6 @@ fastReruns = true
 
 [browser]
 gatherUsageStats = false
-# Keep server alive even when browser tab is closed
-serverAddress = "localhost"
 
 [global]
 # Suppress deprecation warnings that can clutter stderr and trigger restarts
