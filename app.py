@@ -406,6 +406,7 @@ pg = st.navigation({
     "Settings": [
         st.Page("pages/0_Settings.py",           title="Settings",            icon="⚙️"),
         st.Page("pages/1_Upload_Portal.py",      title="Upload Portal",       icon="📤"),
+        st.Page("pages/25_IBKR_Sync.py",         title="IBKR Sync",          icon="🔗"),
         st.Page("pages/17_User_Management.py",   title="Users",               icon="👥"),
     ],
 })
