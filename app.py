@@ -1,7 +1,7 @@
 """
 Prosper — AI-Native Investment Operating System
 Main entrypoint: page config, DB init, authentication, and navigation.
-v5.3 — Multi-portfolio, AI Chat, resolved ticker fixes
+v5.4 — Multi-user auth, user-scoped portfolios, Cloud SSO support
 """
 
 import os
@@ -21,6 +21,14 @@ except ImportError:
         return 1
     def get_active_portfolio_id():
         return 1
+
+# Import user-scoped portfolio helper (created by another agent in database.py)
+try:
+    from core.database import get_or_create_user_portfolios
+except ImportError:
+    # Fallback: if function doesn't exist yet, delegate to get_all_portfolios
+    def get_or_create_user_portfolios(user_id):
+        return get_all_portfolios()
 
 # Load .env from the same directory as app.py — works regardless of cwd
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -115,39 +123,85 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 
 # ── Authentication ────────────────────────────────────────────────────────────
-# 3-tier auth: (1) Streamlit Cloud native → (2) streamlit-authenticator fallback → (3) disabled
+# 3-tier auth:
+#   (1) Streamlit Cloud native (st.context.user) — platform handles SSO
+#   (2) streamlit-authenticator (local YAML-based login)
+#   (3) Auth disabled — user_id = "default", everything works as before
 # Set PROSPER_AUTH_ENABLED=false in .env to skip all auth.
-# Default: disabled on Streamlit Cloud (use Cloud's built-in auth), enabled locally
 
-_is_cloud = (os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD")
-             or os.path.exists("/mount/src") or os.path.exists("/home/adminuser"))
-# On Cloud: ALWAYS skip custom auth — Cloud handles auth at the platform level
-# Force AUTH_ENABLED = False on Cloud regardless of env var
+_is_cloud = bool(
+    os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD")
+    or os.path.exists("/mount/src") or os.path.exists("/home/adminuser")
+)
+
+AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
+# On Cloud, disable our custom login form — Cloud handles auth at the platform level.
+# But we still try to read the Cloud user identity below.
 if _is_cloud:
     AUTH_ENABLED = False
-else:
-    AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
-_auth_method = None  # Track which auth method is active
 
-if AUTH_ENABLED:
-    # ── Tier 1: Streamlit Cloud built-in auth (Google/GitHub SSO) ─────────
-    _cloud_user = None
-    try:
-        _cloud_user = st.context.user if hasattr(st, "context") and hasattr(st.context, "user") else None
-    except Exception:
-        pass
-    if _cloud_user is None:
+_auth_method = None  # Track which auth method is active
+_is_authenticated = False  # Gate for navigation rendering
+
+
+def _do_logout():
+    """Clear ALL session state keys related to user data on logout."""
+    _keys_to_clear = []
+    for _k in list(st.session_state.keys()):
+        if (_k.startswith("enriched_") or _k.startswith("_prosper_holdings_cache")
+                or _k in ("extended_df", "last_refresh_time", "active_portfolio_id",
+                          "user_id", "mini_chat", "global_currency_filter",
+                          "authentication_status", "username", "name", "logout")):
+            _keys_to_clear.append(_k)
+    for _k in _keys_to_clear:
         try:
-            _cloud_user = st.experimental_user if hasattr(st, "experimental_user") else None
-        except Exception:
+            del st.session_state[_k]
+        except KeyError:
             pass
 
-    if _cloud_user and getattr(_cloud_user, "email", None):
-        # Authenticated via Streamlit Cloud
+
+# ── Tier 0: Cloud user detection (runs regardless of AUTH_ENABLED) ────────
+# On Streamlit Cloud with viewer auth enabled, st.context.user has the email.
+# We always try to grab this so user_id is set even when AUTH_ENABLED=False on Cloud.
+_cloud_user = None
+try:
+    _cloud_user = st.context.user if hasattr(st, "context") and hasattr(st.context, "user") else None
+except Exception:
+    pass
+if _cloud_user is None:
+    try:
+        _cloud_user = st.experimental_user if hasattr(st, "experimental_user") else None
+    except Exception:
+        pass
+
+_cloud_email = None
+if _cloud_user:
+    _cloud_email = getattr(_cloud_user, "email", None)
+    # Some versions return a dict-like object
+    if _cloud_email is None and isinstance(_cloud_user, dict):
+        _cloud_email = _cloud_user.get("email")
+    # Treat anonymous/empty as no user
+    if _cloud_email and _cloud_email.lower() in ("", "anonymous", "null", "none"):
+        _cloud_email = None
+
+if _is_cloud:
+    # Cloud path: user is authenticated by the platform (or auth not configured)
+    if _cloud_email:
+        st.session_state["user_id"] = _cloud_email
         _auth_method = "cloud"
-        with st.sidebar:
-            st.markdown(f"👤 **{_cloud_user.email}**")
-            st.divider()
+        _is_authenticated = True
+    else:
+        # Cloud auth not configured or anonymous access — allow but use default
+        st.session_state.setdefault("user_id", "default")
+        _is_authenticated = True
+
+elif AUTH_ENABLED:
+    # ── Tier 1: Check if Cloud SSO provided a user (even when running locally
+    #    behind a proxy that sets st.context.user) ────────────────────────────
+    if _cloud_email:
+        st.session_state["user_id"] = _cloud_email
+        _auth_method = "cloud"
+        _is_authenticated = True
     else:
         # ── Tier 2: streamlit-authenticator (local/fallback) ──────────────
         try:
@@ -156,146 +210,210 @@ if AUTH_ENABLED:
 
             _auth_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_config.yaml")
 
+            # ── First-run setup: create auth_config.yaml if missing or empty ──
+            _need_first_run_setup = False
+            _auth_config = None
+
             if os.path.exists(_auth_config_path):
                 with open(_auth_config_path) as _f:
                     _auth_config = yaml.safe_load(_f)
-
-                authenticator = stauth.Authenticate(
-                    _auth_config["credentials"],
-                    _auth_config["cookie"]["name"],
-                    _auth_config["cookie"]["key"],
-                    _auth_config["cookie"]["expiry_days"],
-                )
-
-                if st.session_state.get("authentication_status") not in (True,):
-                    # Modern centered login page with registration + social auth
-                    _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
-                    with _login_col:
-                        st.markdown(
-                            "<div style='text-align:center;margin-top:2rem'>"
-                            "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
-                            "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                        # ── Social Login Buttons ──
-                        st.markdown(
-                            "<div style='margin:1.5rem 0 0.5rem 0'>"
-                            "<style>"
-                            ".social-btn { display:flex; align-items:center; justify-content:center; gap:10px; "
-                            "padding:10px 16px; border-radius:8px; font-weight:600; font-size:0.95rem; "
-                            "cursor:pointer; width:100%; margin-bottom:10px; border:1px solid rgba(255,255,255,0.15); "
-                            "text-decoration:none; color:#eee; transition:background 0.2s; }"
-                            ".social-btn:hover { background:rgba(255,255,255,0.08) !important; }"
-                            ".social-btn-google { background:rgba(66,133,244,0.12); }"
-                            ".social-btn-github { background:rgba(255,255,255,0.05); }"
-                            "</style>"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                        # Google button
-                        _google_client = os.getenv("GOOGLE_CLIENT_ID", "")
-                        _github_client = os.getenv("GITHUB_CLIENT_ID", "")
-
-                        _g1, _g2 = st.columns(2)
-                        with _g1:
-                            if st.button("Continue with Google", key="_google_login", use_container_width=True, type="secondary"):
-                                if _google_client:
-                                    st.session_state["_pending_oauth"] = "google"
-                                    st.rerun()
-                                else:
-                                    st.info("Google login available on Streamlit Cloud or configure GOOGLE_CLIENT_ID in .env")
-                        with _g2:
-                            if st.button("Continue with GitHub", key="_github_login", use_container_width=True, type="secondary"):
-                                if _github_client:
-                                    st.session_state["_pending_oauth"] = "github"
-                                    st.rerun()
-                                else:
-                                    st.info("GitHub login available on Streamlit Cloud or configure GITHUB_CLIENT_ID in .env")
-
-                        st.markdown(
-                            "<div style='text-align:center;margin:12px 0;color:#555;font-size:0.85rem'>"
-                            "--- or sign in with your account ---</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                        _login_tab, _register_tab = st.tabs(["Sign In", "Create Account"])
-
-                        with _login_tab:
-                            authenticator.login()
-                            if st.session_state.get("authentication_status") is False:
-                                st.error("Invalid credentials.")
-
-                        with _register_tab:
-                            st.markdown("##### Create your Prosper account")
-                            with st.form("register_form", clear_on_submit=True):
-                                _reg_c1, _reg_c2 = st.columns(2)
-                                with _reg_c1:
-                                    _reg_first = st.text_input("First Name", key="_reg_first")
-                                with _reg_c2:
-                                    _reg_last = st.text_input("Last Name", key="_reg_last")
-                                _reg_email = st.text_input("Email", placeholder="you@example.com", key="_reg_email")
-                                _reg_pw = st.text_input("Password (min 6 characters)", type="password", key="_reg_pw")
-                                _reg_pw2 = st.text_input("Confirm Password", type="password", key="_reg_pw2")
-                                _reg_submit = st.form_submit_button("Create Account", type="primary", use_container_width=True)
-
-                                if _reg_submit:
-                                    _reg_errors = []
-                                    if not _reg_email or "@" not in _reg_email:
-                                        _reg_errors.append("Valid email address required.")
-                                    if not _reg_first.strip() or not _reg_last.strip():
-                                        _reg_errors.append("First and last name required.")
-                                    if not _reg_pw or len(_reg_pw) < 6:
-                                        _reg_errors.append("Password must be at least 6 characters.")
-                                    if _reg_pw != _reg_pw2:
-                                        _reg_errors.append("Passwords do not match.")
-
-                                    # Derive username from email
-                                    _reg_username = _reg_email.split("@")[0].lower().replace(".", "_").replace("-", "_").replace("+", "_") if _reg_email else ""
-                                    _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
-                                    if _reg_username in _existing_users:
-                                        _reg_errors.append(f"An account with this email already exists. Please sign in.")
-
-                                    if _reg_errors:
-                                        for _e in _reg_errors:
-                                            st.error(_e)
-                                    else:
-                                        _hashed_pw = stauth.Hasher.hash(_reg_pw)
-                                        _auth_config["credentials"]["usernames"][_reg_username] = {
-                                            "email": _reg_email.strip(),
-                                            "first_name": _reg_first.strip(),
-                                            "last_name": _reg_last.strip(),
-                                            "password": _hashed_pw,
-                                            "role": "user",
-                                        }
-                                        with open(_auth_config_path, "w") as _wf:
-                                            yaml.dump(_auth_config, _wf, default_flow_style=False)
-                                        st.success(
-                                            f"✅ Account created! Your username is **{_reg_username}**\n\n"
-                                            f"Switch to the **Sign In** tab to log in."
-                                        )
-
-                    st.stop()
-
-                # Authenticated — show user in sidebar
-                _auth_method = "local"
-                with st.sidebar:
-                    st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
-                    authenticator.logout("Logout", "sidebar")
-                    st.divider()
+                # Check if there are ANY users configured
+                _existing_usernames = (_auth_config or {}).get("credentials", {}).get("usernames", {})
+                if not _existing_usernames:
+                    _need_first_run_setup = True
             else:
-                AUTH_ENABLED = False
+                _need_first_run_setup = True
+
+            if _need_first_run_setup:
+                # ── First-run admin setup flow ────────────────────────────
+                _pad_l, _setup_col, _pad_r = st.columns([1, 2, 1])
+                with _setup_col:
+                    st.markdown(
+                        "<div style='text-align:center;margin-top:2rem'>"
+                        "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
+                        "<p style='color:#888;margin-top:4px;font-size:1.1rem'>First-Time Setup</p>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.info("No admin account found. Create your admin credentials to get started.")
+
+                    with st.form("first_run_setup", clear_on_submit=False):
+                        _setup_c1, _setup_c2 = st.columns(2)
+                        with _setup_c1:
+                            _setup_first = st.text_input("First Name", key="_setup_first")
+                        with _setup_c2:
+                            _setup_last = st.text_input("Last Name", key="_setup_last")
+                        _setup_email = st.text_input("Email", placeholder="admin@example.com", key="_setup_email")
+                        _setup_username = st.text_input("Username", placeholder="admin", key="_setup_username")
+                        _setup_pw = st.text_input("Password (min 6 characters)", type="password", key="_setup_pw")
+                        _setup_pw2 = st.text_input("Confirm Password", type="password", key="_setup_pw2")
+                        _setup_submit = st.form_submit_button("Create Admin Account", type="primary", use_container_width=True)
+
+                        if _setup_submit:
+                            _setup_errors = []
+                            if not _setup_username or not _setup_username.strip():
+                                _setup_errors.append("Username is required.")
+                            if not _setup_email or "@" not in _setup_email:
+                                _setup_errors.append("Valid email address required.")
+                            if not _setup_first.strip() or not _setup_last.strip():
+                                _setup_errors.append("First and last name required.")
+                            if not _setup_pw or len(_setup_pw) < 6:
+                                _setup_errors.append("Password must be at least 6 characters.")
+                            if _setup_pw != _setup_pw2:
+                                _setup_errors.append("Passwords do not match.")
+
+                            if _setup_errors:
+                                for _e in _setup_errors:
+                                    st.error(_e)
+                            else:
+                                _hashed_pw = stauth.Hasher.hash(_setup_pw)
+                                _new_config = {
+                                    "credentials": {
+                                        "usernames": {
+                                            _setup_username.strip().lower(): {
+                                                "email": _setup_email.strip(),
+                                                "first_name": _setup_first.strip(),
+                                                "last_name": _setup_last.strip(),
+                                                "password": _hashed_pw,
+                                                "role": "admin",
+                                            }
+                                        }
+                                    },
+                                    "cookie": {
+                                        "name": "prosper_auth",
+                                        "key": f"prosper_auth_cookie_key_{datetime.now().strftime('%Y')}",
+                                        "expiry_days": 30,
+                                    },
+                                }
+                                with open(_auth_config_path, "w") as _wf:
+                                    yaml.dump(_new_config, _wf, default_flow_style=False)
+                                st.success("Admin account created. The page will reload.")
+                                st.rerun()
+
+                st.stop()
+
+            # ── Normal YAML-based login ───────────────────────────────────
+            authenticator = stauth.Authenticate(
+                _auth_config["credentials"],
+                _auth_config["cookie"]["name"],
+                _auth_config["cookie"]["key"],
+                _auth_config["cookie"]["expiry_days"],
+            )
+
+            if st.session_state.get("authentication_status") not in (True,):
+                # ── Login page — NO sidebar navigation visible ────────────
+                _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
+                with _login_col:
+                    st.markdown(
+                        "<div style='text-align:center;margin-top:2rem'>"
+                        "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
+                        "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown(
+                        "<p style='text-align:center;margin:1.5rem 0 0.5rem 0;color:#aaa;font-size:0.9rem'>"
+                        "Sign in with your credentials below</p>",
+                        unsafe_allow_html=True,
+                    )
+
+                    _login_tab, _register_tab = st.tabs(["Sign In", "Create Account"])
+
+                    with _login_tab:
+                        authenticator.login()
+                        if st.session_state.get("authentication_status") is False:
+                            st.error("Invalid credentials.")
+
+                    with _register_tab:
+                        st.markdown("##### Create your Prosper account")
+                        with st.form("register_form", clear_on_submit=True):
+                            _reg_c1, _reg_c2 = st.columns(2)
+                            with _reg_c1:
+                                _reg_first = st.text_input("First Name", key="_reg_first")
+                            with _reg_c2:
+                                _reg_last = st.text_input("Last Name", key="_reg_last")
+                            _reg_email = st.text_input("Email", placeholder="you@example.com", key="_reg_email")
+                            _reg_pw = st.text_input("Password (min 6 characters)", type="password", key="_reg_pw")
+                            _reg_pw2 = st.text_input("Confirm Password", type="password", key="_reg_pw2")
+                            _reg_submit = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+
+                            if _reg_submit:
+                                _reg_errors = []
+                                if not _reg_email or "@" not in _reg_email:
+                                    _reg_errors.append("Valid email address required.")
+                                if not _reg_first.strip() or not _reg_last.strip():
+                                    _reg_errors.append("First and last name required.")
+                                if not _reg_pw or len(_reg_pw) < 6:
+                                    _reg_errors.append("Password must be at least 6 characters.")
+                                if _reg_pw != _reg_pw2:
+                                    _reg_errors.append("Passwords do not match.")
+
+                                # Derive username from email
+                                _reg_username = _reg_email.split("@")[0].lower().replace(".", "_").replace("-", "_").replace("+", "_") if _reg_email else ""
+                                _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
+                                if _reg_username in _existing_users:
+                                    _reg_errors.append("An account with this email already exists. Please sign in.")
+
+                                if _reg_errors:
+                                    for _e in _reg_errors:
+                                        st.error(_e)
+                                else:
+                                    _hashed_pw = stauth.Hasher.hash(_reg_pw)
+                                    _auth_config["credentials"]["usernames"][_reg_username] = {
+                                        "email": _reg_email.strip(),
+                                        "first_name": _reg_first.strip(),
+                                        "last_name": _reg_last.strip(),
+                                        "password": _hashed_pw,
+                                        "role": "user",
+                                    }
+                                    with open(_auth_config_path, "w") as _wf:
+                                        yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                    st.success(
+                                        f"Account created! Your username is **{_reg_username}**\n\n"
+                                        f"Switch to the **Sign In** tab to log in."
+                                    )
+
+                # Stop here — no navigation, no sidebar pages
+                st.stop()
+
+            # ── Authenticated via local YAML ──────────────────────────────
+            _auth_method = "local"
+            _is_authenticated = True
+            st.session_state["user_id"] = st.session_state.get("username", "default")
+            with st.sidebar:
+                st.markdown(f"**{st.session_state.get('name', 'User')}**")
+                if authenticator.logout("Logout", "sidebar"):
+                    _do_logout()
+                    st.rerun()
+                st.divider()
+
         except ImportError:
+            # streamlit-authenticator not installed — disable auth
             AUTH_ENABLED = False
+            _is_authenticated = True
+            st.session_state.setdefault("user_id", "default")
         except Exception as auth_err:
             st.warning(f"Authentication error: {auth_err}. Running without login.")
             AUTH_ENABLED = False
+            _is_authenticated = True
+            st.session_state.setdefault("user_id", "default")
+
+else:
+    # Auth disabled — backward compatible, everything works as before
+    _is_authenticated = True
+    st.session_state.setdefault("user_id", "default")
+
+# Show Cloud user in sidebar when authenticated via Cloud SSO
+if _auth_method == "cloud" and _cloud_email:
+    with st.sidebar:
+        st.markdown(f"**{_cloud_email}**")
+        st.divider()
 
 
-# ── Portfolio Selector ─────────────────────────────────────────────────────────
-_portfolios_df = get_all_portfolios()
+# ── Portfolio Selector (user-scoped) ───────────────────────────────────────────
+_current_user_id = st.session_state.get("user_id", "default")
+_portfolios_df = get_or_create_user_portfolios(_current_user_id)
 if not _portfolios_df.empty:
     _pf_names = _portfolios_df["name"].tolist()
     _pf_ids = _portfolios_df["id"].tolist()

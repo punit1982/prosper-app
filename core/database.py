@@ -135,6 +135,7 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS portfolios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
+            user_id TEXT DEFAULT 'default',
             description TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
         """CREATE TABLE IF NOT EXISTS briefing_cache (
@@ -143,6 +144,10 @@ def init_db():
             currency TEXT DEFAULT 'USD',
             content TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id TEXT PRIMARY KEY,
+            settings_json TEXT DEFAULT '{}',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
 
     conn = _get_connection()
@@ -175,6 +180,12 @@ def init_db():
                 conn2.commit()
         except Exception:
             pass
+        # Migration: add user_id column to portfolios if missing
+        try:
+            conn2.execute("ALTER TABLE portfolios ADD COLUMN user_id TEXT DEFAULT 'default'")
+            conn2.commit()
+        except Exception:
+            pass  # Column already exists — that's fine
         conn2.close()
     except Exception:
         pass  # Migration is best-effort — app works without it
@@ -185,18 +196,31 @@ def init_db():
 # PORTFOLIOS
 # ─────────────────────────────────────────
 
-def get_all_portfolios() -> pd.DataFrame:
-    """Return all portfolios."""
+def get_all_portfolios(user_id: str = None) -> pd.DataFrame:
+    """Return all portfolios. If user_id is provided, filter by it."""
     conn = _get_connection()
-    df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
+    if user_id is not None:
+        try:
+            df = _read_sql("SELECT * FROM portfolios WHERE user_id = ? ORDER BY id ASC", conn, params=(user_id,))
+        except Exception:
+            # user_id column may not exist yet — fall back to unfiltered
+            df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
+    else:
+        df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
     conn.close()
     return df
 
 
-def create_portfolio(name: str, description: str = "") -> int:
+def create_portfolio(name: str, description: str = "", user_id: str = "default") -> int:
     """Create a new portfolio. Returns its ID."""
     conn = _get_connection()
-    conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)", (name.strip(), description.strip()))
+    try:
+        conn.execute("INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
+                     (name.strip(), description.strip(), user_id))
+    except Exception:
+        # user_id column may not exist — insert without it
+        conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)",
+                     (name.strip(), description.strip()))
     conn.commit()
     row = conn.execute("SELECT id FROM portfolios WHERE name = ?", (name.strip(),)).fetchone()
     conn.close()
@@ -233,6 +257,51 @@ def delete_portfolio(portfolio_id: int):
 def get_active_portfolio_id() -> int:
     """Return the currently selected portfolio ID from session state."""
     return st.session_state.get("active_portfolio_id", 1)
+
+
+def get_or_create_user_portfolios(user_id: str) -> pd.DataFrame:
+    """Get portfolios for a user_id. If none exist, create a 'Main Portfolio' and return it."""
+    df = get_all_portfolios(user_id=user_id)
+    if df.empty:
+        create_portfolio(name="Main Portfolio", description="Default portfolio", user_id=user_id)
+        df = get_all_portfolios(user_id=user_id)
+    return df
+
+
+# ─────────────────────────────────────────
+# USER PREFERENCES  (per-user settings)
+# ─────────────────────────────────────────
+
+def get_user_settings_db(user_id: str) -> dict:
+    """Return per-user settings dict from the user_preferences table. Empty dict if none found."""
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT settings_json FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+        if row:
+            raw = row[0] if isinstance(row, (tuple, list)) else row["settings_json"]
+            return json.loads(raw) if raw else {}
+    except Exception:
+        pass
+    return {}
+
+
+def save_user_settings_db(user_id: str, settings: dict) -> None:
+    """Upsert per-user settings into the user_preferences table."""
+    try:
+        conn = _get_connection()
+        conn.execute(
+            """INSERT OR REPLACE INTO user_preferences (user_id, settings_json, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)""",
+            (user_id, json.dumps(settings, default=str)),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────
