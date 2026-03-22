@@ -21,7 +21,15 @@ st.markdown(
 
 # ── Ticker Selection ──
 holdings = get_all_holdings()
-portfolio_tickers = sorted(holdings["ticker"].unique().tolist()) if not holdings.empty else []
+_enriched = st.session_state.get(f"enriched_{st.session_state.get('base_currency', 'USD')}")
+_t_col = "ticker"
+if _enriched is not None and "ticker_resolved" in _enriched.columns:
+    portfolio_tickers = sorted(_enriched["ticker_resolved"].unique().tolist())
+    _t_col = "ticker_resolved"
+elif not holdings.empty:
+    portfolio_tickers = sorted(holdings["ticker"].unique().tolist())
+else:
+    portfolio_tickers = []
 
 col_ticker, col_period = st.columns([2, 1])
 with col_ticker:
@@ -43,6 +51,11 @@ def _load_history(ticker, period):
 
 with st.spinner(f"Loading {ticker} data…"):
     hist = _load_history(ticker, period)
+
+if hist is not None and isinstance(hist.columns, pd.MultiIndex):
+    hist = hist.droplevel(level=1, axis=1)
+if hist is not None and not hist.empty:
+    hist = hist.loc[:, ~hist.columns.duplicated()]
 
 if hist is None or hist.empty:
     st.warning(f"No historical data available for {ticker}. Try a US-listed ticker.")

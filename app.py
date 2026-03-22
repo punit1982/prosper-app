@@ -121,8 +121,12 @@ h1, h2, h3, h4, h5, h6 {
 
 _is_cloud = (os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD")
              or os.path.exists("/mount/src") or os.path.exists("/home/adminuser"))
-# On Cloud: skip all custom auth (Cloud handles auth at the platform level)
-AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "false" if _is_cloud else "true").lower() in ("true", "1", "yes")
+# On Cloud: ALWAYS skip custom auth — Cloud handles auth at the platform level
+# Force AUTH_ENABLED = False on Cloud regardless of env var
+if _is_cloud:
+    AUTH_ENABLED = False
+else:
+    AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 _auth_method = None  # Track which auth method is active
 
 if AUTH_ENABLED:
