@@ -319,7 +319,11 @@ try:
             h = get_history(t, yf_period)
             if isinstance(h, pd.DataFrame) and len(h) >= 2:
                 col = "Close" if "Close" in h.columns else h.columns[0]
-                return t, yf_period, h[col].dropna()
+                series = h[col]
+                # yf.download can return DataFrame for a column if MultiIndex wasn't fully flattened
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                return t, yf_period, series.dropna()
             if isinstance(h, pd.Series) and len(h) >= 2:
                 return t, yf_period, h.dropna()
             return t, yf_period, None

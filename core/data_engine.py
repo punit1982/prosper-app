@@ -1146,9 +1146,12 @@ def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
     try:
         data = yf.download(ticker, period=period, auto_adjust=True, progress=False)
         if data is not None and not data.empty:
-            # yf.download for single ticker may return MultiIndex or flat columns
+            # yf.download for single ticker returns MultiIndex columns like (Price, Ticker)
+            # Flatten to just Price level (Close, Open, High, Low, Volume)
             if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
+                data = data.droplevel(level=1, axis=1)
+                # Remove any duplicate columns after flattening
+                data = data.loc[:, ~data.columns.duplicated()]
             return data
     except Exception:
         pass

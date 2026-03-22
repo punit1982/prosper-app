@@ -93,7 +93,10 @@ try:
         def _fetch_hist(ticker):
             h = get_history(ticker, period)
             if not h.empty and "Close" in h.columns:
-                return ticker, h["Close"]
+                close = h["Close"]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
+                return ticker, close
             return ticker, None
 
         with ThreadPoolExecutor(max_workers=min(len(live_tickers), 15)) as pool:
@@ -107,7 +110,10 @@ try:
         def _fetch_bench(name):
             h = get_benchmark_history(name, period)
             if not h.empty and "Close" in h.columns:
-                return name, h["Close"]
+                close = h["Close"]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
+                return name, close
             return name, None
 
         if selected_benchmarks:
