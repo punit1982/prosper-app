@@ -877,11 +877,12 @@ with tab_technical:
     try:
         st.subheader("Technical Signals")
         _tech_hist = get_history(ticker, "1y")
-        # Flatten duplicate columns from yf.download MultiIndex
-        if _tech_hist is not None and isinstance(_tech_hist.columns, pd.MultiIndex):
-            _tech_hist = _tech_hist.droplevel(level=1, axis=1)
-        if _tech_hist is not None and not _tech_hist.empty:
-            _tech_hist = _tech_hist.loc[:, ~_tech_hist.columns.duplicated()]
+        # Fallback to longer periods if not enough data
+        if _tech_hist is None or _tech_hist.empty or len(_tech_hist) < 50:
+            for _fp in ["2y", "5y"]:
+                _tech_hist = get_history(ticker, _fp)
+                if _tech_hist is not None and not _tech_hist.empty and len(_tech_hist) >= 50:
+                    break
         if _tech_hist is not None and not _tech_hist.empty and len(_tech_hist) >= 50:
             _tc = "Close" if "Close" in _tech_hist.columns else _tech_hist.columns[0]
             _closes = _tech_hist[_tc]
@@ -1309,7 +1310,7 @@ with tab_ai:
                 # Probability-weighted fair value
                 _pw_fv = (_bear * _p_bear + _base * _p_base + _bull * _p_bull) / 100 if (_p_bear + _p_base + _p_bull) > 0 else _base
 
-                fv_chart_col, fv_metrics_col = st.columns([3, 2])
+                fv_chart_col, fv_metrics_col = st.columns([1, 1])
 
                 with fv_chart_col:
                     # Horizontal bar chart showing bear/base/bull ranges

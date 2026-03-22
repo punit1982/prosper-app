@@ -1188,6 +1188,21 @@ def _adx_history_to_df(csv_text: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _sanitize_hist(df: pd.DataFrame) -> pd.DataFrame:
+    """Guarantee flat columns, no duplicates, tz-naive index — called on ALL history output."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    # Flatten MultiIndex columns from yf.download (e.g. ("Close", "NVO") -> "Close")
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.droplevel(level=1, axis=1)
+    # Remove duplicate columns
+    df = df.loc[:, ~df.columns.duplicated()]
+    # Make index tz-naive to prevent "Cannot join tz-naive with tz-aware" errors
+    if hasattr(df.index, 'tz') and df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    return df
+
+
 def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     """Fetch OHLCV history for a ticker.
 
@@ -1197,6 +1212,8 @@ def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
       3. yfinance with the resolved ticker as-is
       4. yfinance fallback: try stripping Twelve Data format (EMAAR:DFM -> EMAAR)
       5. yfinance fallback: try with .AE suffix for bare UAE tickers
+
+    ALL output is sanitized: flat columns, no duplicates, tz-naive index.
     """
     cached = _cache_get(f"hist_{ticker}_{period}", HISTORY_TTL)
     if cached is not None:
@@ -1223,7 +1240,7 @@ def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
         pass
 
     # ── Primary: yfinance with ticker as-is ──
-    hist = _yf_fetch_history(ticker, period)
+    hist = _sanitize_hist(_yf_fetch_history(ticker, period))
     if not hist.empty:
         _cache_set(f"hist_{ticker}_{period}", hist)
         return hist
@@ -1231,7 +1248,7 @@ def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     # ── Fallback 1: strip Twelve Data format (e.g. "EMAAR:DFM" -> try "EMAAR") ──
     if ":" in ticker:
         base = ticker.split(":")[0]
-        hist = _yf_fetch_history(base, period)
+        hist = _sanitize_hist(_yf_fetch_history(base, period))
         if not hist.empty:
             _cache_set(f"hist_{ticker}_{period}", hist)
             return hist
@@ -1239,14 +1256,14 @@ def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     # ── Fallback 2: strip .AE suffix and try bare ticker on yfinance ──
     if ticker.endswith(".AE"):
         bare = ticker[:-3]
-        hist = _yf_fetch_history(bare, period)
+        hist = _sanitize_hist(_yf_fetch_history(bare, period))
         if not hist.empty:
             _cache_set(f"hist_{ticker}_{period}", hist)
             return hist
 
     # ── Fallback 3: for bare tickers, try adding .AE suffix ──
     if "." not in ticker and ":" not in ticker:
-        hist = _yf_fetch_history(f"{ticker}.AE", period)
+        hist = _sanitize_hist(_yf_fetch_history(f"{ticker}.AE", period))
         if not hist.empty:
             _cache_set(f"hist_{ticker}_{period}", hist)
             return hist
