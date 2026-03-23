@@ -36,7 +36,7 @@ _AUTH_CONFIG_PATH = os.path.join(_APP_DIR, "auth_config.yaml")
 _GOOGLE_CREDS_PATH = os.path.join(_APP_DIR, "google_credentials.json")
 
 _COOKIE_NAME = "prosper_auth"
-_COOKIE_KEY = "prosper_auth_cookie_key_2026_v2"
+_COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "prosper_auth_cookie_key_2026_v2")
 _COOKIE_EXPIRY_DAYS = 30
 
 _HIDE_SIDEBAR_CSS = (
@@ -122,35 +122,46 @@ def _db_create_user(username, email, first_name, last_name, password_hash, role=
         raise
 
 
+_ALLOWED_USER_FIELDS = {"email", "first_name", "last_name", "password_hash", "role"}
+
+
 def _db_update_user(username, **fields):
-    """Update user fields in the database."""
+    """Update user fields in the database. Only whitelisted column names accepted."""
+    # Sanitize: only allow known column names (prevents SQL injection via field names)
+    safe_fields = {k: v for k, v in fields.items() if k in _ALLOWED_USER_FIELDS}
+    if not safe_fields:
+        return
+
+    from core.db_connector import get_connection
+    conn = None
     try:
-        from core.database import get_user_by_username
-        from core.db_connector import get_connection
         conn = get_connection()
         set_clauses = []
         values = []
-        for key, val in fields.items():
+        for key, val in safe_fields.items():
             set_clauses.append(f"{key} = ?")
             values.append(val)
-        if set_clauses:
-            values.append(username)
-            conn.execute(
-                f"UPDATE users SET {', '.join(set_clauses)} WHERE username = ?",
-                tuple(values),
-            )
-            conn.commit()
-        conn.close()
-    except Exception:
-        pass
+        values.append(username)
+        conn.execute(
+            f"UPDATE users SET {', '.join(set_clauses)} WHERE username = ?",
+            tuple(values),
+        )
+        conn.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("prosper.auth").warning(f"Failed to update user {username}: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _db_delete_user(username: str):
-    try:
-        from core.database import delete_user
-        delete_user(username)
-    except Exception:
-        pass
+    """Delete a user from the database. Raises on failure so caller knows."""
+    from core.database import delete_user
+    delete_user(username)
 
 
 # ─────────────────────────────────────────
@@ -300,7 +311,7 @@ def _show_google_signin() -> bool:
         g_auth = GoogleAuth(
             secret_credentials_path=_GOOGLE_CREDS_PATH,
             cookie_name="prosper_google_auth",
-            cookie_key="prosper_google_secret_key_2026",
+            cookie_key=os.getenv("PROSPER_GOOGLE_COOKIE_SECRET", "prosper_google_secret_2026"),
             redirect_uri=redirect_uri,
         )
         g_auth.check_authentification()
@@ -411,8 +422,6 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
                 st.session_state["auth_method"] = "email"
                 st.balloons()
                 st.success(f"Welcome to Prosper, **{first.strip()}**! Your account is ready.")
-                import time
-                time.sleep(1)
                 st.rerun()
                 return True
 

@@ -8,9 +8,8 @@ font = "sans serif"
 [server]
 maxUploadSize = 50
 headless = true
-# Prevent server from dying on unhandled exceptions in threads
-enableCORS = false
-enableXsrfProtection = false
+enableCORS = true
+enableXsrfProtection = true
 
 [runner]
 # Magic auto-rerun is disabled — prevents runaway re-runs during heavy fetches
@@ -22,5 +21,4 @@ fastReruns = true
 gatherUsageStats = false
 
 [global]
-# Suppress deprecation warnings that can clutter stderr and trigger restarts
-suppressDeprecationWarnings = true
+suppressDeprecationWarnings = false
