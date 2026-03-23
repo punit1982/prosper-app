@@ -190,6 +190,12 @@ if _is_cloud:
         st.session_state["user_id"] = _cloud_email
         _auth_method = "cloud"
         _is_authenticated = True
+        with st.sidebar:
+            st.markdown(f"👤 **{_cloud_email}**")
+            if st.button("Logout", key="cloud_logout"):
+                _do_logout()
+                st.rerun()
+            st.divider()
     else:
         # Cloud auth not configured or anonymous access — allow but use default
         st.session_state.setdefault("user_id", "default")
@@ -382,8 +388,14 @@ elif AUTH_ENABLED:
             _is_authenticated = True
             st.session_state["user_id"] = st.session_state.get("username", "default")
             with st.sidebar:
-                st.markdown(f"**{st.session_state.get('name', 'User')}**")
-                if authenticator.logout("Logout", "sidebar"):
+                st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
+                try:
+                    authenticator.logout("Logout", "sidebar", key="sidebar_logout")
+                except Exception:
+                    pass
+                # Fallback logout button in case authenticator version doesn't render one
+                if st.button("Sign Out", key="manual_logout"):
+                    st.session_state["authentication_status"] = None
                     _do_logout()
                     st.rerun()
                 st.divider()
