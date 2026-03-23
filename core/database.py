@@ -148,6 +148,14 @@ def init_db():
             user_id TEXT PRIMARY KEY,
             settings_json TEXT DEFAULT '{}',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            first_name TEXT,
+            last_name TEXT,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
 
     conn = _get_connection()
@@ -189,6 +197,10 @@ def init_db():
         conn2.close()
     except Exception:
         pass  # Migration is best-effort — app works without it
+
+    # ── Migration: copy users from auth_config.yaml into the users table ──
+    _migrate_yaml_users_to_db()
+
     st.session_state["_db_initialized"] = True
 
 
@@ -1319,3 +1331,162 @@ def get_all_fortress_state() -> Dict[str, str]:
     rows = conn.execute("SELECT key, value FROM fortress_state").fetchall()
     conn.close()
     return {row["key"]: row["value"] for row in rows}
+
+
+# ─────────────────────────────────────────
+# USERS  (database-backed auth — replaces ephemeral auth_config.yaml)
+# ─────────────────────────────────────────
+
+def _migrate_yaml_users_to_db():
+    """One-time, idempotent migration: copy users from auth_config.yaml into the users table.
+
+    Skips any username that already exists in the DB so it is safe to call on every startup.
+    """
+    try:
+        import yaml
+        yaml_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "auth_config.yaml")
+        if not os.path.exists(yaml_path):
+            return  # No YAML file — nothing to migrate
+
+        with open(yaml_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        usernames_block = (config or {}).get("credentials", {}).get("usernames", {})
+        if not usernames_block:
+            return
+
+        conn = _get_connection()
+        for username, info in usernames_block.items():
+            # Check if user already exists (idempotent)
+            try:
+                existing = conn.execute(
+                    "SELECT username FROM users WHERE username = ?", (username,)
+                ).fetchone()
+                if existing:
+                    continue  # Already migrated
+            except Exception:
+                pass
+
+            try:
+                conn.execute(
+                    """INSERT INTO users (username, email, first_name, last_name, password_hash, role)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        username,
+                        info.get("email", ""),
+                        info.get("first_name", ""),
+                        info.get("last_name", ""),
+                        info.get("password", ""),   # already a bcrypt hash in the YAML
+                        info.get("role", "user"),
+                    ),
+                )
+            except Exception:
+                pass  # Duplicate email or other constraint — skip gracefully
+        conn.commit()
+        conn.close()
+    except ImportError:
+        pass  # PyYAML not installed — skip migration
+    except Exception:
+        pass  # Best-effort migration
+
+
+def get_user_by_username(username: str) -> Optional[Dict]:
+    """Return a user dict by username, or None if not found."""
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT username, email, first_name, last_name, password_hash, role, created_at "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return dict(row)
+        # sqlite3.Row or tuple
+        keys = ["username", "email", "first_name", "last_name", "password_hash", "role", "created_at"]
+        if hasattr(row, "keys"):
+            return {k: row[k] for k in keys}
+        return dict(zip(keys, row))
+    except Exception:
+        return None
+
+
+def get_user_by_email(email: str) -> Optional[Dict]:
+    """Return a user dict by email, or None if not found."""
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT username, email, first_name, last_name, password_hash, role, created_at "
+            "FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return dict(row)
+        keys = ["username", "email", "first_name", "last_name", "password_hash", "role", "created_at"]
+        if hasattr(row, "keys"):
+            return {k: row[k] for k in keys}
+        return dict(zip(keys, row))
+    except Exception:
+        return None
+
+
+def create_user(username: str, email: str, first_name: str, last_name: str,
+                password_hash: str, role: str = "user") -> str:
+    """Create a new user in the database. Returns the username."""
+    conn = _get_connection()
+    conn.execute(
+        """INSERT INTO users (username, email, first_name, last_name, password_hash, role)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (username.strip(), email.strip(), first_name.strip(), last_name.strip(),
+         password_hash, role),
+    )
+    conn.commit()
+    conn.close()
+    return username.strip()
+
+
+def get_all_users() -> List[Dict]:
+    """Return a list of all user dicts (for admin views)."""
+    try:
+        conn = _get_connection()
+        rows = conn.execute(
+            "SELECT username, email, first_name, last_name, password_hash, role, created_at "
+            "FROM users ORDER BY created_at ASC"
+        ).fetchall()
+        conn.close()
+        keys = ["username", "email", "first_name", "last_name", "password_hash", "role", "created_at"]
+        result = []
+        for row in rows:
+            if isinstance(row, dict):
+                result.append(dict(row))
+            elif hasattr(row, "keys"):
+                result.append({k: row[k] for k in keys})
+            else:
+                result.append(dict(zip(keys, row)))
+        return result
+    except Exception:
+        return []
+
+
+def update_user_password(username: str, new_password_hash: str):
+    """Update the password hash for an existing user."""
+    conn = _get_connection()
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE username = ?",
+        (new_password_hash, username),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_user(username: str):
+    """Delete a user by username."""
+    conn = _get_connection()
+    conn.execute("DELETE FROM users WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()
