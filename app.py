@@ -339,9 +339,39 @@ elif AUTH_ENABLED:
                         unsafe_allow_html=True,
                     )
 
+                    # ── Google sign-in via Streamlit Cloud ──
+                    # If Cloud viewer auth already identified user, auto-login
+                    if _cloud_email:
+                        st.success(f"Signed in with Google as **{_cloud_email}**")
+                        # Create/find user in our system
+                        _g_username = _cloud_email.split("@")[0].lower().replace(".", "_")
+                        _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
+                        if _g_username not in _existing_users:
+                            # Auto-register Google user
+                            _g_hash = stauth.Hasher.hash(_cloud_email)  # Use email as password (won't be used)
+                            _auth_config["credentials"]["usernames"][_g_username] = {
+                                "email": _cloud_email,
+                                "first_name": _cloud_email.split("@")[0].title(),
+                                "last_name": "",
+                                "password": _g_hash,
+                                "role": "user",
+                            }
+                            with open(_auth_config_path, "w") as _wf:
+                                yaml.dump(_auth_config, _wf, default_flow_style=False)
+                            try:
+                                from core.database import create_user as _db_create_user
+                                _db_create_user(_g_username, _cloud_email,
+                                               _cloud_email.split("@")[0].title(), "", _g_hash, "user")
+                            except Exception:
+                                pass
+                        st.session_state["authentication_status"] = True
+                        st.session_state["username"] = _g_username
+                        st.session_state["name"] = _cloud_email.split("@")[0].title()
+                        st.rerun()
+
                     st.markdown(
                         "<p style='text-align:center;margin:1.5rem 0 0.5rem 0;color:#aaa;font-size:0.9rem'>"
-                        "Sign in with your credentials below</p>",
+                        "Sign in with your credentials or create an account</p>",
                         unsafe_allow_html=True,
                     )
 
@@ -350,7 +380,7 @@ elif AUTH_ENABLED:
                     with _login_tab:
                         authenticator.login()
                         if st.session_state.get("authentication_status") is False:
-                            st.error("Invalid credentials.")
+                            st.error("Invalid username or password. If you just registered, try again.")
 
                     with _register_tab:
                         st.markdown("##### Create your Prosper account")
