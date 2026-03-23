@@ -339,39 +339,64 @@ elif AUTH_ENABLED:
                         unsafe_allow_html=True,
                     )
 
-                    # ── Google sign-in via Streamlit Cloud ──
-                    # If Cloud viewer auth already identified user, auto-login
+                    # ── Google Sign-In (real OAuth via streamlit-google-auth) ──
+                    _google_client_id = os.getenv("GOOGLE_CLIENT_ID") or st.secrets.get("GOOGLE_CLIENT_ID", "") if hasattr(st, "secrets") else os.getenv("GOOGLE_CLIENT_ID", "")
+                    _google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET") or st.secrets.get("GOOGLE_CLIENT_SECRET", "") if hasattr(st, "secrets") else os.getenv("GOOGLE_CLIENT_SECRET", "")
+                    _google_available = bool(_google_client_id and _google_client_secret)
+
+                    if _google_available:
+                        try:
+                            from streamlit_google_auth import Authenticate as GoogleAuth
+                            _google_auth = GoogleAuth(
+                                secret=_google_client_secret,
+                                client_id=_google_client_id,
+                                redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", st.secrets.get("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app") if hasattr(st, "secrets") else "http://localhost:8501"),
+                            )
+                            _google_auth.check()
+                            if st.session_state.get("connected"):
+                                _g_email = st.session_state.get("user_info", {}).get("email", "")
+                                _g_name = st.session_state.get("user_info", {}).get("name", "")
+                                if _g_email:
+                                    _g_username = _g_email.split("@")[0].lower().replace(".", "_")
+                                    # Auto-register Google user if needed
+                                    _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
+                                    if _g_username not in _existing_users:
+                                        _g_hash = stauth.Hasher.hash(_g_email)
+                                        _auth_config["credentials"]["usernames"][_g_username] = {
+                                            "email": _g_email, "first_name": _g_name.split()[0] if _g_name else "",
+                                            "last_name": " ".join(_g_name.split()[1:]) if _g_name else "",
+                                            "password": _g_hash, "role": "user",
+                                        }
+                                        with open(_auth_config_path, "w") as _wf:
+                                            yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                        try:
+                                            from core.database import create_user as _db_create_user
+                                            _db_create_user(_g_username, _g_email,
+                                                           _g_name.split()[0] if _g_name else "", "", _g_hash, "user")
+                                        except Exception:
+                                            pass
+                                    st.session_state["authentication_status"] = True
+                                    st.session_state["username"] = _g_username
+                                    st.session_state["name"] = _g_name or _g_email.split("@")[0].title()
+                                    st.rerun()
+                        except ImportError:
+                            _google_available = False
+                        except Exception:
+                            _google_available = False
+
+                    # Also handle Cloud SSO auto-login
                     if _cloud_email:
-                        st.success(f"Signed in with Google as **{_cloud_email}**")
-                        # Create/find user in our system
                         _g_username = _cloud_email.split("@")[0].lower().replace(".", "_")
-                        _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
-                        if _g_username not in _existing_users:
-                            # Auto-register Google user
-                            _g_hash = stauth.Hasher.hash(_cloud_email)  # Use email as password (won't be used)
-                            _auth_config["credentials"]["usernames"][_g_username] = {
-                                "email": _cloud_email,
-                                "first_name": _cloud_email.split("@")[0].title(),
-                                "last_name": "",
-                                "password": _g_hash,
-                                "role": "user",
-                            }
-                            with open(_auth_config_path, "w") as _wf:
-                                yaml.dump(_auth_config, _wf, default_flow_style=False)
-                            try:
-                                from core.database import create_user as _db_create_user
-                                _db_create_user(_g_username, _cloud_email,
-                                               _cloud_email.split("@")[0].title(), "", _g_hash, "user")
-                            except Exception:
-                                pass
                         st.session_state["authentication_status"] = True
                         st.session_state["username"] = _g_username
                         st.session_state["name"] = _cloud_email.split("@")[0].title()
+                        st.session_state["user_id"] = _cloud_email
                         st.rerun()
 
+                    st.markdown("---")
                     st.markdown(
-                        "<p style='text-align:center;margin:1.5rem 0 0.5rem 0;color:#aaa;font-size:0.9rem'>"
-                        "Sign in with your credentials or create an account</p>",
+                        "<p style='text-align:center;margin:0.5rem 0;color:#aaa;font-size:0.9rem'>"
+                        "Sign in with email or create an account</p>",
                         unsafe_allow_html=True,
                     )
 
@@ -380,7 +405,32 @@ elif AUTH_ENABLED:
                     with _login_tab:
                         authenticator.login()
                         if st.session_state.get("authentication_status") is False:
-                            st.error("Invalid username or password. If you just registered, try again.")
+                            # Try to restore user from database (in case YAML was reset on redeploy)
+                            _login_recovered = False
+                            try:
+                                from core.database import get_all_users as _db_get_users_login
+                                _db_users_login = _db_get_users_login()
+                                if _db_users_login:
+                                    _yaml_updated = False
+                                    for _dbu in _db_users_login:
+                                        if _dbu["username"] not in _auth_config.get("credentials", {}).get("usernames", {}):
+                                            _auth_config.setdefault("credentials", {}).setdefault("usernames", {})[_dbu["username"]] = {
+                                                "email": _dbu.get("email", ""),
+                                                "first_name": _dbu.get("first_name", ""),
+                                                "last_name": _dbu.get("last_name", ""),
+                                                "password": _dbu.get("password_hash", ""),
+                                                "role": _dbu.get("role", "user"),
+                                            }
+                                            _yaml_updated = True
+                                    if _yaml_updated:
+                                        with open(_auth_config_path, "w") as _wf:
+                                            yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                        st.info("Your account was found. Please try signing in again.")
+                                        _login_recovered = True
+                            except Exception:
+                                pass
+                            if not _login_recovered:
+                                st.error("Invalid username or password. Check your credentials or create a new account.")
 
                     with _register_tab:
                         st.markdown("##### Create your Prosper account")
@@ -436,11 +486,16 @@ elif AUTH_ENABLED:
                                         )
                                     except Exception:
                                         pass  # DB save is best-effort
+                                    # Auto-login after registration
+                                    st.session_state["authentication_status"] = True
+                                    st.session_state["username"] = _reg_username
+                                    st.session_state["name"] = f"{_reg_first.strip()} {_reg_last.strip()}"
+                                    st.balloons()
                                     st.success(
-                                        f"Account created! Your username is **{_reg_username}**\n\n"
-                                        f"Click the button below to sign in."
+                                        f"Welcome to Prosper, **{_reg_first.strip()}**! "
+                                        f"Your account has been created and you're now signed in."
                                     )
-                                    # Rerun so authenticator picks up the new credentials
+                                    import time; time.sleep(2)
                                     st.rerun()
 
                 # Stop here — no navigation, no sidebar pages
