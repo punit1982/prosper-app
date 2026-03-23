@@ -230,14 +230,32 @@ def create_portfolio(name: str, description: str = "", user_id: str = "default")
         conn.execute("INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
                      (name.strip(), description.strip(), user_id))
     except Exception:
-        # user_id column may not exist — insert without it
-        conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)",
-                     (name.strip(), description.strip()))
-    conn.commit()
-    row = conn.execute("SELECT id FROM portfolios WHERE name = ?", (name.strip(),)).fetchone()
-    conn.close()
-    pid = row[0] if isinstance(row, (tuple, list)) else row["id"]
-    return pid
+        try:
+            conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)",
+                         (name.strip(), description.strip()))
+        except Exception:
+            # Table may not exist — create it and retry
+            try:
+                conn.execute("""CREATE TABLE IF NOT EXISTS portfolios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL, user_id TEXT DEFAULT 'default',
+                    description TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+                conn.execute("INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
+                             (name.strip(), description.strip(), user_id))
+            except Exception:
+                conn.close()
+                return 1  # Return default portfolio ID on total failure
+    try:
+        conn.commit()
+        row = conn.execute("SELECT id FROM portfolios WHERE name = ?", (name.strip(),)).fetchone()
+        conn.close()
+        if row:
+            return row[0] if isinstance(row, (tuple, list)) else row.get("id", 1)
+        return 1
+    except Exception:
+        conn.close()
+        return 1
 
 
 def rename_portfolio(portfolio_id: int, new_name: str):
@@ -273,11 +291,20 @@ def get_active_portfolio_id() -> int:
 
 def get_or_create_user_portfolios(user_id: str) -> pd.DataFrame:
     """Get portfolios for a user_id. If none exist, create a 'Main Portfolio' and return it."""
-    df = get_all_portfolios(user_id=user_id)
-    if df.empty:
-        create_portfolio(name="Main Portfolio", description="Default portfolio", user_id=user_id)
+    try:
         df = get_all_portfolios(user_id=user_id)
-    return df
+        if df.empty:
+            # Try without user filter — maybe user_id column doesn't exist
+            df = get_all_portfolios()
+        if df.empty:
+            try:
+                create_portfolio(name="Main Portfolio", description="Default portfolio", user_id=user_id)
+            except Exception:
+                pass
+            df = get_all_portfolios()
+        return df if not df.empty else pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
+    except Exception:
+        return pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
 
 
 # ─────────────────────────────────────────

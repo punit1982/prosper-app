@@ -252,6 +252,8 @@ elif AUTH_ENABLED:
                     pass  # DB not available — proceed with first-run setup
 
             if _need_first_run_setup:
+                # Hide sidebar completely on login/setup pages
+                st.markdown('<style>[data-testid="stSidebar"]{display:none !important;}[data-testid="stSidebarCollapsedControl"]{display:none !important;}</style>', unsafe_allow_html=True)
                 # ── First-run: try Google sign-in first, then fall back to form ──
                 _pad_l, _setup_col, _pad_r = st.columns([1, 2, 1])
                 with _setup_col:
@@ -264,17 +266,37 @@ elif AUTH_ENABLED:
                     )
 
                     # ── Google Sign-In on first-run page ──
-                    _g_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-                    _g_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-                    try:
-                        if not _g_client_id and hasattr(st, "secrets"):
-                            _g_client_id = st.secrets.get("GOOGLE_CLIENT_ID", "")
-                            _g_client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
-                    except Exception:
-                        pass
-
                     _google_setup_done = False
-                    if _g_client_id and _g_client_secret:
+                    _google_creds_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_credentials.json")
+
+                    # Build google_credentials.json from secrets if it doesn't exist
+                    if not os.path.exists(_google_creds_path):
+                        try:
+                            _g_client_id = ""
+                            _g_client_secret = ""
+                            if hasattr(st, "secrets"):
+                                _g_client_id = st.secrets.get("GOOGLE_CLIENT_ID", os.getenv("GOOGLE_CLIENT_ID", ""))
+                                _g_client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", os.getenv("GOOGLE_CLIENT_SECRET", ""))
+                            else:
+                                _g_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+                                _g_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+                            if _g_client_id and _g_client_secret:
+                                import json
+                                _creds_data = {
+                                    "web": {
+                                        "client_id": _g_client_id,
+                                        "client_secret": _g_client_secret,
+                                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                        "token_uri": "https://oauth2.googleapis.com/token",
+                                        "redirect_uris": ["https://prosper-app.streamlit.app"],
+                                    }
+                                }
+                                with open(_google_creds_path, "w") as _gf:
+                                    json.dump(_creds_data, _gf)
+                        except Exception:
+                            pass
+
+                    if os.path.exists(_google_creds_path):
                         try:
                             from streamlit_google_auth import Authenticate as GoogleAuth
                             _g_redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app")
@@ -284,10 +306,12 @@ elif AUTH_ENABLED:
                             except Exception:
                                 pass
                             _google_auth = GoogleAuth(
-                                secret=_g_client_secret, client_id=_g_client_id,
+                                secret_credentials_path=_google_creds_path,
+                                cookie_name="prosper_google_auth",
+                                cookie_key="prosper_google_secret_key_2026",
                                 redirect_uri=_g_redirect,
                             )
-                            _google_auth.check()
+                            _google_auth.check_authentification()
                             if st.session_state.get("connected"):
                                 _g_email = st.session_state.get("user_info", {}).get("email", "")
                                 _g_name = st.session_state.get("user_info", {}).get("name", "")
@@ -321,10 +345,14 @@ elif AUTH_ENABLED:
                                     st.session_state["user_id"] = _g_email
                                     _google_setup_done = True
                                     st.rerun()
+                            else:
+                                # Show Google sign-in button
+                                _auth_url = _google_auth.get_authorization_url()
+                                st.link_button("Continue with Google", _auth_url, use_container_width=True)
                         except ImportError:
                             pass
-                        except Exception:
-                            pass
+                        except Exception as _ge:
+                            st.caption(f"Google sign-in unavailable: {_ge}")
 
                     if not _google_setup_done:
                         st.markdown("---")
@@ -406,7 +434,8 @@ elif AUTH_ENABLED:
             )
 
             if st.session_state.get("authentication_status") not in (True,):
-                # ── Login page — NO sidebar navigation visible ────────────
+                # Hide sidebar completely on login page
+                st.markdown('<style>[data-testid="stSidebar"]{display:none !important;}[data-testid="stSidebarCollapsedControl"]{display:none !important;}</style>', unsafe_allow_html=True)
                 _pad_l, _login_col, _pad_r = st.columns([1, 2, 1])
                 with _login_col:
                     st.markdown(
@@ -418,25 +447,27 @@ elif AUTH_ENABLED:
                     )
 
                     # ── Google Sign-In (real OAuth via streamlit-google-auth) ──
-                    _google_client_id = os.getenv("GOOGLE_CLIENT_ID") or st.secrets.get("GOOGLE_CLIENT_ID", "") if hasattr(st, "secrets") else os.getenv("GOOGLE_CLIENT_ID", "")
-                    _google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET") or st.secrets.get("GOOGLE_CLIENT_SECRET", "") if hasattr(st, "secrets") else os.getenv("GOOGLE_CLIENT_SECRET", "")
-                    _google_available = bool(_google_client_id and _google_client_secret)
-
-                    if _google_available:
+                    if os.path.exists(_google_creds_path):
                         try:
                             from streamlit_google_auth import Authenticate as GoogleAuth
-                            _google_auth = GoogleAuth(
-                                secret=_google_client_secret,
-                                client_id=_google_client_id,
-                                redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", st.secrets.get("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app") if hasattr(st, "secrets") else "http://localhost:8501"),
+                            _g_redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app")
+                            try:
+                                if hasattr(st, "secrets"):
+                                    _g_redirect = st.secrets.get("GOOGLE_REDIRECT_URI", _g_redirect)
+                            except Exception:
+                                pass
+                            _google_auth_login = GoogleAuth(
+                                secret_credentials_path=_google_creds_path,
+                                cookie_name="prosper_google_auth",
+                                cookie_key="prosper_google_secret_key_2026",
+                                redirect_uri=_g_redirect,
                             )
-                            _google_auth.check()
+                            _google_auth_login.check_authentification()
                             if st.session_state.get("connected"):
                                 _g_email = st.session_state.get("user_info", {}).get("email", "")
                                 _g_name = st.session_state.get("user_info", {}).get("name", "")
                                 if _g_email:
                                     _g_username = _g_email.split("@")[0].lower().replace(".", "_")
-                                    # Auto-register Google user if needed
                                     _existing_users = _auth_config.get("credentials", {}).get("usernames", {})
                                     if _g_username not in _existing_users:
                                         _g_hash = stauth.Hasher.hash(_g_email)
@@ -457,10 +488,13 @@ elif AUTH_ENABLED:
                                     st.session_state["username"] = _g_username
                                     st.session_state["name"] = _g_name or _g_email.split("@")[0].title()
                                     st.rerun()
+                            else:
+                                _auth_url = _google_auth_login.get_authorization_url()
+                                st.link_button("Continue with Google", _auth_url, use_container_width=True)
                         except ImportError:
-                            _google_available = False
+                            pass
                         except Exception:
-                            _google_available = False
+                            pass
 
                     # Also handle Cloud SSO auto-login
                     if _cloud_email:
@@ -585,12 +619,7 @@ elif AUTH_ENABLED:
             st.session_state["user_id"] = st.session_state.get("username", "default")
             with st.sidebar:
                 st.markdown(f"👤 **{st.session_state.get('name', 'User')}**")
-                try:
-                    authenticator.logout("Logout", "sidebar", key="sidebar_logout")
-                except Exception:
-                    pass
-                # Fallback logout button in case authenticator version doesn't render one
-                if st.button("Sign Out", key="manual_logout"):
+                if st.button("Sign Out", key="manual_logout", use_container_width=True):
                     st.session_state["authentication_status"] = None
                     _do_logout()
                     st.rerun()
