@@ -1140,29 +1140,9 @@ def get_mutualfund_holders(ticker: str) -> pd.DataFrame:
 # ─────────────────────────────────────────
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
-    """Raw yfinance history fetch with multiple fallback approaches."""
-    import yfinance as yf
-    # Approach 1: yf.download (more reliable on newer Python/yfinance)
-    try:
-        data = yf.download(ticker, period=period, auto_adjust=True, progress=False)
-        if data is not None and not data.empty:
-            # yf.download for single ticker returns MultiIndex columns like (Price, Ticker)
-            # Flatten to just Price level (Close, Open, High, Low, Volume)
-            if isinstance(data.columns, pd.MultiIndex):
-                data = data.droplevel(level=1, axis=1)
-                # Remove any duplicate columns after flattening
-                data = data.loc[:, ~data.columns.duplicated()]
-            return data
-    except Exception:
-        pass
-    # Approach 2: Ticker.history (legacy approach)
-    try:
-        hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
-        if hist is not None and not hist.empty:
-            return hist
-    except Exception:
-        pass
-    return pd.DataFrame()
+    """Raw yfinance history fetch — delegates to core.yf_utils for sanitization."""
+    from core.yf_utils import safe_ticker_history
+    return safe_ticker_history(ticker, period=period)
 
 
 def _adx_history_to_df(csv_text: str) -> pd.DataFrame:
@@ -1189,18 +1169,9 @@ def _adx_history_to_df(csv_text: str) -> pd.DataFrame:
 
 
 def _sanitize_hist(df: pd.DataFrame) -> pd.DataFrame:
-    """Guarantee flat columns, no duplicates, tz-naive index — called on ALL history output."""
-    if df is None or df.empty:
-        return pd.DataFrame()
-    # Flatten MultiIndex columns from yf.download (e.g. ("Close", "NVO") -> "Close")
-    if isinstance(df.columns, pd.MultiIndex):
-        df = df.droplevel(level=1, axis=1)
-    # Remove duplicate columns
-    df = df.loc[:, ~df.columns.duplicated()]
-    # Make index tz-naive to prevent "Cannot join tz-naive with tz-aware" errors
-    if hasattr(df.index, 'tz') and df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    return df
+    """Guarantee flat columns, no duplicates, tz-naive index — delegates to yf_utils."""
+    from core.yf_utils import sanitize_history
+    return sanitize_history(df)
 
 
 def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
