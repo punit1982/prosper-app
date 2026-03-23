@@ -189,7 +189,7 @@ def _show_google_signin(redirect_uri: str = "") -> bool:
         return False
 
     if not redirect_uri:
-        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app")
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper.onrender.com")
         try:
             if hasattr(st, "secrets"):
                 redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI", redirect_uri)
