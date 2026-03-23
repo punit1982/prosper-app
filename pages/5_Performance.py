@@ -91,12 +91,11 @@ try:
         port_histories = {}
 
         def _fetch_hist(ticker):
+            from core.yf_utils import extract_close_series
             h = get_history(ticker, period)
-            if not h.empty and "Close" in h.columns:
-                close = h["Close"]
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
-                return ticker, close
+            if not h.empty:
+                close = extract_close_series(h, ticker)
+                return ticker, close if not close.empty else None
             return ticker, None
 
         with ThreadPoolExecutor(max_workers=min(len(live_tickers), 15)) as pool:
@@ -108,12 +107,11 @@ try:
 
         bench_histories = {}
         def _fetch_bench(name):
+            from core.yf_utils import extract_close_series
             h = get_benchmark_history(name, period)
-            if not h.empty and "Close" in h.columns:
-                close = h["Close"]
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
-                return name, close
+            if not h.empty:
+                close = extract_close_series(h, name)
+                return name, close if not close.empty else None
             return name, None
 
         if selected_benchmarks:

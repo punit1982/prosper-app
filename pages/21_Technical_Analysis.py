@@ -52,10 +52,8 @@ def _load_history(ticker, period):
 with st.spinner(f"Loading {ticker} data…"):
     hist = _load_history(ticker, period)
 
-if hist is not None and isinstance(hist.columns, pd.MultiIndex):
-    hist = hist.droplevel(level=1, axis=1)
-if hist is not None and not hist.empty:
-    hist = hist.loc[:, ~hist.columns.duplicated()]
+from core.yf_utils import sanitize_history
+hist = sanitize_history(hist)
 
 if hist is None or hist.empty:
     st.warning(f"No historical data available for {ticker}. Try a US-listed ticker.")

@@ -400,6 +400,7 @@ def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame
     (returns_df, failed_tickers) – the daily returns DataFrame and a list
     of tickers for which history could not be fetched.
     """
+    from core.yf_utils import extract_close_series
     frames = {}
     failed = []
     for t in tickers:
@@ -407,41 +408,39 @@ def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame
             continue  # skip duplicates already fetched
         hist = get_history(t, period=period)
         if hist is not None and not hist.empty:
-            close = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
-            # Ensure it's a Series, not a DataFrame (can happen with duplicate columns)
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            frames[t] = close
+            close = extract_close_series(hist, t)
+            if not close.empty:
+                frames[t] = close
+            else:
+                failed.append(t)
         else:
             failed.append(t)
 
     # ── Batch fallback: try yf.download for failed tickers ──
     if failed:
         try:
-            import yfinance as yf
+            from core.yf_utils import safe_download, sanitize_history
             # Build list of yfinance-compatible symbols to try
             yf_candidates = {}  # yf_symbol -> original_ticker
             for t in failed:
-                # Skip tickers with Twelve Data format (not yfinance compatible)
                 if ":" in t:
-                    base = t.split(":")[0]
-                    yf_candidates[base] = t
+                    yf_candidates[t.split(":")[0]] = t
                 else:
                     yf_candidates[t] = t
 
             if yf_candidates:
                 yf_symbols = list(yf_candidates.keys())
-                batch_data = yf.download(
-                    yf_symbols, period=period, auto_adjust=True,
-                    progress=False, threads=True,
-                )
+                batch_data = safe_download(yf_symbols, period=period)
                 if batch_data is not None and not batch_data.empty:
-                    # yf.download returns multi-level columns for multiple tickers
-                    if isinstance(batch_data.columns, pd.MultiIndex):
-                        close_df = batch_data["Close"] if "Close" in batch_data.columns.get_level_values(0) else batch_data.iloc[:, :len(yf_symbols)]
+                    # For multiple tickers, yf.download returns MultiIndex
+                    # safe_download flattens single-ticker, but multi may still have it
+                    batch_data = sanitize_history(batch_data)
+                    if "Close" in batch_data.columns and len(yf_symbols) == 1:
+                        close_df = batch_data[["Close"]].rename(columns={"Close": yf_symbols[0]})
+                    elif isinstance(batch_data.columns, pd.MultiIndex):
+                        close_df = batch_data["Close"] if "Close" in batch_data.columns.get_level_values(0) else batch_data
                     else:
-                        # Single ticker returns flat columns
-                        close_df = batch_data[["Close"]].rename(columns={"Close": yf_symbols[0]}) if len(yf_symbols) == 1 else batch_data
+                        close_df = batch_data
 
                     rescued = []
                     for yf_sym in yf_symbols:
@@ -453,7 +452,7 @@ def _fetch_returns(tickers: list[str], period: str = "1y") -> tuple[pd.DataFrame
                                 rescued.append(orig_t)
                     failed = [t for t in failed if t not in rescued]
         except Exception:
-            pass  # batch fallback is best-effort
+            pass
 
     if not frames:
         return pd.DataFrame(), failed

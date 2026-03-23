@@ -204,7 +204,7 @@ else:
     if "Score" in display.columns:
         display["Score"] = display["Score"].apply(lambda v: f"{v:.0f}" if pd.notna(v) else "—")
     if "Thesis" in display.columns:
-        display["Thesis"] = display["Thesis"].apply(lambda v: v.replace("$", "\\$") if isinstance(v, str) else v)
+        display["Thesis"] = display["Thesis"].apply(lambda v: v.replace("$", "USD ") if isinstance(v, str) else v)
 
     styled = display.style
     if "Rating" in display.columns:

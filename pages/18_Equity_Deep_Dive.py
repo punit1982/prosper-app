@@ -279,11 +279,9 @@ with tab_chart:
         period = period_map[period_label]
         hist = get_history(ticker, period)
 
-        # Flatten MultiIndex and dedup columns from yf.download
-        if hist is not None and isinstance(hist.columns, pd.MultiIndex):
-            hist = hist.droplevel(level=1, axis=1)
-        if hist is not None and not hist.empty:
-            hist = hist.loc[:, ~hist.columns.duplicated()]
+        # Sanitize yfinance output (flatten MultiIndex, dedup, tz-naive)
+        from core.yf_utils import sanitize_history
+        hist = sanitize_history(hist)
         if hist is not None and not hist.empty:
             fig = make_subplots(
                 rows=2, cols=1, shared_xaxes=True,
@@ -310,10 +308,7 @@ with tab_chart:
             # Benchmark overlay (indexed to 100)
             if show_bench:
                 bench_hist = get_history(default_bench, period)
-                if bench_hist is not None and isinstance(bench_hist.columns, pd.MultiIndex):
-                    bench_hist = bench_hist.droplevel(level=1, axis=1)
-                if bench_hist is not None and not bench_hist.empty:
-                    bench_hist = bench_hist.loc[:, ~bench_hist.columns.duplicated()]
+                bench_hist = sanitize_history(bench_hist)
                 if bench_hist is not None and not bench_hist.empty:
                     b_col = "Close" if "Close" in bench_hist.columns else bench_hist.columns[0]
                     # Index both to 100
@@ -884,10 +879,8 @@ with tab_technical:
                 if _tech_hist is not None and not _tech_hist.empty and len(_tech_hist) >= 50:
                     break
         if _tech_hist is not None and not _tech_hist.empty and len(_tech_hist) >= 50:
-            _tc = "Close" if "Close" in _tech_hist.columns else _tech_hist.columns[0]
-            _closes = _tech_hist[_tc]
-            if isinstance(_closes, pd.DataFrame):
-                _closes = _closes.iloc[:, 0]
+            from core.yf_utils import extract_close_series
+            _closes = extract_close_series(_tech_hist, ticker)
             _closes = _closes.astype(float)
             _sma50 = _closes.rolling(50).mean()
             _sma200 = _closes.rolling(200).mean() if len(_closes) >= 200 else None
