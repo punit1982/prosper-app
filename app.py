@@ -222,6 +222,35 @@ elif AUTH_ENABLED:
             else:
                 _need_first_run_setup = True
 
+            # ── Restore users from database if YAML is empty/missing (post-redeploy) ──
+            if _need_first_run_setup:
+                try:
+                    from core.database import get_all_users as _db_get_all_users
+                    _db_users = _db_get_all_users()
+                    if _db_users:
+                        _restored_config = {
+                            "credentials": {"usernames": {}},
+                            "cookie": {
+                                "name": "prosper_auth",
+                                "key": f"prosper_auth_cookie_key_{datetime.now().strftime('%Y')}",
+                                "expiry_days": 30,
+                            },
+                        }
+                        for _dbu in _db_users:
+                            _restored_config["credentials"]["usernames"][_dbu["username"]] = {
+                                "email": _dbu.get("email", ""),
+                                "first_name": _dbu.get("first_name", ""),
+                                "last_name": _dbu.get("last_name", ""),
+                                "password": _dbu.get("password_hash", ""),
+                                "role": _dbu.get("role", "user"),
+                            }
+                        with open(_auth_config_path, "w") as _wf:
+                            yaml.dump(_restored_config, _wf, default_flow_style=False)
+                        _auth_config = _restored_config
+                        _need_first_run_setup = False
+                except Exception:
+                    pass  # DB not available — proceed with first-run setup
+
             if _need_first_run_setup:
                 # ── First-run admin setup flow ────────────────────────────
                 _pad_l, _setup_col, _pad_r = st.columns([1, 2, 1])
@@ -367,10 +396,22 @@ elif AUTH_ENABLED:
                                     }
                                     with open(_auth_config_path, "w") as _wf:
                                         yaml.dump(_auth_config, _wf, default_flow_style=False)
+                                    # Also save to database for persistence across redeployments
+                                    try:
+                                        from core.database import create_user as _db_create_user
+                                        _db_create_user(
+                                            _reg_username, _reg_email.strip(),
+                                            _reg_first.strip(), _reg_last.strip(),
+                                            _hashed_pw, "user"
+                                        )
+                                    except Exception:
+                                        pass  # DB save is best-effort
                                     st.success(
                                         f"Account created! Your username is **{_reg_username}**\n\n"
-                                        f"Switch to the **Sign In** tab to log in."
+                                        f"Click the button below to sign in."
                                     )
+                                    # Rerun so authenticator picks up the new credentials
+                                    st.rerun()
 
                 # Stop here — no navigation, no sidebar pages
                 st.stop()
@@ -407,6 +448,24 @@ else:
     # Auth disabled — backward compatible, everything works as before
     _is_authenticated = True
     st.session_state.setdefault("user_id", "default")
+
+# ── Onboarding Check — redirect new users to setup wizard ─────────────────────
+if _is_authenticated:
+    if "onboarding_complete" not in st.session_state:
+        # Check persistent user preferences for onboarding status
+        from core.settings import load_user_settings as _load_onb_settings
+        _onb_prefs = _load_onb_settings()
+        if _onb_prefs.get("onboarding_complete", False):
+            st.session_state["onboarding_complete"] = True
+
+    if not st.session_state.get("onboarding_complete", False):
+        # User has not completed onboarding — show only the onboarding page
+        _onb_pg = st.navigation(
+            [st.Page("pages/26_Onboarding.py", title="Setup Wizard", icon="🚀", default=True)],
+            position="hidden",
+        )
+        _onb_pg.run()
+        st.stop()
 
 # ── Portfolio Selector (user-scoped) ───────────────────────────────────────────
 _current_user_id = st.session_state.get("user_id", "default")
@@ -523,6 +582,7 @@ pg = st.navigation({
         st.Page("pages/1_Upload_Portal.py",      title="Upload Portal",       icon="📤"),
         st.Page("pages/25_IBKR_Sync.py",         title="IBKR Sync",          icon="🔗"),
         st.Page("pages/17_User_Management.py",   title="Users",               icon="👥"),
+        st.Page("pages/26_Onboarding.py",        title="Onboarding",          icon="🚀"),
     ],
 })
 
