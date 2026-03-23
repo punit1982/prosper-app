@@ -19,22 +19,8 @@ from core.database import (
     get_total_realized_pnl,
 )
 
-# Resilient imports for portfolio management
-try:
-    from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
-except ImportError:
-    def get_all_portfolios():
-        return pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
-    def create_portfolio(name, description=""):
-        return 1
-    def get_active_portfolio_id():
-        return 1
-
-try:
-    from core.database import get_or_create_user_portfolios
-except ImportError:
-    def get_or_create_user_portfolios(user_id):
-        return get_all_portfolios()
+from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
+from core.database import get_or_create_user_portfolios
 
 # Load .env from app directory
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -204,8 +190,9 @@ if not get_nav_snapshot_exists_today(_base):
                     holdings_count=len(_enriched),
                     base_currency=_base,
                 )
-        except Exception:
-            pass
+        except Exception as nav_err:
+            import logging
+            logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
 # ── Navigation ──────────────────────────────────────────────────────────────
 pg = st.navigation({

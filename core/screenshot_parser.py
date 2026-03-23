@@ -53,7 +53,10 @@ def parse_brokerage_image(image_bytes: bytes, media_type: str) -> ParseResult:
     from core.settings import get_api_key
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
-        return _mock_parse()  # Demo mode
+        raise ValueError(
+            "ANTHROPIC_API_KEY is not set. Please add it in Settings → Environment Variables "
+            "on your Render dashboard, or in your local .env file."
+        )
 
     # --- Step 3: Call Claude Vision ---
     result = _claude_vision_parse(image_bytes, media_type, api_key)
@@ -185,12 +188,9 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
 
     # Try models in order — different API tiers/regions support different models
     _MODELS_TO_TRY = [
-        "claude-opus-4-5",
-        "claude-sonnet-4-5",
+        "claude-sonnet-4-5-20250514",
+        "claude-haiku-4-5-20250514",
         "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-haiku-20240307",
-        "claude-3-opus-20240229",
     ]
 
     content = [

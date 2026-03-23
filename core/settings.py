@@ -67,18 +67,35 @@ _SETTINGS_PATH = os.path.expanduser("~/prosper_data/user_settings.json")
 
 def load_user_settings() -> dict:
     """
-    Load user settings from JSON file and merge with defaults.
-    User settings override defaults. Missing keys fall back to defaults.
+    Load user settings: try local JSON file first, then database, then defaults.
+    This ensures settings survive Render redeploys (DB) and work fast locally (file).
     """
     settings = dict(_DEFAULTS)
+
+    # 1. Try local file (fast, works when filesystem persists)
+    loaded_from_file = False
     try:
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH, "r") as f:
                 user = json.load(f)
-            if isinstance(user, dict):
+            if isinstance(user, dict) and user:
                 settings.update(user)
+                loaded_from_file = True
     except (json.JSONDecodeError, IOError, OSError):
-        pass  # Corrupted or unreadable — use defaults
+        pass
+
+    # 2. If no local file, try database (survives redeploys)
+    if not loaded_from_file:
+        try:
+            import streamlit as st
+            user_id = st.session_state.get("user_id", "default")
+            from core.database import get_user_settings_db
+            db_settings = get_user_settings_db(user_id)
+            if db_settings:
+                settings.update(db_settings)
+        except Exception:
+            pass  # DB not available yet — use defaults
+
     return settings
 
 
@@ -99,10 +116,26 @@ def save_user_settings(updates: dict):
     # Merge new updates
     existing.update(updates)
 
-    # Write back
-    os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
-    with open(_SETTINGS_PATH, "w") as f:
-        json.dump(existing, f, indent=2)
+    # Write to local file (best-effort — may fail on ephemeral filesystem)
+    try:
+        os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
+        with open(_SETTINGS_PATH, "w") as f:
+            json.dump(existing, f, indent=2)
+    except OSError:
+        pass  # Ephemeral filesystem (Render free tier) — DB is the fallback
+
+    # Also persist to database (survives redeploys)
+    try:
+        import streamlit as st
+        user_id = st.session_state.get("user_id", "default")
+        from core.database import save_user_settings_db
+        save_user_settings_db(user_id, existing)
+    except Exception:
+        pass  # DB save is best-effort
+
+    # Update the module-level SETTINGS dict so all code sees new values immediately
+    global SETTINGS
+    SETTINGS.update(updates)
 
 
 def get_defaults() -> dict:
@@ -149,11 +182,9 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
     Raises Exception if ALL models fail.
     """
     _FALLBACK_MODELS = [
-        "claude-opus-4-5",
-        "claude-sonnet-4-5",
+        "claude-sonnet-4-5-20250514",
+        "claude-haiku-4-5-20250514",
         "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-haiku-20240307",
     ]
 
     # Put the preferred model first, deduplicate
