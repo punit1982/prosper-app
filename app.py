@@ -207,6 +207,30 @@ elif AUTH_ENABLED:
             import streamlit_authenticator as stauth
 
             _auth_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_config.yaml")
+            _google_creds_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_credentials.json")
+
+            # Build google_credentials.json from secrets if not present
+            if not os.path.exists(_google_creds_path):
+                try:
+                    _g_cid = ""
+                    _g_csec = ""
+                    if hasattr(st, "secrets"):
+                        _g_cid = st.secrets.get("GOOGLE_CLIENT_ID", os.getenv("GOOGLE_CLIENT_ID", ""))
+                        _g_csec = st.secrets.get("GOOGLE_CLIENT_SECRET", os.getenv("GOOGLE_CLIENT_SECRET", ""))
+                    else:
+                        _g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
+                        _g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
+                    if _g_cid and _g_csec:
+                        import json as _json_mod
+                        with open(_google_creds_path, "w") as _gf:
+                            _json_mod.dump({"web": {
+                                "client_id": _g_cid, "client_secret": _g_csec,
+                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "redirect_uris": ["https://prosper-app.streamlit.app"],
+                            }}, _gf)
+                except Exception:
+                    pass
 
             # ── First-run setup: create auth_config.yaml if missing or empty ──
             _need_first_run_setup = False
@@ -267,35 +291,7 @@ elif AUTH_ENABLED:
 
                     # ── Google Sign-In on first-run page ──
                     _google_setup_done = False
-                    _google_creds_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_credentials.json")
-
-                    # Build google_credentials.json from secrets if it doesn't exist
-                    if not os.path.exists(_google_creds_path):
-                        try:
-                            _g_client_id = ""
-                            _g_client_secret = ""
-                            if hasattr(st, "secrets"):
-                                _g_client_id = st.secrets.get("GOOGLE_CLIENT_ID", os.getenv("GOOGLE_CLIENT_ID", ""))
-                                _g_client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", os.getenv("GOOGLE_CLIENT_SECRET", ""))
-                            else:
-                                _g_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-                                _g_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-                            if _g_client_id and _g_client_secret:
-                                import json
-                                _creds_data = {
-                                    "web": {
-                                        "client_id": _g_client_id,
-                                        "client_secret": _g_client_secret,
-                                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                                        "token_uri": "https://oauth2.googleapis.com/token",
-                                        "redirect_uris": ["https://prosper-app.streamlit.app"],
-                                    }
-                                }
-                                with open(_google_creds_path, "w") as _gf:
-                                    json.dump(_creds_data, _gf)
-                        except Exception:
-                            pass
-
+                    # _google_creds_path already defined above
                     if os.path.exists(_google_creds_path):
                         try:
                             from streamlit_google_auth import Authenticate as GoogleAuth
@@ -626,20 +622,21 @@ elif AUTH_ENABLED:
                 st.divider()
 
         except ImportError:
-            # streamlit-authenticator not installed — disable auth
-            AUTH_ENABLED = False
-            _is_authenticated = True
-            st.session_state.setdefault("user_id", "default")
+            # streamlit-authenticator not installed — show error, block access
+            st.error("Authentication system not available. Please contact the administrator.")
+            st.stop()
         except Exception as auth_err:
-            st.warning(f"Authentication error: {auth_err}. Running without login.")
-            AUTH_ENABLED = False
-            _is_authenticated = True
-            st.session_state.setdefault("user_id", "default")
+            st.error(f"Authentication error: {auth_err}")
+            st.info("Please try refreshing the page. If the issue persists, contact the administrator.")
+            st.stop()
 
 else:
-    # Auth disabled — backward compatible, everything works as before
+    # Auth explicitly disabled via PROSPER_AUTH_ENABLED=false
     _is_authenticated = True
     st.session_state.setdefault("user_id", "default")
+    with st.sidebar:
+        st.caption("Auth disabled")
+        st.divider()
 
 # ── Onboarding Check — redirect new users to setup wizard ─────────────────────
 if _is_authenticated:
