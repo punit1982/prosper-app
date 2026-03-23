@@ -135,10 +135,7 @@ _is_cloud = bool(
 )
 
 AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
-# On Cloud, disable our custom login form — Cloud handles auth at the platform level.
-# But we still try to read the Cloud user identity below.
-if _is_cloud:
-    AUTH_ENABLED = False
+# Auth works everywhere — Cloud users get YAML-based login just like local
 
 _auth_method = None  # Track which auth method is active
 _is_authenticated = False  # Gate for navigation rendering
@@ -184,22 +181,17 @@ if _cloud_user:
     if _cloud_email and _cloud_email.lower() in ("", "anonymous", "null", "none"):
         _cloud_email = None
 
-if _is_cloud:
-    # Cloud path: user is authenticated by the platform (or auth not configured)
-    if _cloud_email:
-        st.session_state["user_id"] = _cloud_email
-        _auth_method = "cloud"
-        _is_authenticated = True
-        with st.sidebar:
-            st.markdown(f"👤 **{_cloud_email}**")
-            if st.button("Logout", key="cloud_logout"):
-                _do_logout()
-                st.rerun()
-            st.divider()
-    else:
-        # Cloud auth not configured or anonymous access — allow but use default
-        st.session_state.setdefault("user_id", "default")
-        _is_authenticated = True
+if _cloud_email:
+    # Cloud SSO detected — user is authenticated by the platform
+    st.session_state["user_id"] = _cloud_email
+    _auth_method = "cloud"
+    _is_authenticated = True
+    with st.sidebar:
+        st.markdown(f"👤 **{_cloud_email}**")
+        if st.button("Logout", key="cloud_logout"):
+            _do_logout()
+            st.rerun()
+        st.divider()
 
 elif AUTH_ENABLED:
     # ── Tier 1: Check if Cloud SSO provided a user (even when running locally
@@ -415,13 +407,6 @@ else:
     # Auth disabled — backward compatible, everything works as before
     _is_authenticated = True
     st.session_state.setdefault("user_id", "default")
-
-# Show Cloud user in sidebar when authenticated via Cloud SSO
-if _auth_method == "cloud" and _cloud_email:
-    with st.sidebar:
-        st.markdown(f"**{_cloud_email}**")
-        st.divider()
-
 
 # ── Portfolio Selector (user-scoped) ───────────────────────────────────────────
 _current_user_id = st.session_state.get("user_id", "default")
