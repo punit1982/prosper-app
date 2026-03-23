@@ -237,7 +237,7 @@ def _build_google_creds_file():
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper.onrender.com")
+    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
 
     if g_cid and g_csec:
         try:
@@ -255,8 +255,34 @@ def _build_google_creds_file():
             pass
 
 
+def _is_google_configured() -> bool:
+    """Check if Google OAuth credentials are available (without touching Streamlit widgets)."""
+    if os.path.exists(_GOOGLE_CREDS_PATH):
+        return True
+    return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+# Module-level flag: Google auth widget can only be rendered once per script run
+_google_auth_used_this_run = False
+
+
 def _show_google_signin() -> bool:
-    """Show Google sign-in button. Returns True if user just authenticated."""
+    """Show Google sign-in button. Returns True if user just authenticated.
+
+    streamlit-google-auth uses hardcoded key='init' internally,
+    so this function MUST only render the widget ONCE per script execution.
+    """
+    global _google_auth_used_this_run
+
+    # Hard guard: never render twice in a single script run
+    if _google_auth_used_this_run:
+        return False
+
+    if not _is_google_configured():
+        return False
+
+    _build_google_creds_file()
+
     if not os.path.exists(_GOOGLE_CREDS_PATH):
         return False
 
@@ -265,11 +291,10 @@ def _show_google_signin() -> bool:
     except ImportError:
         return False
 
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper.onrender.com")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
 
-    # Prevent duplicate widget creation on re-runs
-    if st.session_state.get("_google_auth_rendered"):
-        return False
+    # Mark as used BEFORE creating the widget (prevents re-entry)
+    _google_auth_used_this_run = True
 
     try:
         g_auth = GoogleAuth(
@@ -279,32 +304,27 @@ def _show_google_signin() -> bool:
             redirect_uri=redirect_uri,
         )
         g_auth.check_authentification()
-        st.session_state["_google_auth_rendered"] = True
 
         if st.session_state.get("connected"):
             g_email = st.session_state.get("user_info", {}).get("email", "")
             g_name = st.session_state.get("user_info", {}).get("name", "")
             if g_email:
                 g_username = g_email.split("@")[0].lower().replace(".", "_").replace("-", "_")
-                g_hash = _hash_password(g_email)  # Use email as password for OAuth users
+                g_hash = _hash_password(g_email)
 
                 first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
                 last_name = " ".join(g_name.split()[1:]) if g_name and len(g_name.split()) > 1 else ""
 
-                # Check if any users exist to determine role
                 existing = _db_get_all_users()
                 role = "admin" if not existing else "user"
 
-                # Save to DB (source of truth)
                 try:
                     _db_create_user(g_username, g_email, first_name, last_name, g_hash, role)
                 except Exception:
-                    pass  # Already exists — that's fine
+                    pass
 
-                # Sync to YAML cache
                 _sync_user_to_yaml(g_username, g_email, first_name, last_name, g_hash, role)
 
-                # Set session
                 st.session_state["authentication_status"] = True
                 st.session_state["username"] = g_username
                 st.session_state["name"] = g_name or first_name
@@ -312,10 +332,14 @@ def _show_google_signin() -> bool:
                 st.session_state["auth_method"] = "google"
                 return True
         else:
-            auth_url = g_auth.get_authorization_url()
-            st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
-    except Exception as e:
-        st.caption(f"Google sign-in unavailable: {e}")
+            try:
+                auth_url = g_auth.get_authorization_url()
+                st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
+            except Exception:
+                pass
+    except Exception:
+        # Silently skip — email auth always works as fallback
+        pass
 
     return False
 
