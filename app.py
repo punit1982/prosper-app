@@ -252,70 +252,148 @@ elif AUTH_ENABLED:
                     pass  # DB not available — proceed with first-run setup
 
             if _need_first_run_setup:
-                # ── First-run admin setup flow ────────────────────────────
+                # ── First-run: try Google sign-in first, then fall back to form ──
                 _pad_l, _setup_col, _pad_r = st.columns([1, 2, 1])
                 with _setup_col:
                     st.markdown(
                         "<div style='text-align:center;margin-top:2rem'>"
                         "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
-                        "<p style='color:#888;margin-top:4px;font-size:1.1rem'>First-Time Setup</p>"
+                        "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
                         "</div>",
                         unsafe_allow_html=True,
                     )
-                    st.info("No admin account found. Create your admin credentials to get started.")
 
-                    with st.form("first_run_setup", clear_on_submit=False):
-                        _setup_c1, _setup_c2 = st.columns(2)
-                        with _setup_c1:
-                            _setup_first = st.text_input("First Name", key="_setup_first")
-                        with _setup_c2:
-                            _setup_last = st.text_input("Last Name", key="_setup_last")
-                        _setup_email = st.text_input("Email", placeholder="admin@example.com", key="_setup_email")
-                        _setup_username = st.text_input("Username", placeholder="admin", key="_setup_username")
-                        _setup_pw = st.text_input("Password (min 6 characters)", type="password", key="_setup_pw")
-                        _setup_pw2 = st.text_input("Confirm Password", type="password", key="_setup_pw2")
-                        _setup_submit = st.form_submit_button("Create Admin Account", type="primary", use_container_width=True)
+                    # ── Google Sign-In on first-run page ──
+                    _g_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+                    _g_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+                    try:
+                        if not _g_client_id and hasattr(st, "secrets"):
+                            _g_client_id = st.secrets.get("GOOGLE_CLIENT_ID", "")
+                            _g_client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
+                    except Exception:
+                        pass
 
-                        if _setup_submit:
-                            _setup_errors = []
-                            if not _setup_username or not _setup_username.strip():
-                                _setup_errors.append("Username is required.")
-                            if not _setup_email or "@" not in _setup_email:
-                                _setup_errors.append("Valid email address required.")
-                            if not _setup_first.strip() or not _setup_last.strip():
-                                _setup_errors.append("First and last name required.")
-                            if not _setup_pw or len(_setup_pw) < 6:
-                                _setup_errors.append("Password must be at least 6 characters.")
-                            if _setup_pw != _setup_pw2:
-                                _setup_errors.append("Passwords do not match.")
+                    _google_setup_done = False
+                    if _g_client_id and _g_client_secret:
+                        try:
+                            from streamlit_google_auth import Authenticate as GoogleAuth
+                            _g_redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-app.streamlit.app")
+                            try:
+                                if hasattr(st, "secrets"):
+                                    _g_redirect = st.secrets.get("GOOGLE_REDIRECT_URI", _g_redirect)
+                            except Exception:
+                                pass
+                            _google_auth = GoogleAuth(
+                                secret=_g_client_secret, client_id=_g_client_id,
+                                redirect_uri=_g_redirect,
+                            )
+                            _google_auth.check()
+                            if st.session_state.get("connected"):
+                                _g_email = st.session_state.get("user_info", {}).get("email", "")
+                                _g_name = st.session_state.get("user_info", {}).get("name", "")
+                                if _g_email:
+                                    _g_username = _g_email.split("@")[0].lower().replace(".", "_")
+                                    _g_hash = stauth.Hasher.hash(_g_email)
+                                    _new_config = {
+                                        "credentials": {"usernames": {
+                                            _g_username: {
+                                                "email": _g_email,
+                                                "first_name": (_g_name.split()[0] if _g_name else _g_email.split("@")[0]).title(),
+                                                "last_name": (" ".join(_g_name.split()[1:]) if _g_name else ""),
+                                                "password": _g_hash, "role": "admin",
+                                            }
+                                        }},
+                                        "cookie": {"name": "prosper_auth",
+                                                    "key": f"prosper_auth_cookie_key_{datetime.now().strftime('%Y')}",
+                                                    "expiry_days": 30},
+                                    }
+                                    with open(_auth_config_path, "w") as _wf:
+                                        yaml.dump(_new_config, _wf, default_flow_style=False)
+                                    try:
+                                        from core.database import create_user as _db_cr
+                                        _db_cr(_g_username, _g_email, _new_config["credentials"]["usernames"][_g_username]["first_name"],
+                                               _new_config["credentials"]["usernames"][_g_username]["last_name"], _g_hash, "admin")
+                                    except Exception:
+                                        pass
+                                    st.session_state["authentication_status"] = True
+                                    st.session_state["username"] = _g_username
+                                    st.session_state["name"] = _g_name or _g_email.split("@")[0].title()
+                                    st.session_state["user_id"] = _g_email
+                                    _google_setup_done = True
+                                    st.rerun()
+                        except ImportError:
+                            pass
+                        except Exception:
+                            pass
 
-                            if _setup_errors:
-                                for _e in _setup_errors:
-                                    st.error(_e)
-                            else:
-                                _hashed_pw = stauth.Hasher.hash(_setup_pw)
-                                _new_config = {
-                                    "credentials": {
-                                        "usernames": {
-                                            _setup_username.strip().lower(): {
+                    if not _google_setup_done:
+                        st.markdown("---")
+                        st.markdown(
+                            "<p style='text-align:center;color:#aaa;font-size:0.9rem'>"
+                            "Create your account to get started</p>",
+                            unsafe_allow_html=True,
+                        )
+
+                        with st.form("first_run_setup", clear_on_submit=False):
+                            _setup_c1, _setup_c2 = st.columns(2)
+                            with _setup_c1:
+                                _setup_first = st.text_input("First Name", key="_setup_first")
+                            with _setup_c2:
+                                _setup_last = st.text_input("Last Name", key="_setup_last")
+                            _setup_email = st.text_input("Email", placeholder="you@example.com", key="_setup_email")
+                            _setup_pw = st.text_input("Password (min 6 characters)", type="password", key="_setup_pw")
+                            _setup_pw2 = st.text_input("Confirm Password", type="password", key="_setup_pw2")
+                            _setup_submit = st.form_submit_button("Create Account & Sign In", type="primary", use_container_width=True)
+
+                            if _setup_submit:
+                                _setup_errors = []
+                                if not _setup_email or "@" not in _setup_email:
+                                    _setup_errors.append("Valid email address required.")
+                                if not _setup_first.strip():
+                                    _setup_errors.append("First name required.")
+                                if not _setup_pw or len(_setup_pw) < 6:
+                                    _setup_errors.append("Password must be at least 6 characters.")
+                                if _setup_pw != _setup_pw2:
+                                    _setup_errors.append("Passwords do not match.")
+
+                                # Derive username from email
+                                _setup_username = _setup_email.split("@")[0].lower().replace(".", "_").replace("-", "_") if _setup_email else ""
+
+                                if _setup_errors:
+                                    for _e in _setup_errors:
+                                        st.error(_e)
+                                else:
+                                    _hashed_pw = stauth.Hasher.hash(_setup_pw)
+                                    _new_config = {
+                                        "credentials": {"usernames": {
+                                            _setup_username: {
                                                 "email": _setup_email.strip(),
                                                 "first_name": _setup_first.strip(),
-                                                "last_name": _setup_last.strip(),
-                                                "password": _hashed_pw,
-                                                "role": "admin",
+                                                "last_name": (_setup_last.strip() if '_setup_last' in dir() else ""),
+                                                "password": _hashed_pw, "role": "admin",
                                             }
-                                        }
-                                    },
-                                    "cookie": {
-                                        "name": "prosper_auth",
-                                        "key": f"prosper_auth_cookie_key_{datetime.now().strftime('%Y')}",
-                                        "expiry_days": 30,
-                                    },
-                                }
-                                with open(_auth_config_path, "w") as _wf:
-                                    yaml.dump(_new_config, _wf, default_flow_style=False)
-                                st.success("Admin account created. The page will reload.")
-                                st.rerun()
+                                        }},
+                                        "cookie": {"name": "prosper_auth",
+                                                    "key": f"prosper_auth_cookie_key_{datetime.now().strftime('%Y')}",
+                                                    "expiry_days": 30},
+                                    }
+                                    with open(_auth_config_path, "w") as _wf:
+                                        yaml.dump(_new_config, _wf, default_flow_style=False)
+                                    try:
+                                        from core.database import create_user as _db_cr2
+                                        _db_cr2(_setup_username, _setup_email.strip(),
+                                                _setup_first.strip(), "", _hashed_pw, "admin")
+                                    except Exception:
+                                        pass
+                                    # Auto-login
+                                    st.session_state["authentication_status"] = True
+                                    st.session_state["username"] = _setup_username
+                                    st.session_state["name"] = _setup_first.strip()
+                                    st.session_state["user_id"] = _setup_email.strip()
+                                    st.balloons()
+                                    st.success(f"Welcome to Prosper, **{_setup_first.strip()}**!")
+                                    import time; time.sleep(1.5)
+                                    st.rerun()
 
                 st.stop()
 
