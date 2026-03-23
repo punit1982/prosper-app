@@ -112,42 +112,31 @@ def get_defaults() -> dict:
 
 def get_api_key(key_name: str) -> str:
     """
-    Get an API key by name, checking multiple sources:
-    1. os.environ / .env file  (local development)
-    2. st.secrets              (Streamlit Cloud deployment)
-    Returns empty string if not found anywhere.
+    Get an API key by name from environment variables.
+    On Render/Docker, all secrets are env vars.
+    Falls back to Streamlit secrets only if a secrets.toml file exists.
     """
-    # 1. Environment variable (works locally with .env)
+    # 1. Environment variable (primary — Render, Docker, local .env)
     val = os.getenv(key_name, "")
     if val:
         return val
 
-    # 2. Streamlit Cloud secrets — try multiple access patterns
-    try:
-        import streamlit as st
-        # Pattern A: direct key access (most reliable)
+    # 2. Streamlit secrets (only if secrets.toml actually exists)
+    secrets_paths = [
+        os.path.expanduser("~/.streamlit/secrets.toml"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".streamlit", "secrets.toml"),
+    ]
+    if any(os.path.exists(p) for p in secrets_paths):
         try:
-            val = st.secrets[key_name]
-            if val:
-                return str(val)
-        except KeyError:
-            pass
-        # Pattern B: .get() fallback
-        try:
-            val = st.secrets.get(key_name, "")
-            if val:
-                return str(val)
+            import streamlit as st
+            try:
+                val = st.secrets[key_name]
+                if val:
+                    return str(val)
+            except (KeyError, Exception):
+                pass
         except Exception:
             pass
-        # Pattern C: check nested [secrets] table (some Streamlit versions)
-        try:
-            val = st.secrets["secrets"][key_name]
-            if val:
-                return str(val)
-        except (KeyError, Exception):
-            pass
-    except Exception:
-        pass
 
     return ""
 

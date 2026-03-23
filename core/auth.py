@@ -239,15 +239,6 @@ def _build_google_creds_file():
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper.onrender.com")
 
-    # Also try Streamlit secrets
-    try:
-        if hasattr(st, "secrets"):
-            g_cid = g_cid or st.secrets.get("GOOGLE_CLIENT_ID", "")
-            g_csec = g_csec or st.secrets.get("GOOGLE_CLIENT_SECRET", "")
-            redirect = st.secrets.get("GOOGLE_REDIRECT_URI", redirect)
-    except Exception:
-        pass
-
     if g_cid and g_csec:
         try:
             with open(_GOOGLE_CREDS_PATH, "w") as f:
@@ -275,11 +266,10 @@ def _show_google_signin() -> bool:
         return False
 
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper.onrender.com")
-    try:
-        if hasattr(st, "secrets"):
-            redirect_uri = st.secrets.get("GOOGLE_REDIRECT_URI", redirect_uri)
-    except Exception:
-        pass
+
+    # Prevent duplicate widget creation on re-runs
+    if st.session_state.get("_google_auth_rendered"):
+        return False
 
     try:
         g_auth = GoogleAuth(
@@ -289,6 +279,7 @@ def _show_google_signin() -> bool:
             redirect_uri=redirect_uri,
         )
         g_auth.check_authentification()
+        st.session_state["_google_auth_rendered"] = True
 
         if st.session_state.get("connected"):
             g_email = st.session_state.get("user_info", {}).get("email", "")
@@ -409,10 +400,11 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
 # ─────────────────────────────────────────
 def do_logout():
     """Clear ALL auth-related session state including authenticator cookie state."""
-    # Keys that streamlit-authenticator uses internally
+    # Keys that streamlit-authenticator / Google auth uses internally
     _auth_keys = {
         "authentication_status", "username", "name", "logout",
         "user_id", "auth_method", "connected", "user_info",
+        "_google_auth_rendered",
         "FormSubmitter:Login-Login", "FormSubmitter:Login-Submit",
     }
     # App-specific keys to clear

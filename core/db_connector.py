@@ -28,52 +28,32 @@ _cached_pipeline_url = None  # Cache the working pipeline URL globally
 
 
 def _get_secret(key_name: str) -> str:
-    """Get a secret value — tries env vars, then 5 Streamlit secrets patterns."""
-    # 1. Environment variable
+    """Get a secret value from environment variables.
+
+    On Render/Docker, secrets are passed as env vars.
+    Falls back to Streamlit secrets only if env var is not set
+    and a secrets.toml file actually exists.
+    """
+    # 1. Environment variable (primary — works on Render, Docker, local .env)
     val = os.getenv(key_name, "")
     if val:
         return val
 
-    # 2-6. Streamlit secrets — try every pattern that might work
-    try:
-        import streamlit as st
-        # Pattern A: direct attribute access
+    # 2. Streamlit secrets (only if secrets.toml exists — avoids noisy warning)
+    secrets_paths = [
+        os.path.expanduser("~/.streamlit/secrets.toml"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".streamlit", "secrets.toml"),
+    ]
+    has_secrets_file = any(os.path.exists(p) for p in secrets_paths)
+
+    if has_secrets_file:
         try:
+            import streamlit as st
             val = getattr(st.secrets, key_name, "")
             if val:
                 return str(val)
         except Exception:
             pass
-        # Pattern B: dict-style access
-        try:
-            val = st.secrets[key_name]
-            if val:
-                return str(val)
-        except Exception:
-            pass
-        # Pattern C: .get()
-        try:
-            val = st.secrets.get(key_name, "")
-            if val:
-                return str(val)
-        except Exception:
-            pass
-        # Pattern D: nested under [secrets] table
-        try:
-            val = st.secrets["secrets"][key_name]
-            if val:
-                return str(val)
-        except Exception:
-            pass
-        # Pattern E: iterate all keys and match case-insensitively
-        try:
-            for k in st.secrets:
-                if k.upper() == key_name.upper():
-                    return str(st.secrets[k])
-        except Exception:
-            pass
-    except Exception:
-        pass
 
     return ""
 
