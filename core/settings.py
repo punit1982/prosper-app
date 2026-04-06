@@ -182,9 +182,9 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
     Raises Exception if ALL models fail.
     """
     _FALLBACK_MODELS = [
-        "claude-sonnet-4-5-20250514",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-20250514",
         "claude-haiku-4-5-20250514",
-        "claude-3-5-sonnet-20241022",
     ]
 
     # Put the preferred model first, deduplicate

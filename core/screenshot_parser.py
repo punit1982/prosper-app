@@ -208,9 +208,9 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
 
     # Try models in order — different API tiers/regions support different models
     _MODELS_TO_TRY = [
-        "claude-sonnet-4-5-20250514",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-20250514",
         "claude-haiku-4-5-20250514",
-        "claude-3-5-sonnet-20241022",
     ]
 
     content = [
