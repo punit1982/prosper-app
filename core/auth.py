@@ -252,46 +252,61 @@ def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, ro
 
 
 # ─────────────────────────────────────────
-# GOOGLE OAUTH
+# GOOGLE OAUTH — manual implementation
+# No dependency on streamlit-google-auth (which hardcodes key='init' causing
+# duplicate widget key conflicts with streamlit-authenticator).
+# Uses only 'requests' (already in requirements) + standard OAuth2 endpoints.
 # ─────────────────────────────────────────
 def _build_google_creds_file():
-    """Build google_credentials.json from env vars. Always rebuilds to stay current."""
-    g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
-    g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-
-    if not (g_cid and g_csec):
-        return
-
-    try:
-        with open(_GOOGLE_CREDS_PATH, "w") as f:
-            json.dump({
-                "web": {
-                    "client_id": g_cid,
-                    "client_secret": g_csec,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [redirect],
-                }
-            }, f)
-    except Exception:
-        pass
+    """No-op — kept for API compatibility. Manual flow uses env vars directly."""
+    pass
 
 
 def _is_google_configured() -> bool:
-    """Check if Google OAuth credentials are available (without touching Streamlit widgets)."""
-    if os.path.exists(_GOOGLE_CREDS_PATH):
-        return True
+    """Check if Google OAuth env vars are set."""
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
 
 
-def _show_google_signin() -> bool:
-    """Show Google sign-in button. Returns True if user just authenticated.
+def _handle_google_user(user_info: dict) -> bool:
+    """Process authenticated Google user — create/sync DB record and set session state."""
+    g_email = user_info.get("email", "")
+    g_name = user_info.get("name", "")
+    if not g_email:
+        return False
 
-    streamlit-google-auth uses hardcoded key='init' internally,
-    so this function MUST only render the widget ONCE per Streamlit rerun.
-    We track this in session_state (resets each rerun) not a module global
-    (which persists across reruns in Streamlit's execution model).
+    g_username = g_email.split("@")[0].lower().replace(".", "_").replace("-", "_")
+    g_hash = _hash_password(g_email)
+    first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
+    last_name = " ".join(g_name.split()[1:]) if g_name and len(g_name.split()) > 1 else ""
+
+    existing = _db_get_all_users()
+    role = "admin" if not existing else "user"
+
+    try:
+        _db_create_user(g_username, g_email, first_name, last_name, g_hash, role)
+    except Exception:
+        pass
+
+    _sync_user_to_yaml(g_username, g_email, first_name, last_name, g_hash, role)
+
+    st.session_state["authentication_status"] = True
+    st.session_state["username"] = g_username
+    st.session_state["name"] = g_name or first_name
+    st.session_state["user_id"] = g_email
+    st.session_state["auth_method"] = "google"
+    return True
+
+
+def _show_google_signin() -> bool:
+    """Show Google sign-in button using manual OAuth2 redirect flow.
+
+    Flow:
+      1. User clicks "Continue with Google" → redirected to Google consent
+      2. Google redirects back with ?code=... in URL
+      3. We exchange the code for an access token (server-side POST)
+      4. We fetch the user's profile and create/sync the account
+
+    Uses only 'requests' — no streamlit-google-auth dependency, no key='init' conflict.
     """
     # Guard: only render once per rerun cycle
     if st.session_state.get("_google_auth_rendered_this_rerun"):
@@ -300,62 +315,66 @@ def _show_google_signin() -> bool:
     if not _is_google_configured():
         return False
 
-    _build_google_creds_file()
-
-    if not os.path.exists(_GOOGLE_CREDS_PATH):
-        return False
-
-    try:
-        from streamlit_google_auth import Authenticate as GoogleAuth
-    except ImportError:
-        return False
-
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-
-    # Mark as rendered BEFORE creating widget (prevents re-entry within same rerun)
     st.session_state["_google_auth_rendered_this_rerun"] = True
 
+    g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
+    g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
+
     try:
-        g_auth = GoogleAuth(
-            secret_credentials_path=_GOOGLE_CREDS_PATH,
-            cookie_name="prosper_google_auth",
-            cookie_key=_GOOGLE_COOKIE_KEY,
-            redirect_uri=redirect_uri,
-        )
-        g_auth.check_authentification()
+        import urllib.parse
+        import requests as _req
 
-        if st.session_state.get("connected"):
-            g_email = st.session_state.get("user_info", {}).get("email", "")
-            g_name = st.session_state.get("user_info", {}).get("name", "")
-            if g_email:
-                g_username = g_email.split("@")[0].lower().replace(".", "_").replace("-", "_")
-                g_hash = _hash_password(g_email)
+        # ── Step 1: Handle OAuth callback (code in URL params) ──
+        params = dict(st.query_params)
+        if "code" in params and not st.session_state.get("_google_auth_done"):
+            code = params["code"]
+            # Clear the code from URL immediately to prevent reuse
+            st.query_params.clear()
 
-                first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
-                last_name = " ".join(g_name.split()[1:]) if g_name and len(g_name.split()) > 1 else ""
+            token_resp = _req.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": g_cid,
+                    "client_secret": g_csec,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": redirect,
+                },
+                timeout=10,
+            )
+            if token_resp.status_code == 200:
+                access_token = token_resp.json().get("access_token", "")
+                if access_token:
+                    ui_resp = _req.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=10,
+                    )
+                    if ui_resp.status_code == 200:
+                        user_info = ui_resp.json()
+                        st.session_state["_google_auth_done"] = True
+                        st.session_state["connected"] = True
+                        st.session_state["user_info"] = user_info
+                        return _handle_google_user(user_info)
+            else:
+                _auth_log.warning(f"Google token exchange failed ({token_resp.status_code}): {token_resp.text[:200]}")
 
-                existing = _db_get_all_users()
-                role = "admin" if not existing else "user"
+        # ── Step 2: Already authenticated this session ──
+        if st.session_state.get("connected") and st.session_state.get("user_info"):
+            return _handle_google_user(st.session_state["user_info"])
 
-                try:
-                    _db_create_user(g_username, g_email, first_name, last_name, g_hash, role)
-                except Exception:
-                    pass
+        # ── Step 3: Show the sign-in button ──
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
+            "client_id": g_cid,
+            "redirect_uri": redirect,
+            "scope": "openid email profile",
+            "response_type": "code",
+            "access_type": "offline",
+            "prompt": "select_account",
+        })
+        st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
 
-                _sync_user_to_yaml(g_username, g_email, first_name, last_name, g_hash, role)
-
-                st.session_state["authentication_status"] = True
-                st.session_state["username"] = g_username
-                st.session_state["name"] = g_name or first_name
-                st.session_state["user_id"] = g_email
-                st.session_state["auth_method"] = "google"
-                return True
-        else:
-            try:
-                auth_url = g_auth.get_authorization_url()
-                st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
-            except Exception as url_err:
-                _auth_log.warning(f"Google auth URL failed: {url_err}")
     except Exception as google_err:
         _auth_log.warning(f"Google sign-in error: {google_err}")
         st.warning(f"Google sign-in error: {google_err}")
