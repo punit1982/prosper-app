@@ -96,7 +96,7 @@ with st.sidebar:
             st.divider()
             if st.button("🔗 Sync IBKR", use_container_width=True,
                           help="Quick sync from Interactive Brokers via Flex Query"):
-                st.switch_page("pages/25_IBKR_Sync.py")
+                st.switch_page("25_IBKR_Sync")
     except Exception:
         pass
 

@@ -159,18 +159,17 @@ for name, key in optional_apis.items():
     status = "Configured" if configured else "Not set (optional)"
     st.markdown(f"{icon} **{name}** — {status}")
 
-with st.expander("💡 How to add API keys on Streamlit Cloud"):
+with st.expander("💡 How to add API keys"):
     st.markdown("""
-**On Streamlit Cloud** → go to your app → ⋮ menu → **Settings** → **Secrets** and paste:
-```toml
-ANTHROPIC_API_KEY = "sk-ant-..."
-FMP_API_KEY = "..."
-FINNHUB_API_KEY = "..."
-SERPER_API_KEY = "..."
-TWELVE_DATA_API_KEY = "..."
-PROSPER_AUTH_ENABLED = "true"
+**On Render Dashboard** → go to your service → **Environment** and add:
 ```
-Each line must be in `KEY = "value"` format (with quotes around the value).
+ANTHROPIC_API_KEY = sk-ant-...
+FMP_API_KEY = ...
+FINNHUB_API_KEY = ...
+SERPER_API_KEY = ...
+TWELVE_DATA_API_KEY = ...
+PROSPER_AUTH_ENABLED = true
+```
 
 **Locally**: add keys to your `.env` file and restart the app:
 - **Finnhub**: Free at [finnhub.io](https://finnhub.io/) — improves analyst data & company news
@@ -236,7 +235,7 @@ try:
     db_info = st.session_state["_db_info_cache"]
     db_icon = "☁️" if db_info["persistent"] else "💾"
     db_label = db_info["backend"]
-    db_persistent = "✅ Persistent (survives reboots)" if db_info["persistent"] else "⚠️ Local only (lost on Streamlit Cloud reboot)"
+    db_persistent = "✅ Persistent (survives reboots)" if db_info["persistent"] else "⚠️ Local only (ephemeral)"
 except Exception:
     db_info = {}
     db_label = "SQLite (Local)"
@@ -279,7 +278,7 @@ except Exception:
 
 # Turso setup instructions
 if not db_info.get("persistent", False):
-    with st.expander("☁️ Enable Cloud Database (Turso) — recommended for Streamlit Cloud"):
+    with st.expander("☁️ Enable Cloud Database (Turso) — for persistent data"):
         st.markdown("""
 **To make your data persistent (survive reboots):**
 
@@ -287,7 +286,7 @@ if not db_info.get("persistent", False):
 2. Create a database: `turso db create prosper`
 3. Get your database URL: `turso db show prosper --url`
 4. Create an auth token: `turso db tokens create prosper`
-5. Add these to your Streamlit Cloud secrets (Settings → Secrets):
+5. Add these to your Render dashboard (Environment → Add Variable):
 
 ```toml
 TURSO_DATABASE_URL = "libsql://prosper-yourname.turso.io"

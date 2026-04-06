@@ -44,7 +44,7 @@ if token_configured:
     st.markdown("✅ **IBKR Flex Token** — Configured")
 else:
     st.markdown("❌ **IBKR Flex Token** — Not configured")
-    st.caption("Add `IBKR_FLEX_TOKEN` to your `.env` file or Streamlit Cloud Secrets.")
+    st.caption("Add `IBKR_FLEX_TOKEN` to your `.env` file or Render Environment Variables.")
 
 # Flex Query ID (stored in user settings, not secrets)
 user_settings = load_user_settings()
@@ -80,7 +80,7 @@ with st.expander("📖 How to Set Up IBKR Flex Query"):
    - `Symbol`, `Description`, `Position`, `CostBasisPrice`, `MarkPrice`, `Currency`, `ListingExchange`
 6. **Save** the query and note the **Query ID** (numeric, shown in the list)
 7. Go to the **Flex Query Token** page → generate a token
-8. **Add the token** as `IBKR_FLEX_TOKEN` in your `.env` file or Streamlit Cloud Secrets:
+8. **Add the token** as `IBKR_FLEX_TOKEN` in your `.env` file or Render Environment Variables:
 
 ```toml
 IBKR_FLEX_TOKEN = "your-flex-token-here"
