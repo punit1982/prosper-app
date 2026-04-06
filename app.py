@@ -272,7 +272,18 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
             st.markdown(f"**{role}:** {msg['content']}")
 
         _q = st.text_input("Ask anything...", key="_mini_chat_input", label_visibility="collapsed")
+        import time as _time
+        _CHAT_COOLDOWN = 3
+        _CHAT_MAX_MSGS = 30
+        _last_chat = st.session_state.get("_mini_chat_last_ts", 0)
+        if _q and (_time.time() - _last_chat) < _CHAT_COOLDOWN:
+            st.warning("Please wait a moment before sending another message.")
+            _q = None
+        if _q and len(st.session_state.get("mini_chat", [])) >= _CHAT_MAX_MSGS:
+            st.warning("Session chat limit reached. Clear chat or use the full chat page.")
+            _q = None
         if _q:
+            st.session_state["_mini_chat_last_ts"] = _time.time()
             st.session_state["mini_chat"].append({"role": "user", "content": _q})
             try:
                 import anthropic

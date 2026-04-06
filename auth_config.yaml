@@ -1,6 +1,0 @@
-credentials:
-  usernames: {}
-cookie:
-  expiry_days: 30
-  key: prosper_auth_cookie_key_2026
-  name: prosper_auth

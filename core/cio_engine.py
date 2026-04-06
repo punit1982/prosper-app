@@ -179,7 +179,7 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
 
     results: Dict[str, dict] = {}
     explicit_failures: set = set()
-    max_workers = min(len(tickers), 15)   # increased from 12 for larger portfolios
+    max_workers = min(len(tickers), 5)
 
     # Scale timeout: 30s base + 2s per ticker beyond 20 (was 60s — too slow for initial load)
     batch_timeout = max(30, 30 + (len(tickers) - 20) * 2) if len(tickers) > 20 else 30
@@ -286,7 +286,7 @@ def add_key_metrics(df: pd.DataFrame) -> pd.DataFrame:
     tickers = df["ticker"].dropna().tolist()
     metrics_map: Dict[str, dict] = {}
 
-    max_workers = min(len(tickers), 15)
+    max_workers = min(len(tickers), 5)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one_metrics, sym): sym for sym in tickers}
         for future in as_completed(futures):

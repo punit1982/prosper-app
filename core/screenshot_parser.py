@@ -61,7 +61,27 @@ def parse_brokerage_image(image_bytes: bytes, media_type: str) -> ParseResult:
     # --- Step 3: Call Claude Vision ---
     result = _claude_vision_parse(image_bytes, media_type, api_key)
 
-    # --- Step 4: Cache the result if successful ---
+    # --- Step 4: Validate parsed holdings ---
+    if isinstance(result, list):
+        cleaned = []
+        for h in result:
+            ticker = (h.get("ticker") or "").strip()
+            if not ticker:
+                continue
+            try:
+                qty = float(h.get("quantity", 0))
+                avg_cost = float(h.get("avg_cost", 0))
+            except (TypeError, ValueError):
+                continue
+            if ticker not in ("CASH", "MARGIN") and qty <= 0:
+                continue
+            if avg_cost < 0:
+                continue
+            h["ticker"] = ticker
+            cleaned.append(h)
+        result = cleaned
+
+    # --- Step 5: Cache the result if successful ---
     if cache_enabled and isinstance(result, list):
         save_parse_cache(image_hash, result)
 
@@ -205,22 +225,31 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
         {"type": "text", "text": _EXTRACTION_PROMPT},
     ]
 
+    import time as _time
+    _TRANSIENT_CODES = ("500", "502", "503", "529", "overloaded", "rate_limit")
+
     response = None
     last_error = None
     for model in _MODELS_TO_TRY:
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": content}],
-            )
-            break  # success
-        except Exception as e:
-            err_str = str(e)
-            if "404" in err_str or "not_found" in err_str:
-                last_error = err_str
-                continue  # try next model
-            return f"Claude API call failed: {e}"
+        for attempt in range(2):  # 1 try + 1 retry for transient errors
+            try:
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": content}],
+                )
+                break  # success
+            except Exception as e:
+                err_str = str(e).lower()
+                if "404" in err_str or "not_found" in err_str:
+                    last_error = err_str
+                    break  # move to next model
+                if attempt == 0 and any(code in err_str for code in _TRANSIENT_CODES):
+                    _time.sleep(2)
+                    continue  # retry same model once
+                return f"Claude API call failed: {e}"
+        if response is not None:
+            break
 
     if response is None:
         return (

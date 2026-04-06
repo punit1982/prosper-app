@@ -8,7 +8,7 @@ font = "sans serif"
 [server]
 maxUploadSize = 50
 headless = true
-enableCORS = true
+enableCORS = false
 enableXsrfProtection = true
 
 [runner]

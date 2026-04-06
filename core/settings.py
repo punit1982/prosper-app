@@ -220,4 +220,4 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
 # ─────────────────────────────────────────
 # LIVE SETTINGS — loaded once at import time, updated when user saves
 # ─────────────────────────────────────────
-SETTINGS = load_user_settings()
+SETTINGS = dict(_DEFAULTS)  # Start with defaults; updated after auth in app.py

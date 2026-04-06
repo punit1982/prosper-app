@@ -1,6 +1,17 @@
 # Environment and secrets
 .env
 google_credentials.json
+auth_config.yaml
+
+# User data directory
+prosper_data/
+
+# Database files
+*.db
+*.sqlite
+
+# Pip install artifacts
+=*
 
 # Python
 __pycache__/

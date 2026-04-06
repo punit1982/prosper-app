@@ -22,11 +22,14 @@ Usage in app.py:
 import os
 import re
 import json
+import secrets as _secrets
+import logging as _logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 import streamlit as st
 
+_auth_log = _logging.getLogger("prosper.auth")
 
 # ─────────────────────────────────────────
 # CONSTANTS
@@ -36,8 +39,18 @@ _AUTH_CONFIG_PATH = os.path.join(_APP_DIR, "auth_config.yaml")
 _GOOGLE_CREDS_PATH = os.path.join(_APP_DIR, "google_credentials.json")
 
 _COOKIE_NAME = "prosper_auth"
-_COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "prosper_auth_cookie_key_2026_v2")
+_COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
+if not _COOKIE_KEY:
+    _COOKIE_KEY = _secrets.token_hex(32)
+    _auth_log.warning(
+        "PROSPER_COOKIE_SECRET not set — using random key. "
+        "Sessions will not persist across restarts."
+    )
 _COOKIE_EXPIRY_DAYS = 30
+
+_GOOGLE_COOKIE_KEY = os.getenv("PROSPER_GOOGLE_COOKIE_SECRET", "")
+if not _GOOGLE_COOKIE_KEY:
+    _GOOGLE_COOKIE_KEY = _secrets.token_hex(32)
 
 _HIDE_SIDEBAR_CSS = (
     '<style>[data-testid="stSidebar"]{display:none !important;}'
@@ -242,28 +255,27 @@ def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, ro
 # GOOGLE OAUTH
 # ─────────────────────────────────────────
 def _build_google_creds_file():
-    """Build google_credentials.json from env vars if not present."""
-    if os.path.exists(_GOOGLE_CREDS_PATH):
-        return
-
+    """Build google_credentials.json from env vars. Always rebuilds to stay current."""
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
 
-    if g_cid and g_csec:
-        try:
-            with open(_GOOGLE_CREDS_PATH, "w") as f:
-                json.dump({
-                    "web": {
-                        "client_id": g_cid,
-                        "client_secret": g_csec,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [redirect],
-                    }
-                }, f)
-        except Exception:
-            pass
+    if not (g_cid and g_csec):
+        return
+
+    try:
+        with open(_GOOGLE_CREDS_PATH, "w") as f:
+            json.dump({
+                "web": {
+                    "client_id": g_cid,
+                    "client_secret": g_csec,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": [redirect],
+                }
+            }, f)
+    except Exception:
+        pass
 
 
 def _is_google_configured() -> bool:
@@ -307,7 +319,7 @@ def _show_google_signin() -> bool:
         g_auth = GoogleAuth(
             secret_credentials_path=_GOOGLE_CREDS_PATH,
             cookie_name="prosper_google_auth",
-            cookie_key=os.getenv("PROSPER_GOOGLE_COOKIE_SECRET", "prosper_google_secret_2026"),
+            cookie_key=_GOOGLE_COOKIE_KEY,
             redirect_uri=redirect_uri,
         )
         g_auth.check_authentification()
@@ -343,12 +355,10 @@ def _show_google_signin() -> bool:
                 auth_url = g_auth.get_authorization_url()
                 st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
             except Exception as url_err:
-                import logging
-                logging.getLogger("prosper.auth").warning(f"Google auth URL failed: {url_err}")
+                _auth_log.warning(f"Google auth URL failed: {url_err}")
     except Exception as google_err:
-        import logging
-        logging.getLogger("prosper.auth").warning(f"Google sign-in error: {google_err}")
-        # Email auth still works as fallback
+        _auth_log.warning(f"Google sign-in error: {google_err}")
+        st.warning("Google sign-in is temporarily unavailable. Please use email login.")
 
     return False
 

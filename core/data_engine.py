@@ -305,7 +305,7 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
             items_to_resolve.append((ticker, currency))
 
     if items_to_resolve:
-        with ThreadPoolExecutor(max_workers=min(len(items_to_resolve), 10)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(items_to_resolve), 4)) as pool:
             futures = {
                 pool.submit(resolve_ticker, t, c): t
                 for t, c in items_to_resolve
@@ -370,7 +370,7 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
     results = {}
     if not tickers:
         return results
-    max_w = min(len(tickers), 10)
+    max_w = min(len(tickers), 4)
     total_timeout = max(60, len(tickers) * 5)
     with ThreadPoolExecutor(max_workers=max_w) as pool:
         futures = {pool.submit(get_ticker_info, t): t for t in tickers}

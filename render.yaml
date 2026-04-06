@@ -24,5 +24,11 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
+      - key: PROSPER_COOKIE_SECRET
+        sync: false
+      - key: PROSPER_GOOGLE_COOKIE_SECRET
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
       - key: PORT
         value: "8501"
