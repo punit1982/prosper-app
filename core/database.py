@@ -399,14 +399,14 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             _src = broker_source or ""
             try:
                 conn.execute(
-                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
+                    """INSERT OR REPLACE INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (_ticker, _name, _qty, _cost, _ccy, _src, pid),
                 )
             except Exception:
                 # portfolio_id column may not exist — insert without it
                 conn.execute(
-                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
+                    """INSERT OR REPLACE INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (_ticker, _name, _qty, _cost, _ccy, _src),
                 )

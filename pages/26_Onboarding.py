@@ -300,7 +300,7 @@ elif current_step == 5:
             save_user_settings({"onboarding_complete": True})
             # Reset wizard step for clean state
             st.session_state.onboarding_step = 1
-            st.switch_page("00_Command_Center")
+            st.switch_page("pages/00_Command_Center.py")
 
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
