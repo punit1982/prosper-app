@@ -554,27 +554,22 @@ def run_analysis(
     if tier in ("standard", "full"):
         # Parallel fetch: Serper web search + Google News headlines
         sources_ctx = []
-        pool = ThreadPoolExecutor(max_workers=2)
-        futures = {}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {}
+            futures[pool.submit(_fetch_serper_context, ticker, company_name)] = "serper"
+            futures[pool.submit(_fetch_google_news_headlines, ticker)] = "google_news"
 
-        # Serper web search (for standard: headlines only, for full: deep search)
-        futures[pool.submit(_fetch_serper_context, ticker, company_name)] = "serper"
-        # Google News headlines
-        futures[pool.submit(_fetch_google_news_headlines, ticker)] = "google_news"
-
-        try:
-            for f in as_completed(futures, timeout=12):
-                source = futures[f]
-                try:
-                    result_text = f.result(timeout=8)
-                    if result_text:
-                        sources_ctx.append(result_text)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        finally:
-            pool.shutdown(wait=False)
+            try:
+                for f in as_completed(futures, timeout=12):
+                    source = futures[f]
+                    try:
+                        result_text = f.result(timeout=8)
+                        if result_text:
+                            sources_ctx.append(result_text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         if sources_ctx:
             web_context = "\n" + "\n\n".join(sources_ctx) + "\n"

@@ -273,20 +273,16 @@ def _is_google_configured() -> bool:
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
 
 
-# Module-level flag: Google auth widget can only be rendered once per script run
-_google_auth_used_this_run = False
-
-
 def _show_google_signin() -> bool:
     """Show Google sign-in button. Returns True if user just authenticated.
 
     streamlit-google-auth uses hardcoded key='init' internally,
-    so this function MUST only render the widget ONCE per script execution.
+    so this function MUST only render the widget ONCE per Streamlit rerun.
+    We track this in session_state (resets each rerun) not a module global
+    (which persists across reruns in Streamlit's execution model).
     """
-    global _google_auth_used_this_run
-
-    # Hard guard: never render twice in a single script run
-    if _google_auth_used_this_run:
+    # Guard: only render once per rerun cycle
+    if st.session_state.get("_google_auth_rendered_this_rerun"):
         return False
 
     if not _is_google_configured():
@@ -304,8 +300,8 @@ def _show_google_signin() -> bool:
 
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
 
-    # Mark as used BEFORE creating the widget (prevents re-entry)
-    _google_auth_used_this_run = True
+    # Mark as rendered BEFORE creating widget (prevents re-entry within same rerun)
+    st.session_state["_google_auth_rendered_this_rerun"] = True
 
     try:
         g_auth = GoogleAuth(
@@ -346,11 +342,13 @@ def _show_google_signin() -> bool:
             try:
                 auth_url = g_auth.get_authorization_url()
                 st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
-            except Exception:
-                pass
-    except Exception:
-        # Silently skip — email auth always works as fallback
-        pass
+            except Exception as url_err:
+                import logging
+                logging.getLogger("prosper.auth").warning(f"Google auth URL failed: {url_err}")
+    except Exception as google_err:
+        import logging
+        logging.getLogger("prosper.auth").warning(f"Google sign-in error: {google_err}")
+        # Email auth still works as fallback
 
     return False
 
@@ -487,6 +485,9 @@ def run_auth() -> Dict[str, Any]:
         "display_name": "User",
         "method": "disabled",
     }
+
+    # Reset per-rerun flag so Google auth widget can render fresh each rerun
+    st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 

@@ -184,8 +184,7 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
     # Scale timeout: 30s base + 2s per ticker beyond 20 (was 60s — too slow for initial load)
     batch_timeout = max(30, 30 + (len(tickers) - 20) * 2) if len(tickers) > 20 else 30
 
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    try:
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one_quote, sym): sym for sym in tickers}
         try:
             for future in as_completed(futures, timeout=batch_timeout):
@@ -194,15 +193,12 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
                     if data is not None:
                         results[sym] = data
                     else:
-                        # _fetch_one_quote tried all sources and returned None explicitly
                         explicit_failures.add(sym)
                 except Exception:
                     pass
         except Exception:
             # Timeout — return whatever completed; timed-out tickers are NOT failed
             pass
-    finally:
-        pool.shutdown(wait=False)
 
     return results, explicit_failures
 
@@ -364,8 +360,7 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
     unique_currencies = df["currency"].unique().tolist()
     fx_rates: Dict[str, float] = {}
     if unique_currencies:
-        fx_pool = ThreadPoolExecutor(max_workers=min(len(unique_currencies), 8))
-        try:
+        with ThreadPoolExecutor(max_workers=min(len(unique_currencies), 8)) as fx_pool:
             fx_futures = {fx_pool.submit(get_exchange_rate, c, base_currency): c
                           for c in unique_currencies}
             try:
@@ -377,8 +372,6 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
                         fx_rates[c] = 1.0
             except Exception:
                 pass
-        finally:
-            fx_pool.shutdown(wait=False)
         # Fill any missing currencies
         for c in unique_currencies:
             fx_rates.setdefault(c, 1.0)

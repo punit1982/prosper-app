@@ -305,8 +305,7 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
             items_to_resolve.append((ticker, currency))
 
     if items_to_resolve:
-        pool = ThreadPoolExecutor(max_workers=min(len(items_to_resolve), 10))
-        try:
+        with ThreadPoolExecutor(max_workers=min(len(items_to_resolve), 10)) as pool:
             futures = {
                 pool.submit(resolve_ticker, t, c): t
                 for t, c in items_to_resolve
@@ -319,12 +318,9 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
                     except Exception:
                         result[orig] = orig
             except Exception:
-                # Timeout — fill unresolved with original tickers
                 for t, _ in items_to_resolve:
                     if t not in result:
                         result[t] = t
-        finally:
-            pool.shutdown(wait=False)
 
         # Save newly resolved tickers to SQLite for next session
         new_resolutions = {t: result[t] for t, _ in items_to_resolve if t in result}
@@ -375,9 +371,8 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
     if not tickers:
         return results
     max_w = min(len(tickers), 10)
-    total_timeout = max(60, len(tickers) * 5)  # Scale timeout with portfolio size
-    pool = ThreadPoolExecutor(max_workers=max_w)
-    try:
+    total_timeout = max(60, len(tickers) * 5)
+    with ThreadPoolExecutor(max_workers=max_w) as pool:
         futures = {pool.submit(get_ticker_info, t): t for t in tickers}
         try:
             for f in as_completed(futures, timeout=total_timeout):
@@ -387,12 +382,9 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
                 except Exception:
                     results[t] = {}
         except Exception:
-            # Timeout — fill remaining with empty
             for t in tickers:
                 if t not in results:
                     results[t] = {}
-    finally:
-        pool.shutdown(wait=False)
     return results
 
 
@@ -679,22 +671,20 @@ def get_portfolio_news(tickers: List[str], limit: int = 50, names: Optional[Dict
     # so we don't need a tight outer timeout. Use shutdown(wait=False) to
     # avoid hanging on executor cleanup.
     all_news = []
-    pool = ThreadPoolExecutor(max_workers=min(len(tickers), 6))
-    futures = {pool.submit(get_ticker_news, t): t for t in tickers}
-    try:
-        for f in as_completed(futures, timeout=45):
-            ticker_done = futures[f]
-            try:
-                items = f.result()
-                for item in items:
-                    item["related_ticker"] = ticker_done
-                    all_news.append(item)
-            except Exception:
-                pass
-    except Exception:
-        pass   # TimeoutError or other — return whatever collected so far
-    finally:
-        pool.shutdown(wait=False)   # don't block on any remaining stragglers
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 6)) as pool:
+        futures = {pool.submit(get_ticker_news, t): t for t in tickers}
+        try:
+            for f in as_completed(futures, timeout=45):
+                ticker_done = futures[f]
+                try:
+                    items = f.result()
+                    for item in items:
+                        item["related_ticker"] = ticker_done
+                        all_news.append(item)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # Sort by publish time (newest first), deduplicate by title
     seen_titles = set()
