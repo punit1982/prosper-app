@@ -358,7 +358,8 @@ def _show_google_signin() -> bool:
                 _auth_log.warning(f"Google auth URL failed: {url_err}")
     except Exception as google_err:
         _auth_log.warning(f"Google sign-in error: {google_err}")
-        st.warning("Google sign-in is temporarily unavailable. Please use email login.")
+        st.warning(f"Google sign-in error: {google_err}")
+        st.caption("Please use email login, or check Google OAuth configuration.")
 
     return False
 
