@@ -53,8 +53,12 @@ if not _GOOGLE_COOKIE_KEY:
     _GOOGLE_COOKIE_KEY = _secrets.token_hex(32)
 
 _HIDE_SIDEBAR_CSS = (
-    '<style>[data-testid="stSidebar"]{display:none !important;}'
-    '[data-testid="stSidebarCollapsedControl"]{display:none !important;}</style>'
+    '<style>'
+    '[data-testid="stSidebar"]{display:none !important;}'
+    '[data-testid="stSidebarCollapsedControl"]{display:none !important;}'
+    '[data-testid="stNavigation"]{display:none !important;}'
+    '[role="tablist"]{display:none !important;}'
+    '</style>'
 )
 
 _HEADER_HTML = (

@@ -58,6 +58,19 @@ TICKER_OVERRIDES: Dict[str, str] = {
     "I288654906":    "FKINX",     # Franklin Income Fund Class A1
     # UAE stocks — ADNOC Drilling (stored without last L)
     "ADNOCDRIL.AE":  "ADNOCDRILL.AE",  # ADNOC Drilling — ADX client has chart ID
+    # Missing Singapore/UAE/Swiss tickers from recent errors
+    "AIY":           "AIY.SI",    # Keppel Infrastructure Trust (Singapore SGX)
+    "AIY.SI":        "AIY.SI",    # Already correct, but add for safe resolution
+    "AJBU":          "AJBU.SI",   # AJ Testing Services Ltd (Singapore)
+    "AJBU.SI":       "AJBU.SI",
+    "ALDAR":         "ALDAR.AE",  # Aldar Properties (Dubai DFM)
+    "ALDAR.AE":      "ALDAR.AE",
+    "HBBD":          "HBBD.SI",   # Habitat Integrated Logistics REIT (Singapore)
+    "HBBD.SI":       "HBBD.SI",
+    "HYDD":          "HYDD.SI",   # Hydro Ltd (Singapore)
+    "HYDD.SI":       "HYDD.SI",
+    "S08":           "S08.SI",    # Seatown Holdings (Singapore)
+    "S08.SI":        "S08.SI",
 }
 
 # ─────────────────────────────────────────

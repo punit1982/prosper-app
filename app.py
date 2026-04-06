@@ -105,6 +105,7 @@ from core.auth import run_auth
 
 auth_result = run_auth()
 # run_auth() calls st.stop() if not authenticated, so if we reach here, user is in.
+# (auth.py hides sidebar during login via CSS, so nav tabs don't show until after login)
 
 # ── Onboarding Check ────────────────────────────────────────────────────────
 if "onboarding_complete" not in st.session_state:
