@@ -83,9 +83,9 @@ def validate_password(pw: str) -> list:
 
 
 def _hash_password(pw: str) -> str:
-    """Hash password using streamlit-authenticator's Hasher."""
-    import streamlit_authenticator as stauth
-    return stauth.Hasher.hash(pw)
+    """Hash password using bcrypt (streamlit-authenticator's Hasher.hash no longer works)."""
+    import bcrypt
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _check_password(plain: str, hashed: str) -> bool:
