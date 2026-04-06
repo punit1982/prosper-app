@@ -651,22 +651,22 @@ def run_auth() -> Dict[str, Any]:
             unsafe_allow_html=True,
         )
 
-        login_tab, register_tab = st.tabs(["Sign In", "Create Account"])
+        # ── Email sign-in (primary action) ──
+        authenticator.login()
+        if st.session_state.get("authentication_status") is True:
+            # Login succeeded — set user_id and rerun to show the app
+            username = st.session_state.get("username", "")
+            user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
+            st.session_state["user_id"] = user_data.get("email", username)
+            st.session_state["auth_method"] = "email"
+            st.rerun()
+        elif st.session_state.get("authentication_status") is False:
+            st.error("Invalid username or password.")
+            st.caption("Forgot your password? Contact an administrator or create a new account.")
 
-        with login_tab:
-            authenticator.login()
-            if st.session_state.get("authentication_status") is True:
-                # Login succeeded — set user_id and rerun to show the app
-                username = st.session_state.get("username", "")
-                user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
-                st.session_state["user_id"] = user_data.get("email", username)
-                st.session_state["auth_method"] = "email"
-                st.rerun()
-            elif st.session_state.get("authentication_status") is False:
-                st.error("Invalid username or password.")
-                st.caption("Forgot your password? Contact an administrator or create a new account.")
-
-        with register_tab:
+        # ── Registration form (secondary action) ──
+        st.markdown("")
+        with st.expander("👤 Create New Account", expanded=False):
             _show_registration_form(is_first_user=False)
 
     st.stop()

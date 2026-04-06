@@ -1726,3 +1726,26 @@ def fmt_large(val) -> str:
             return f"{v:,.2f}"
     except (TypeError, ValueError):
         return ""
+
+
+def deduplicate_tickers(tickers: List[str]) -> List[str]:
+    """
+    Return unique tickers preserving first occurrence order.
+
+    Used when building DataFrames to avoid "cannot reindex on an axis with
+    duplicate labels" errors. Duplicate tickers in the portfolio cause DataFrame
+    construction to fail since column names must be unique.
+
+    Args:
+        tickers: List of ticker symbols (may contain duplicates)
+
+    Returns:
+        List of unique tickers in first-occurrence order
+    """
+    seen = set()
+    result = []
+    for t in tickers:
+        if t not in seen:
+            result.append(t)
+            seen.add(t)
+    return result

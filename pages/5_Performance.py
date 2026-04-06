@@ -62,13 +62,14 @@ if cache_key not in st.session_state:
     with st.spinner("Fetching portfolio data…"):
         st.session_state[cache_key] = enrich_portfolio(holdings, base_currency)
 
-from core.data_engine import apply_global_filter, calc_cagr
+from core.data_engine import apply_global_filter, calc_cagr, deduplicate_tickers
 enriched = apply_global_filter(st.session_state[cache_key]).copy()
 t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
 
 # OPTIMIZATION: only fetch history for tickers that have a live price
 has_price = pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)), errors="coerce").notna()
-live_tickers = enriched.loc[has_price, t_col].dropna().tolist()
+# Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
+live_tickers = deduplicate_tickers(enriched.loc[has_price, t_col].dropna().tolist())
 
 if not live_tickers:
     st.warning("No tickers with live price data. Cannot build performance chart.")
@@ -80,9 +81,10 @@ try:
     if "market_value" in enriched.columns and enriched["market_value"].notna().any():
         total = enriched.loc[has_price, "market_value"].sum()
         weights = {}
-        for _, row in enriched.loc[has_price].iterrows():
-            t = row[t_col]
-            weights[t] = row["market_value"] / total if total > 0 else 1.0 / len(live_tickers)
+        # Build weights from deduplicated tickers, summing if duplicate rows exist
+        for t in live_tickers:
+            mv = enriched.loc[(has_price) & (enriched[t_col] == t), "market_value"].sum()
+            weights[t] = mv / total if total > 0 else 1.0 / len(live_tickers)
     else:
         weights = {t: 1.0 / len(live_tickers) for t in live_tickers}
 

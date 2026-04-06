@@ -18,6 +18,7 @@ from core.data_engine import (
     get_ticker_info_batch, get_history, calc_cagr,
     calc_max_drawdown, calc_sharpe_ratio, calc_sortino_ratio,
     calc_portfolio_beta, calc_portfolio_volatility,
+    deduplicate_tickers,
 )
 from core.settings import SETTINGS
 
@@ -287,7 +288,8 @@ try:
     ]
 
     perf_t_col   = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-    perf_tickers = enriched[perf_t_col].dropna().tolist()
+    # Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
+    perf_tickers = deduplicate_tickers(enriched[perf_t_col].dropna().tolist())
 
     # ── 30-min session_state cache — avoid re-fetching on every page visit ────
     PERF_CACHE_TTL  = 1800   # 30 minutes
@@ -309,10 +311,11 @@ try:
 
     if perf_tickers and weight_col in enriched.columns and perf_cache is None:
         total_mv = enriched[weight_col].sum()
-        perf_weights = {
-            row[perf_t_col]: row[weight_col] / total_mv if total_mv > 0 else 1.0 / len(perf_tickers)
-            for _, row in enriched.iterrows()
-        }
+        # Build weights from deduplicated tickers, summing market_value for duplicate rows
+        perf_weights = {}
+        for t in perf_tickers:
+            mv = enriched[enriched[perf_t_col] == t][weight_col].sum()
+            perf_weights[t] = mv / total_mv if total_mv > 0 else 1.0 / len(perf_tickers)
 
         # Fetch ALL period+ticker combos in ONE parallel pool (max 60 s total)
         def _fetch_period(t, yf_period):
@@ -412,14 +415,16 @@ try:
                                     key="risk_period_select")
 
         perf_t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-        risk_tickers = enriched[perf_t_col].dropna().tolist()
+        # Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
+        risk_tickers = deduplicate_tickers(enriched[perf_t_col].dropna().tolist())
 
         if risk_tickers and weight_col in enriched.columns:
             total_mv = enriched[weight_col].sum()
-            risk_weights = {
-                row[perf_t_col]: row[weight_col] / total_mv if total_mv > 0 else 1.0 / len(risk_tickers)
-                for _, row in enriched.iterrows()
-            }
+            # Build weights from deduplicated tickers, summing market_value for duplicate rows
+            risk_weights = {}
+            for t in risk_tickers:
+                mv = enriched[enriched[perf_t_col] == t][weight_col].sum()
+                risk_weights[t] = mv / total_mv if total_mv > 0 else 1.0 / len(risk_tickers)
 
             # Calculate portfolio daily returns for Sharpe / Sortino
             from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -19,7 +19,7 @@ from core.database import (
 )
 from core.settings import SETTINGS
 from core.cio_engine import enrich_portfolio
-from core.data_engine import get_ticker_info_batch
+from core.data_engine import get_ticker_info_batch, deduplicate_tickers
 from core.fortress import (
     detect_regime, get_geopolitical_tier, REGIME_NAMES, REGIME_COLORS, REGIME_DISPLAY,
     REGIME_EXPANSION, REGIME_OVERHEATING, REGIME_CONTRACTION, REGIME_RECOVERY,
@@ -88,7 +88,8 @@ if enriched.empty:
 
 # ── Fetch Ticker Info (cached) — use resolved tickers for yfinance coverage ──
 _t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-tickers = enriched[_t_col].tolist()
+# Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
+tickers = deduplicate_tickers(enriched[_t_col].tolist())
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_info(tickers_tuple):
@@ -945,8 +946,10 @@ with tab_advanced:
                 try:
                     from core.data_engine import get_history
                     from core.fortress import calculate_correlation_matrix
+                    # Use deduplicated tickers list to avoid duplicate columns in DataFrame
+                    corr_tickers = deduplicate_tickers(tickers[:20] if len(tickers) > 20 else tickers)
                     frames = {}
-                    for t in tickers[:20]:
+                    for t in corr_tickers:
                         hist = get_history(t, period="3mo")
                         if hist is not None and not hist.empty:
                             close = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
