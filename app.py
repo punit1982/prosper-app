@@ -100,12 +100,28 @@ h1, h2, h3, h4, h5, h6 {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Authentication ───────────────────────────────────────────────────────────
-from core.auth import run_auth
+# ── Navigation (declared before auth so auto-discovery is suppressed on login) ─
+# When not authenticated, position="hidden" hides the page list completely.
+# When authenticated, we build the full nav dict below and pg.run() drives the app.
+from core.auth import run_auth as _run_auth
 
-auth_result = run_auth()
-# run_auth() calls st.stop() if not authenticated, so if we reach here, user is in.
-# (auth.py hides sidebar during login via CSS, so nav tabs don't show until after login)
+_is_authed = st.session_state.get("authentication_status") is True
+
+if not _is_authed:
+    # Suppress Streamlit's auto-discovered page list during the login screen.
+    pg = st.navigation(
+        [st.Page("pages/00_Command_Center.py", default=True)],
+        position="hidden",
+    )
+    _run_auth()  # shows login UI and calls st.stop() if not authenticated
+    # If run_auth() returned normally it means a cookie was just validated.
+    # Rerun so the authenticated branch (below) takes over cleanly.
+    if st.session_state.get("authentication_status") is True:
+        st.rerun()
+    st.stop()
+
+# ── Authenticated: build full navigation ─────────────────────────────────────
+_run_auth()  # validates cookie / refreshes session without showing login UI
 
 # ── Onboarding Check ────────────────────────────────────────────────────────
 if "onboarding_complete" not in st.session_state:
@@ -113,6 +129,14 @@ if "onboarding_complete" not in st.session_state:
     prefs = load_user_settings()
     if prefs.get("onboarding_complete", False):
         st.session_state["onboarding_complete"] = True
+
+# Also skip onboarding entirely when user already has holdings in the DB
+if not st.session_state.get("onboarding_complete", False):
+    _existing_holdings = get_all_holdings()
+    if not _existing_holdings.empty:
+        st.session_state["onboarding_complete"] = True
+        from core.settings import save_user_settings
+        save_user_settings({"onboarding_complete": True})
 
 if not st.session_state.get("onboarding_complete", False):
     pg = st.navigation(
@@ -195,7 +219,7 @@ if not get_nav_snapshot_exists_today(_base):
             import logging
             logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
-# ── Navigation ──────────────────────────────────────────────────────────────
+# ── Full Navigation (authenticated users) ────────────────────────────────────
 pg = st.navigation({
     "Prosper": [
         st.Page("pages/00_Command_Center.py", title="Command Center", icon="🏠", default=True),

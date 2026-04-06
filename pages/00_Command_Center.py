@@ -72,7 +72,7 @@ _t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker
 
 # Enrich with sector data if not already present (needed for heatmap + allocation)
 if "sector" not in enriched.columns or enriched["sector"].isna().all():
-    from core.data_engine import get_ticker_info_batch
+    from core.data_engine import get_ticker_info_batch, resolve_sector
     _cmd_tickers = enriched[_t_col].tolist()
 
     @st.cache_data(ttl=3600, show_spinner=False)
@@ -80,9 +80,16 @@ if "sector" not in enriched.columns or enriched["sector"].isna().all():
         return get_ticker_info_batch(list(tickers_tuple))
 
     _cmd_info = _cmd_sector_fetch(tuple(_cmd_tickers))
-    enriched["sector"] = enriched[_t_col].map(
-        lambda t: _cmd_info.get(t, {}).get("sector") or "Other"
-    ).replace({"": "Other", "None": "Other"})
+
+    def _assign_sector(row):
+        ticker = row[_t_col]
+        info = _cmd_info.get(ticker, {})
+        name = str(row.get("name", "") or "")
+        # Use resolve_sector which falls back to name-based keyword matching
+        # for tickers that yfinance doesn't know (e.g. SGX, ADX, Swiss listings)
+        return resolve_sector(ticker, info, name)
+
+    enriched["sector"] = enriched.apply(_assign_sector, axis=1)
 
 # ── Compute Key Metrics ──────────────────────────────────────────────────────
 total_value = pd.to_numeric(enriched.get("market_value"), errors="coerce").dropna().sum()
@@ -671,7 +678,6 @@ with col_nav:
         )
         st.plotly_chart(fig_nav, use_container_width=True, key="cmd_nav_hist")
     else:
-        st.markdown("#### Portfolio Value History")
         st.caption("NAV snapshots accumulate daily when you visit the Dashboard. Check back soon.")
 
 with col_links:

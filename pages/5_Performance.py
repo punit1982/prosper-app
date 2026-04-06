@@ -98,7 +98,7 @@ try:
                 return ticker, close if not close.empty else None
             return ticker, None
 
-        with ThreadPoolExecutor(max_workers=min(len(live_tickers), 15)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(live_tickers), 4)) as pool:
             futures = {pool.submit(_fetch_hist, t): t for t in live_tickers}
             for f in as_completed(futures):
                 t, series = f.result()

@@ -397,16 +397,29 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             _cost = float(row.get("avg_cost", 0) or 0)
             _ccy = str(row.get("currency", "USD") or "USD").strip()
             _src = broker_source or ""
+            # Upsert: delete existing row for this ticker+portfolio first to prevent duplicates.
+            # The holdings table has no UNIQUE(portfolio_id, ticker) constraint, so we do
+            # DELETE + INSERT to guarantee idempotency regardless of DB backend.
             try:
                 conn.execute(
-                    """INSERT OR REPLACE INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
+                    "DELETE FROM holdings WHERE portfolio_id = ? AND ticker = ?",
+                    (pid, _ticker),
+                )
+            except Exception:
+                try:
+                    conn.execute("DELETE FROM holdings WHERE ticker = ?", (_ticker,))
+                except Exception:
+                    pass
+            try:
+                conn.execute(
+                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (_ticker, _name, _qty, _cost, _ccy, _src, pid),
                 )
             except Exception:
                 # portfolio_id column may not exist — insert without it
                 conn.execute(
-                    """INSERT OR REPLACE INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
+                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (_ticker, _name, _qty, _cost, _ccy, _src),
                 )
