@@ -845,8 +845,17 @@ def get_market_news() -> List[Dict]:
 def summarize_news_with_ai(title: str, publisher: str, ticker: str, ticker_name: str = "") -> str:
     """
     Use Claude to generate a concise AI analysis of a news headline.
-    Uses claude-sonnet for speed + cost efficiency.
+    Results are cached in the DB for 7 days to avoid repeat API calls.
     """
+    import hashlib
+    from core.database import get_ai_cache, save_ai_cache
+
+    # Build a stable hash from the inputs that matter
+    cache_hash = hashlib.sha256(f"news|{ticker}|{title}".encode()).hexdigest()
+    cached = get_ai_cache(cache_hash, ttl_days=7)
+    if cached is not None:
+        return cached
+
     from core.settings import get_api_key
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
@@ -876,7 +885,9 @@ Be concise and professional. No disclaimers."""
             max_tokens=300,
             preferred_model="claude-3-5-haiku-20241022",
         )
-        return response.content[0].text
+        result = response.content[0].text
+        save_ai_cache(cache_hash, result, ttl_days=7)
+        return result
     except Exception as e:
         return f"Summary unavailable: {str(e)[:100]}"
 

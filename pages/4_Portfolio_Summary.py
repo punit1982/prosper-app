@@ -20,7 +20,7 @@ from core.data_engine import (
     calc_portfolio_beta, calc_portfolio_volatility,
     deduplicate_tickers,
 )
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 
 st.header("📊 Portfolio Summary")
 
@@ -34,7 +34,7 @@ try:
     base_currency = SETTINGS.get("base_currency", "USD")
 
     # ── Get enriched + info data ──
-    cache_key = f"enriched_{base_currency}"
+    cache_key = enriched_cache_key(base_currency)
     if cache_key not in st.session_state:
         with st.spinner("Fetching live prices…"):
             enriched = enrich_portfolio(holdings, base_currency)

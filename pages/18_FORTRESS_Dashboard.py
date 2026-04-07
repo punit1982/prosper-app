@@ -21,7 +21,7 @@ from core.database import (
     get_all_holdings, get_all_prosper_analyses, get_all_cash_positions,
     save_fortress_state, get_fortress_state, get_all_fortress_state,
 )
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch
 from core.fortress import (
@@ -67,7 +67,7 @@ if holdings.empty:
     st.info("No holdings found. Upload your portfolio first via the **Upload Portal**.")
     st.stop()
 
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 if cache_key in st.session_state and st.session_state[cache_key] is not None and not st.session_state[cache_key].empty:
     enriched = st.session_state[cache_key]
 else:

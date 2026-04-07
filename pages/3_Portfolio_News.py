@@ -16,7 +16,7 @@ from datetime import datetime
 from core.database import get_all_holdings, get_news_cache
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_portfolio_news, summarize_news_with_ai, apply_global_filter
-from core.settings import SETTINGS, save_user_settings
+from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 st.header("📰 Portfolio News")
 
@@ -41,7 +41,7 @@ with st.sidebar:
 
 # ── Resolve top tickers by portfolio value ──────────────────────────────────
 base_currency = SETTINGS.get("base_currency", "USD")
-enriched_key  = f"enriched_{base_currency}"
+enriched_key  = enriched_cache_key(base_currency)
 names = dict(zip(holdings["ticker"], holdings.get("name", pd.Series(dtype=str))))
 
 all_tickers = []

@@ -221,3 +221,14 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
 # LIVE SETTINGS — loaded once at import time, updated when user saves
 # ─────────────────────────────────────────
 SETTINGS = dict(_DEFAULTS)  # Start with defaults; updated after auth in app.py
+
+
+def enriched_cache_key(currency: str) -> str:
+    """Return the session-state key for enriched portfolio data.
+
+    Includes portfolio_id so switching portfolios doesn't serve stale data.
+    Centralised here so the format is defined in exactly one place.
+    """
+    import streamlit as st
+    pid = st.session_state.get("active_portfolio_id", 1)
+    return f"enriched_{pid}_{currency}"

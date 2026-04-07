@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from core.database import get_all_holdings
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch
 
@@ -27,7 +27,7 @@ if holdings.empty:
     st.info("No holdings found. Upload your portfolio first.")
     st.stop()
 
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 if cache_key in st.session_state and st.session_state[cache_key] is not None:
     enriched = st.session_state[cache_key]
 else:

@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 
 from core.database import get_all_holdings
 from core.data_engine import get_history, get_ticker_info_batch
+from core.settings import enriched_cache_key
 
 st.markdown(
     "<h2 style='margin-bottom:0'>📉 Technical Analysis</h2>"
@@ -21,7 +22,7 @@ st.markdown(
 
 # ── Ticker Selection ──
 holdings = get_all_holdings()
-_enriched = st.session_state.get(f"enriched_{st.session_state.get('base_currency', 'USD')}")
+_enriched = st.session_state.get(enriched_cache_key(st.session_state.get('base_currency', 'USD')))
 _t_col = "ticker"
 if _enriched is not None and "ticker_resolved" in _enriched.columns:
     portfolio_tickers = sorted(_enriched["ticker_resolved"].unique().tolist())

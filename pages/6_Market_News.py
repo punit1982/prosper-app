@@ -13,7 +13,7 @@ import pandas as pd
 from datetime import datetime
 
 from core.data_engine import get_ticker_news, summarize_news_with_ai, apply_global_filter
-from core.settings import SETTINGS, save_user_settings
+from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 NEWS_TTL = 900  # 15 minutes
 
@@ -32,7 +32,7 @@ focus_map = {
 # Build "My Funds & ETFs" option from portfolio
 _fund_tickers = []
 base_currency = SETTINGS.get("base_currency", "USD")
-_enriched_key = f"enriched_{base_currency}"
+_enriched_key = enriched_cache_key(base_currency)
 if _enriched_key in st.session_state:
     _enr = st.session_state[_enriched_key]
     _t_col = "ticker_resolved" if "ticker_resolved" in _enr.columns else "ticker"
