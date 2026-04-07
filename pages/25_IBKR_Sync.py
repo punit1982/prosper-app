@@ -38,59 +38,137 @@ st.markdown(
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
 def parse_ibkr_csv(csv_file) -> pd.DataFrame:
-    """Parse IBKR Activity Statement CSV and extract open positions."""
+    """Parse IBKR Activity Statement CSV and extract open positions.
+
+    Handles IBKR's multi-section CSV format by:
+    1. Reading entire file as text
+    2. Finding "Open Positions" section
+    3. Extracting header row and data rows from that section
+    4. Parsing positions with flexible column matching
+    """
     try:
-        df = pd.read_csv(csv_file)
+        # Read as text first to handle IBKR's complex format
+        content = csv_file.read().decode('utf-8') if isinstance(csv_file.read(), bytes) else csv_file.read()
+        if isinstance(content, bytes):
+            content = content.decode('utf-8')
 
-        # IBKR CSV structure: Look for "Asset Category" = "Stocks" rows
-        # Required columns: Symbol, Quantity, Market Price, Currency
-        required_cols = ["Symbol", "Quantity", "Market Price", "Currency"]
+        # Reset file pointer if needed
+        csv_file.seek(0)
 
-        # Find the data section (skip header rows)
-        data_start = None
-        for idx, row in df.iterrows():
-            if "Symbol" in str(row.values):
-                data_start = idx + 1
+        lines = content.split('\n')
+
+        # Find "Open Positions" section
+        open_pos_idx = None
+        for i, line in enumerate(lines):
+            if 'Open Positions' in line:
+                open_pos_idx = i
                 break
 
-        if data_start is None:
+        if open_pos_idx is None:
+            st.error("Could not find 'Open Positions' section in CSV")
             return pd.DataFrame()
 
-        # Reload to skip header rows
-        df = pd.read_csv(csv_file, skiprows=data_start)
+        # Find header row (should be right after "Open Positions" or shortly after)
+        header_idx = None
+        for i in range(open_pos_idx, min(open_pos_idx + 10, len(lines))):
+            if 'Symbol' in lines[i] or 'Ticker' in lines[i]:
+                header_idx = i
+                break
 
-        # Filter to stocks only
-        if "Asset Category" in df.columns:
-            df = df[df["Asset Category"].str.contains("Stocks", na=False, case=False)]
+        if header_idx is None:
+            # Try alternative: look for first non-empty line after section
+            for i in range(open_pos_idx + 1, min(open_pos_idx + 10, len(lines))):
+                if lines[i].strip() and ',' in lines[i]:
+                    header_idx = i
+                    break
 
-        # Extract required fields
+        if header_idx is None:
+            st.error("Could not find header row in 'Open Positions' section")
+            return pd.DataFrame()
+
+        # Extract header and data rows
+        header_line = lines[header_idx]
+        headers = [h.strip() for h in header_line.split(',')]
+
+        # Normalize header names (IBKR sometimes uses different cases)
+        header_map = {}
+        for h in headers:
+            h_lower = h.lower().strip()
+            if 'symbol' in h_lower or 'ticker' in h_lower:
+                header_map['symbol'] = h
+            elif 'description' in h_lower or 'name' in h_lower:
+                header_map['description'] = h
+            elif 'position' in h_lower and 'quantity' not in h_lower:
+                header_map['quantity'] = h
+            elif 'quantity' in h_lower:
+                header_map['quantity'] = h
+            elif 'price' in h_lower and 'cost' in h_lower:
+                header_map['avg_cost'] = h
+            elif 'price' in h_lower and 'mark' in h_lower:
+                header_map['market_price'] = h
+            elif 'currency' in h_lower or 'curr' in h_lower:
+                header_map['currency'] = h
+            elif 'value' in h_lower and ('position' in h_lower or 'market' in h_lower):
+                header_map['position_value'] = h
+
+        if 'symbol' not in header_map:
+            st.error("Could not find 'Symbol' column in header")
+            return pd.DataFrame()
+
+        # Parse data rows
         positions = []
-        for _, row in df.iterrows():
-            try:
-                symbol = str(row.get("Symbol", "")).strip()
-                quantity = float(row.get("Quantity", 0))
-                market_price = float(row.get("Market Price", 0))
-                currency = str(row.get("Currency", "USD")).strip()
+        for i in range(header_idx + 1, len(lines)):
+            line = lines[i].strip()
 
-                if symbol and symbol != "Totals" and quantity != 0:
-                    # Calculate average cost from market value and quantity
-                    market_value = float(row.get("Position Value", market_price * quantity))
-                    avg_cost = market_value / quantity if quantity != 0 else market_price
+            # Stop at totals or empty lines
+            if not line or 'Total' in line or ',' not in line:
+                continue
+
+            try:
+                parts = [p.strip() for p in line.split(',')]
+
+                # Map parts to columns based on header
+                row_dict = {}
+                for col_idx, col_name in enumerate(headers):
+                    if col_idx < len(parts):
+                        row_dict[col_name] = parts[col_idx]
+
+                symbol = row_dict.get(header_map.get('symbol', ''), '').strip()
+                quantity_str = row_dict.get(header_map.get('quantity', ''), '0')
+                market_price_str = row_dict.get(header_map.get('market_price', ''), '0')
+                currency = row_dict.get(header_map.get('currency', ''), 'USD').strip() or 'USD'
+                description = row_dict.get(header_map.get('description', ''), symbol).strip()
+                position_value_str = row_dict.get(header_map.get('position_value', ''), '0')
+
+                # Clean up strings (remove currency symbols, commas)
+                quantity = float(quantity_str.replace(',', '').replace('$', '').strip() or 0)
+                market_price = float(market_price_str.replace(',', '').replace('$', '').strip() or 0)
+                position_value = float(position_value_str.replace(',', '').replace('$', '').strip() or 0)
+
+                if symbol and symbol != 'Totals' and quantity != 0:
+                    # Calculate avg cost: position_value / quantity
+                    avg_cost = position_value / quantity if quantity != 0 else market_price
 
                     positions.append({
                         "ticker": symbol,
-                        "name": str(row.get("Description", symbol)).strip(),
+                        "name": description or symbol,
                         "quantity": quantity,
                         "avg_cost": avg_cost,
                         "currency": currency,
                         "market_price": market_price,
                     })
-            except (ValueError, TypeError):
+            except (ValueError, IndexError) as e:
                 continue
+
+        if not positions:
+            st.warning("No positions found. Make sure the CSV contains 'Open Positions' section with holdings.")
+            return pd.DataFrame()
 
         return pd.DataFrame(positions)
     except Exception as e:
         st.error(f"CSV parsing error: {str(e)}")
+        import traceback
+        st.error(f"Debug: {traceback.format_exc()}")
         return pd.DataFrame()
 
 
