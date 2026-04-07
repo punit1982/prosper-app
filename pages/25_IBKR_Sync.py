@@ -104,11 +104,11 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
                 header_map['quantity'] = h
             elif 'price' in h_lower and 'cost' in h_lower:
                 header_map['avg_cost'] = h
-            elif 'price' in h_lower and 'mark' in h_lower:
+            elif 'price' in h_lower and ('mark' in h_lower or 'close' in h_lower):
                 header_map['market_price'] = h
             elif 'currency' in h_lower or 'curr' in h_lower:
                 header_map['currency'] = h
-            elif 'value' in h_lower and ('position' in h_lower or 'market' in h_lower):
+            elif 'value' in h_lower and ('position' in h_lower or 'market' in h_lower or h_lower == 'value'):
                 header_map['position_value'] = h
 
         if 'symbol' not in header_map:
@@ -139,15 +139,18 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
                 currency = row_dict.get(header_map.get('currency', ''), 'USD').strip() or 'USD'
                 description = row_dict.get(header_map.get('description', ''), symbol).strip()
                 position_value_str = row_dict.get(header_map.get('position_value', ''), '0')
+                avg_cost_str = row_dict.get(header_map.get('avg_cost', ''), '0')
 
                 # Clean up strings (remove currency symbols, commas)
                 quantity = float(quantity_str.replace(',', '').replace('$', '').strip() or 0)
                 market_price = float(market_price_str.replace(',', '').replace('$', '').strip() or 0)
                 position_value = float(position_value_str.replace(',', '').replace('$', '').strip() or 0)
+                avg_cost = float(avg_cost_str.replace(',', '').replace('$', '').strip() or 0)
 
                 if symbol and symbol != 'Totals' and quantity != 0:
-                    # Calculate avg cost: position_value / quantity
-                    avg_cost = position_value / quantity if quantity != 0 else market_price
+                    # Use avg_cost from Cost Price if available, otherwise calculate from position_value / quantity
+                    if avg_cost <= 0:
+                        avg_cost = position_value / quantity if quantity != 0 else market_price
 
                     positions.append({
                         "ticker": symbol,
