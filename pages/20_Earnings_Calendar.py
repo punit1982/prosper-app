@@ -44,7 +44,7 @@ _t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker
 tickers = enriched[_t_col].tolist()
 
 # ── Fetch Earnings Data ──
-@st.cache_data(ttl=3600, show_spinner="Fetching earnings data…")
+@st.cache_data(ttl=3600, show_spinner="Fetching earnings data…", max_entries=5)
 def _get_earnings_info(tickers_tuple):
     """Fetch earnings dates and EPS data for all tickers."""
     info_map = get_ticker_info_batch(list(tickers_tuple))

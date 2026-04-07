@@ -34,9 +34,20 @@ else:
 
 col_ticker, col_period = st.columns([2, 1])
 with col_ticker:
+    # Default to first portfolio ticker with data, or AAPL if no portfolio
+    default_idx = 0
+    display_tickers = portfolio_tickers if portfolio_tickers else ["AAPL"]
+    # If portfolio available, prefer common/liquid stocks over niche ones
+    preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
+    for i, pref in enumerate(preferred):
+        if pref in display_tickers:
+            default_idx = display_tickers.index(pref)
+            break
+
     ticker = st.selectbox(
         "Select Ticker",
-        portfolio_tickers if portfolio_tickers else ["AAPL"],
+        display_tickers,
+        index=default_idx,
         help="Choose from portfolio holdings or type a ticker",
     )
 with col_period:
@@ -46,7 +57,7 @@ if not ticker:
     st.stop()
 
 # ── Fetch Historical Data ──
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=30)
 def _load_history(ticker, period):
     return get_history(ticker, period=period)
 

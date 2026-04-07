@@ -333,7 +333,7 @@ try:
         perf_hist    = {}   # {(ticker, yf_period): Series}
 
         with st.spinner(f"Calculating returns for {len(perf_tickers)} holdings across 9 periods…"):
-            fetch_pool = ThreadPoolExecutor(max_workers=15)
+            fetch_pool = ThreadPoolExecutor(max_workers=5)
             try:
                 futs = {fetch_pool.submit(_fetch_period, t, p): (t, p) for t, p in all_combos}
                 try:
@@ -438,7 +438,7 @@ try:
                         return ticker, h[col].dropna()
                     return ticker, None
 
-                with ThreadPoolExecutor(max_workers=min(len(risk_tickers), 15)) as pool:
+                with ThreadPoolExecutor(max_workers=min(len(risk_tickers), 5)) as pool:
                     futs = {pool.submit(_fetch_risk, t): t for t in risk_tickers}
                     for f in as_completed(futs):
                         t, series = f.result()
