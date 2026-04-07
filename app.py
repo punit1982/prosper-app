@@ -220,35 +220,35 @@ if not get_nav_snapshot_exists_today(_base):
             logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
 # ── Full Navigation (authenticated users) ────────────────────────────────────
+# ── Consolidated Navigation (Phase 3) ──────────────────────────────────────
+# Old nav had 7 sections; consolidated to 5 for cleaner UX:
+# - "AI" merged into "Research" (Ask Prosper fits with research tools)
+# - "Income & Calendar" merged into "Portfolio" (dividends/earnings are portfolio features)
 pg = st.navigation({
     "Prosper": [
         st.Page("pages/00_Command_Center.py", title="Command Center", icon="🏠", default=True),
     ],
     "Portfolio": [
         st.Page("pages/2_Portfolio_Dashboard.py", title="Dashboard", icon="📊"),
-        st.Page("pages/18_Risk_Strategy.py", title="Risk & Strategy", icon="🏰"),
         st.Page("pages/4_Portfolio_Summary.py", title="Summary", icon="🧩"),
         st.Page("pages/5_Performance.py", title="Performance", icon="📈"),
+        st.Page("pages/18_Risk_Strategy.py", title="Risk & Strategy", icon="🏰"),
+        st.Page("pages/22_Dividend_Dashboard.py", title="Dividends", icon="💰"),
+        st.Page("pages/20_Earnings_Calendar.py", title="Earnings Calendar", icon="📅"),
     ],
-    "Research": [
+    "Research & AI": [
         st.Page("pages/18_Equity_Deep_Dive.py", title="Equity Deep Dive", icon="🔬"),
         st.Page("pages/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
         st.Page("pages/8_Sentiment.py", title="Sentiment", icon="💬"),
-        st.Page("pages/15_Prosper_AI_Analysis.py", title="Prosper AI", icon="🤖"),
         st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
         st.Page("pages/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
-    ],
-    "Income & Calendar": [
-        st.Page("pages/22_Dividend_Dashboard.py", title="Dividends", icon="💰"),
-        st.Page("pages/20_Earnings_Calendar.py", title="Earnings Calendar", icon="📅"),
+        st.Page("pages/15_Prosper_AI_Analysis.py", title="Prosper AI", icon="🤖"),
+        st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
     ],
     "News & Activity": [
         st.Page("pages/3_Portfolio_News.py", title="Portfolio News", icon="📰"),
         st.Page("pages/6_Market_News.py", title="Market News", icon="🌍"),
         st.Page("pages/12_Transaction_Log.py", title="Transactions", icon="📝"),
-    ],
-    "AI": [
-        st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
     ],
     "Settings": [
         st.Page("pages/0_Settings.py", title="Settings", icon="⚙️"),
