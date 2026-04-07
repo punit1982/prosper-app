@@ -22,7 +22,7 @@ from core.data_engine import (
     fmt_large, clean_nan, summarize_news_with_ai,
 )
 from core.prosper_analysis import run_analysis, MODEL_TIERS, ARCHETYPE_WEIGHTS
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 
 st.header("Equity Deep Dive")
 st.caption("Comprehensive 360° view of any stock — fundamentals, analyst consensus, sentiment, ownership, and Prosper AI analysis.")
@@ -35,7 +35,7 @@ portfolio_tickers = sorted(holdings["ticker"].dropna().unique().tolist()) if not
 
 # Build resolved ticker map from enriched data if available
 base_currency = SETTINGS.get("base_currency", "USD")
-_enriched_cache = st.session_state.get(f"enriched_{base_currency}")
+_enriched_cache = st.session_state.get(enriched_cache_key(base_currency))
 _resolve_map = {}
 if _enriched_cache is not None and not _enriched_cache.empty and "ticker_resolved" in _enriched_cache.columns:
     _resolve_map = dict(zip(_enriched_cache["ticker"], _enriched_cache["ticker_resolved"]))
@@ -951,7 +951,7 @@ with tab_ai:
         # ── Portfolio position display (if user holds this stock) ──
         if not holdings.empty:
             base_currency = SETTINGS.get("base_currency", "USD")
-            enriched_key = f"enriched_{base_currency}"
+            enriched_key = enriched_cache_key(base_currency)
             enriched = st.session_state.get(enriched_key)
 
             if enriched is not None and not enriched.empty:

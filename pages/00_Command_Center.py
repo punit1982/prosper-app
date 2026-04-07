@@ -21,7 +21,7 @@ try:
 except ImportError:
     save_briefing = None
     get_latest_briefing = None
-from core.settings import SETTINGS, get_api_key
+from core.settings import SETTINGS, get_api_key, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import fmt_large
 
@@ -43,7 +43,7 @@ if holdings.empty:
     st.stop()
 
 # ── Enrich Portfolio (use cache if available) ────────────────────────────────
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 if cache_key in st.session_state and st.session_state[cache_key] is not None and not st.session_state[cache_key].empty:
     enriched = st.session_state[cache_key]
 else:

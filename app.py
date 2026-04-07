@@ -192,10 +192,10 @@ else:
     st.session_state.setdefault("global_currency_filter", "All")
 
 # ── NAV Auto-Snapshot ───────────────────────────────────────────────────────
-from core.settings import SETTINGS as _settings
+from core.settings import SETTINGS as _settings, enriched_cache_key as _enriched_cache_key
 
 _base = _settings.get("base_currency", "USD")
-_cache_key = f"enriched_{_base}"
+_cache_key = _enriched_cache_key(_base)
 
 if not get_nav_snapshot_exists_today(_base):
     _enriched = st.session_state.get(_cache_key)
@@ -314,7 +314,8 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
                 import anthropic
                 from core.settings import call_claude, SETTINGS
 
-                _enr = st.session_state.get(f"enriched_{SETTINGS.get('base_currency', 'USD')}")
+                from core.settings import enriched_cache_key as _eck
+                _enr = st.session_state.get(_eck(SETTINGS.get('base_currency', 'USD')))
                 _ctx = "No portfolio loaded."
                 if _enr is not None and not _enr.empty:
                     _tv = pd.to_numeric(_enr.get("market_value"), errors="coerce").sum()

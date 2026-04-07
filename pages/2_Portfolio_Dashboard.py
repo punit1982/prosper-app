@@ -21,7 +21,7 @@ from core.database import (get_all_holdings, clear_all_holdings, get_price_cache
                           delete_cash_position)
 from core.cio_engine import enrich_portfolio, add_key_metrics
 from core.data_engine import get_ticker_info_batch, fmt_large
-from core.settings import SETTINGS, save_user_settings
+from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 # ─────────────────────────────────────────
 # SIDEBAR — Persistent Preferences
@@ -245,7 +245,7 @@ if holdings.empty:
     st.stop()
 
 ttl       = SETTINGS.get("price_cache_ttl_seconds", 300)
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 
 
 # ── Load Extended Metrics (outside fragment) ──

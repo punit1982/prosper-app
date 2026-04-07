@@ -156,16 +156,30 @@ def init_db():
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS ai_call_cache (
+            call_hash TEXT PRIMARY KEY,
+            response_text TEXT NOT NULL,
+            ttl_days INTEGER DEFAULT 7,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    ]
+
+    # ── Performance indexes on frequently queried columns ──
+    _INDEX_STATEMENTS = [
+        "CREATE INDEX IF NOT EXISTS idx_holdings_portfolio ON holdings(portfolio_id)",
+        "CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON holdings(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_price_cache_ticker ON price_cache(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_nav_snapshots_currency ON nav_snapshots(base_currency)",
+        "CREATE INDEX IF NOT EXISTS idx_transactions_ticker ON transactions(ticker)",
     ]
 
     conn = _get_connection()
 
     # Turso: batch all statements in ONE HTTP call
     if hasattr(conn, 'execute_batch'):
-        conn.execute_batch(_TABLE_STATEMENTS)
+        conn.execute_batch(_TABLE_STATEMENTS + _INDEX_STATEMENTS)
     else:
         # SQLite: execute one by one (fast locally)
-        for sql in _TABLE_STATEMENTS:
+        for sql in _TABLE_STATEMENTS + _INDEX_STATEMENTS:
             conn.execute(sql)
         conn.commit()
 
@@ -386,43 +400,63 @@ def get_latest_briefing(currency: str = "USD") -> Optional[Dict]:
 # ─────────────────────────────────────────
 
 def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int = None):
-    """Insert holdings from a DataFrame into the database."""
+    """Insert holdings from a DataFrame into the database.
+
+    Uses batched operations: one bulk DELETE then one bulk INSERT,
+    reducing N×2 round-trips to 2 (or 1 on Turso via pipeline).
+    """
     pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
     try:
+        # Pre-process all rows into clean tuples
+        rows = []
         for _, row in df.iterrows():
             _ticker = str(row.get("ticker", "") or "").strip()
+            if not _ticker:
+                continue
             _name = str(row.get("name", "") or "").strip()
             _qty = float(row.get("quantity", 0) or 0)
             _cost = float(row.get("avg_cost", 0) or 0)
             _ccy = str(row.get("currency", "USD") or "USD").strip()
             _src = broker_source or ""
-            # Upsert: delete existing row for this ticker+portfolio first to prevent duplicates.
-            # The holdings table has no UNIQUE(portfolio_id, ticker) constraint, so we do
-            # DELETE + INSERT to guarantee idempotency regardless of DB backend.
+            rows.append((_ticker, _name, _qty, _cost, _ccy, _src))
+
+        # Batch DELETE existing rows for these tickers (upsert step 1)
+        delete_params = [(pid, t[0]) for t in rows]
+        try:
+            conn.executemany(
+                "DELETE FROM holdings WHERE portfolio_id = ? AND ticker = ?",
+                delete_params,
+            )
+        except Exception:
+            # portfolio_id column may not exist — fall back to ticker-only delete
             try:
-                conn.execute(
-                    "DELETE FROM holdings WHERE portfolio_id = ? AND ticker = ?",
-                    (pid, _ticker),
+                conn.executemany(
+                    "DELETE FROM holdings WHERE ticker = ?",
+                    [(t[0],) for t in rows],
                 )
             except Exception:
-                try:
-                    conn.execute("DELETE FROM holdings WHERE ticker = ?", (_ticker,))
-                except Exception:
-                    pass
-            try:
-                conn.execute(
-                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (_ticker, _name, _qty, _cost, _ccy, _src, pid),
-                )
-            except Exception:
-                # portfolio_id column may not exist — insert without it
-                conn.execute(
-                    """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (_ticker, _name, _qty, _cost, _ccy, _src),
-                )
+                pass
+
+        # Batch INSERT all holdings (upsert step 2)
+        insert_params = [
+            (t[0], t[1], t[2], t[3], t[4], t[5], pid)
+            for t in rows
+        ]
+        try:
+            conn.executemany(
+                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                insert_params,
+            )
+        except Exception:
+            # portfolio_id column may not exist — insert without it
+            conn.executemany(
+                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [(t[0], t[1], t[2], t[3], t[4], t[5]) for t in rows],
+            )
+
         conn.commit()
         conn.close()
         _invalidate_holdings_cache()
@@ -562,6 +596,46 @@ def get_parse_cache_stats() -> dict:
     count = conn.execute("SELECT COUNT(*) FROM parse_cache").fetchone()[0]
     conn.close()
     return {"cached_images": count}
+
+
+# ─────────────────────────────────────────
+# AI CALL CACHE  (prevents repeated identical Claude calls)
+# ─────────────────────────────────────────
+
+def get_ai_cache(call_hash: str, ttl_days: int = 7) -> Optional[str]:
+    """Return cached AI response text if it exists and hasn't expired."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT response_text, created_at FROM ai_call_cache WHERE call_hash = ?",
+            (call_hash,),
+        ).fetchone()
+        if row:
+            created = row[1] if isinstance(row, (list, tuple)) else row["created_at"]
+            age = datetime.now() - datetime.fromisoformat(str(created))
+            if age < timedelta(days=ttl_days):
+                return row[0] if isinstance(row, (list, tuple)) else row["response_text"]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return None
+
+
+def save_ai_cache(call_hash: str, response_text: str, ttl_days: int = 7):
+    """Persist an AI response to the cache."""
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO ai_call_cache (call_hash, response_text, ttl_days, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (call_hash, response_text, ttl_days, datetime.now().isoformat()),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 # ─────────────────────────────────────────

@@ -19,7 +19,7 @@ import plotly.express as px
 from core.database import get_all_holdings
 from core.data_engine import get_ticker_sentiment, apply_global_filter
 from core.social_sentiment import get_composite_sentiment
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 
 SENT_TTL = 1800  # 30 minutes — re-fetch sentiment every 30 min
 
@@ -32,7 +32,7 @@ if holdings.empty:
 
 # ── Resolve tickers once ──────────────────────────────────────────────────────
 base_currency = SETTINGS.get("base_currency", "USD")
-cache_key     = f"enriched_{base_currency}"
+cache_key     = enriched_cache_key(base_currency)
 if cache_key in st.session_state:
     enriched = apply_global_filter(st.session_state[cache_key])
     t_col    = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"

@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.database import get_all_holdings, get_nav_history
 from core.data_engine import get_history, get_benchmark_history, BENCHMARKS, calc_max_drawdown, calc_cagr
 from core.cio_engine import enrich_portfolio
-from core.settings import SETTINGS, save_user_settings
+from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 st.header("📈 Performance")
 
@@ -57,7 +57,7 @@ with st.sidebar:
         SETTINGS["pref_perf_benchmarks"] = selected_benchmarks
 
 # ── Get enriched holdings (use cached if available) ──
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 if cache_key not in st.session_state:
     with st.spinner("Fetching portfolio data…"):
         st.session_state[cache_key] = enrich_portfolio(holdings, base_currency)

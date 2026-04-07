@@ -15,7 +15,7 @@ from core.data_engine import (
     get_ticker_info,
     get_analyst_price_targets, get_recommendations_summary, fmt_large,
 )
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 
 st.header("🎯 Analyst Consensus")
 
@@ -26,7 +26,7 @@ if holdings.empty:
 
 # Use resolved tickers when available (e.g. EMAAR.AE instead of EMAAR)
 base_currency = SETTINGS.get("base_currency", "USD")
-cache_key = f"enriched_{base_currency}"
+cache_key = enriched_cache_key(base_currency)
 if cache_key in st.session_state:
     from core.data_engine import apply_global_filter
     enriched = apply_global_filter(st.session_state[cache_key])
@@ -74,38 +74,50 @@ try:
     # ── AI Summary (shown first for quick insight) ──
     if upgrades and len(upgrades) >= 1:
         try:
-            from core.settings import get_api_key
-            api_key = get_api_key("ANTHROPIC_API_KEY")
-            if api_key and api_key != "your_anthropic_api_key_here":
-                import anthropic
-                ud_df_early = pd.DataFrame(upgrades)
-                col_renames_early = {
-                    "company":            "Analyst Firm",
-                    "action":             "Action",
-                    "fromGrade":          "From Grade",
-                    "toGrade":            "To Grade",
-                    "gradeTime":          "Date",
-                    "currentPriceTarget": "Price Target",
-                    "priorPriceTarget":   "Prior Target",
-                    "priceTargetAction":  "Target Action",
-                }
-                ud_df_early = ud_df_early.rename(columns={k: v for k, v in col_renames_early.items() if k in ud_df_early.columns})
-                if "Date" in ud_df_early.columns:
-                    ud_df_early["Date"] = pd.to_datetime(ud_df_early["Date"], unit="s", errors="coerce").dt.strftime("%Y-%m-%d")
-                priority_cols_early = ["Date", "Analyst Firm", "Action", "From Grade", "To Grade", "Price Target", "Prior Target"]
-                show_cols_early = [c for c in priority_cols_early if c in ud_df_early.columns]
-                recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
-                client = anthropic.Anthropic(api_key=api_key)
-                from core.settings import call_claude
-                response = call_claude(
-                    client,
-                    messages=[{"role": "user", "content":
-                        f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
-                        f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
-                    max_tokens=200,
-                    preferred_model="claude-3-5-haiku-20241022",
-                )
-                st.info(f"🤖 **AI Summary:** {response.content[0].text}")
+            import hashlib
+            from core.database import get_ai_cache, save_ai_cache
+
+            ud_df_early = pd.DataFrame(upgrades)
+            col_renames_early = {
+                "company":            "Analyst Firm",
+                "action":             "Action",
+                "fromGrade":          "From Grade",
+                "toGrade":            "To Grade",
+                "gradeTime":          "Date",
+                "currentPriceTarget": "Price Target",
+                "priorPriceTarget":   "Prior Target",
+                "priceTargetAction":  "Target Action",
+            }
+            ud_df_early = ud_df_early.rename(columns={k: v for k, v in col_renames_early.items() if k in ud_df_early.columns})
+            if "Date" in ud_df_early.columns:
+                ud_df_early["Date"] = pd.to_datetime(ud_df_early["Date"], unit="s", errors="coerce").dt.strftime("%Y-%m-%d")
+            priority_cols_early = ["Date", "Analyst Firm", "Action", "From Grade", "To Grade", "Price Target", "Prior Target"]
+            show_cols_early = [c for c in priority_cols_early if c in ud_df_early.columns]
+            recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
+
+            # Check DB cache first (7-day TTL keyed on ticker + recent analyst data)
+            cache_hash = hashlib.sha256(f"analyst|{selected}|{recent_text}".encode()).hexdigest()
+            cached_summary = get_ai_cache(cache_hash, ttl_days=7)
+            if cached_summary:
+                st.info(f"🤖 **AI Summary:** {cached_summary}")
+            else:
+                from core.settings import get_api_key
+                api_key = get_api_key("ANTHROPIC_API_KEY")
+                if api_key and api_key != "your_anthropic_api_key_here":
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=api_key)
+                    from core.settings import call_claude
+                    response = call_claude(
+                        client,
+                        messages=[{"role": "user", "content":
+                            f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
+                            f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
+                        max_tokens=200,
+                        preferred_model="claude-3-5-haiku-20241022",
+                    )
+                    summary_text = response.content[0].text
+                    save_ai_cache(cache_hash, summary_text, ttl_days=7)
+                    st.info(f"🤖 **AI Summary:** {summary_text}")
         except Exception:
             pass
 

@@ -7,7 +7,7 @@ Query your portfolio, holdings, and market data using natural language.
 import streamlit as st
 import pandas as pd
 from core.database import get_all_holdings, get_all_prosper_analyses
-from core.settings import SETTINGS, get_api_key
+from core.settings import SETTINGS, get_api_key, enriched_cache_key
 
 st.header("Ask Prosper")
 st.caption("Chat with your portfolio — ask about holdings, performance, allocations, or any stock.")
@@ -20,7 +20,7 @@ if not api_key or api_key == "your_anthropic_api_key_here":
 
 # ── Build portfolio context ──
 base_currency = SETTINGS.get("base_currency", "USD")
-enriched = st.session_state.get(f"enriched_{base_currency}")
+enriched = st.session_state.get(enriched_cache_key(base_currency))
 holdings = get_all_holdings()
 
 _portfolio_summary = "No portfolio data loaded yet. Visit the Dashboard first to load live prices."
