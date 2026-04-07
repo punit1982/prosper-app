@@ -842,20 +842,14 @@ def get_market_news() -> List[Dict]:
 # ─────────────────────────────────────────
 # AI NEWS SUMMARY
 # ─────────────────────────────────────────
-def summarize_news_with_ai(title: str, publisher: str, ticker: str, ticker_name: str = "") -> str:
-    """
-    Use Claude to generate a concise AI analysis of a news headline.
-    Results are cached in the DB for 7 days to avoid repeat API calls.
-    """
-    import hashlib
-    from core.database import get_ai_cache, save_ai_cache
+# NEWS SUMMARIES (with AI caching)
+# ─────────────────────────────────────────
 
-    # Build a stable hash from the inputs that matter
-    cache_hash = hashlib.sha256(f"news|{ticker}|{title}".encode()).hexdigest()
-    cached = get_ai_cache(cache_hash, ttl_days=7)
-    if cached is not None:
-        return cached
-
+def _summarize_news_uncached(title: str, publisher: str, ticker: str, ticker_name: str = "") -> str:
+    """
+    Internal: generate AI news summary (uncached).
+    Wrapped by @ai_cache_decorator in summarize_news_with_ai().
+    """
     from core.settings import get_api_key
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
@@ -885,11 +879,20 @@ Be concise and professional. No disclaimers."""
             max_tokens=300,
             preferred_model="claude-3-5-haiku-20241022",
         )
-        result = response.content[0].text
-        save_ai_cache(cache_hash, result, ttl_days=7)
-        return result
+        return response.content[0].text
     except Exception as e:
         return f"Summary unavailable: {str(e)[:100]}"
+
+
+from core.ai_cache import ai_cache_decorator
+
+@ai_cache_decorator(ttl_days=7, namespace="news_summary")
+def summarize_news_with_ai(title: str, publisher: str, ticker: str, ticker_name: str = "") -> str:
+    """
+    Generate a concise AI analysis of a news headline.
+    Results are cached in DB for 7 days via @ai_cache_decorator.
+    """
+    return _summarize_news_uncached(title, publisher, ticker, ticker_name)
 
 
 # ─────────────────────────────────────────
@@ -1760,3 +1763,48 @@ def deduplicate_tickers(tickers: List[str]) -> List[str]:
             result.append(t)
             seen.add(t)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────
+# ANALYST SUMMARIES (with AI caching)
+# ─────────────────────────────────────────────────────────────────
+
+def _summarize_analyst_uncached(ticker: str, analyst_data: str) -> str:
+    """
+    Internal: generate AI analyst summary (uncached).
+    Wrapped by @ai_cache_decorator in summarize_analyst_activity().
+    """
+    from core.settings import get_api_key
+    api_key = get_api_key("ANTHROPIC_API_KEY")
+    if not api_key or api_key == "your_anthropic_api_key_here":
+        return "AI summary unavailable — Anthropic API key not configured."
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        from core.settings import call_claude
+        
+        response = call_claude(
+            client,
+            messages=[{"role": "user", "content":
+                f"Summarize the recent analyst activity for {ticker} in 2-3 sentences. "
+                f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{analyst_data}"}],
+            max_tokens=200,
+            preferred_model="claude-3-5-haiku-20241022",
+        )
+        return response.content[0].text
+    except Exception as e:
+        return f"Summary unavailable: {str(e)[:100]}"
+
+
+@ai_cache_decorator(ttl_days=7, namespace="analyst_activity")
+def summarize_analyst_activity(ticker: str, analyst_data: str) -> str:
+    """
+    Generate a concise AI analysis of analyst consensus changes.
+    Results are cached in DB for 7 days via @ai_cache_decorator.
+    
+    Args:
+        ticker: Stock ticker symbol
+        analyst_data: Formatted table of recent analyst actions
+    """
+    return _summarize_analyst_uncached(ticker, analyst_data)
