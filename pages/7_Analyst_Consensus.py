@@ -74,8 +74,7 @@ try:
     # ── AI Summary (shown first for quick insight) ──
     if upgrades and len(upgrades) >= 1:
         try:
-            import hashlib
-            from core.database import get_ai_cache, save_ai_cache
+            from core.data_engine import summarize_analyst_activity
 
             ud_df_early = pd.DataFrame(upgrades)
             col_renames_early = {
@@ -95,31 +94,13 @@ try:
             show_cols_early = [c for c in priority_cols_early if c in ud_df_early.columns]
             recent_text = ud_df_early[show_cols_early].head(5).to_string(index=False)
 
-            # Check DB cache first (7-day TTL keyed on ticker + recent analyst data)
-            cache_hash = hashlib.sha256(f"analyst|{selected}|{recent_text}".encode()).hexdigest()
-            cached_summary = get_ai_cache(cache_hash, ttl_days=7)
-            if cached_summary:
-                st.info(f"🤖 **AI Summary:** {cached_summary}")
-            else:
-                from core.settings import get_api_key
-                api_key = get_api_key("ANTHROPIC_API_KEY")
-                if api_key and api_key != "your_anthropic_api_key_here":
-                    import anthropic
-                    client = anthropic.Anthropic(api_key=api_key)
-                    from core.settings import call_claude
-                    response = call_claude(
-                        client,
-                        messages=[{"role": "user", "content":
-                            f"Summarize the recent analyst activity for {selected} in 2-3 sentences. "
-                            f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{recent_text}"}],
-                        max_tokens=200,
-                        preferred_model="claude-3-5-haiku-20241022",
-                    )
-                    summary_text = response.content[0].text
-                    save_ai_cache(cache_hash, summary_text, ttl_days=7)
-                    st.info(f"🤖 **AI Summary:** {summary_text}")
+            # Call helper with @ai_cache_decorator — caching is transparent
+            summary = summarize_analyst_activity(selected, recent_text)
+            if summary and "unavailable" not in summary.lower():
+                st.info(f"🤖 **AI Summary:** {summary}")
         except Exception:
             pass
+
 
     # ── Price Targets ──
     st.subheader("📊 Analyst Price Targets")
