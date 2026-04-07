@@ -49,17 +49,34 @@ tickers = enriched[_t_col].tolist()
 _ticker_display = dict(zip(enriched[_t_col], enriched["ticker"]))
 
 # ── Fetch Dividend Data ──
-@st.cache_data(ttl=3600, show_spinner="Fetching dividend data…")
+@st.cache_data(ttl=3600, show_spinner="Fetching dividend data…", max_entries=5)
 def _get_dividend_info(tickers_tuple):
+    import logging
+    logger = logging.getLogger(__name__)
     info_map = get_ticker_info_batch(list(tickers_tuple))
     rows = []
+    payers_count = 0
+
     for ticker in tickers_tuple:
         info = info_map.get(ticker, {})
+
+        # Try multiple dividend data sources
         div_rate = info.get("dividendRate")
         div_yield = info.get("dividendYield")
+
+        # Fallback: check trailingAnnualDividendRate if dividendRate missing
+        if not div_rate:
+            div_rate = info.get("trailingAnnualDividendRate")
+        if not div_yield:
+            div_yield = info.get("trailingAnnualDividendYield")
+
         ex_date = info.get("exDividendDate")
         payout_ratio = info.get("payoutRatio")
         five_yr_avg = info.get("fiveYearAvgDividendYield")
+
+        # Track payers
+        if div_rate or div_yield:
+            payers_count += 1
 
         # Convert ex-date timestamp
         ex_date_str = None

@@ -324,7 +324,7 @@ def get_composite_sentiment_batch(tickers_with_news: List[tuple]) -> Dict[str, D
         ticker, news_score = item
         return ticker, get_composite_sentiment(ticker, news_score)
 
-    with ThreadPoolExecutor(max_workers=min(len(tickers_with_news), 10)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(tickers_with_news), 4)) as pool:
         futures = {pool.submit(_fetch, item): item[0] for item in tickers_with_news}
         from concurrent.futures import as_completed
         for f in as_completed(futures):

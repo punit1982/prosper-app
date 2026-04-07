@@ -345,7 +345,7 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
 # ─────────────────────────────────────────
 # TICKER INFO (fundamentals)
 # ─────────────────────────────────────────
-@st.cache_data(ttl=INFO_TTL, show_spinner=False)
+@st.cache_data(ttl=INFO_TTL, show_spinner=False, max_entries=60)
 def _yf_fetch_info(ticker: str) -> Dict:
     """Raw yfinance info fetch — cached by Streamlit across all pages/reruns."""
     try:
@@ -684,7 +684,7 @@ def get_portfolio_news(tickers: List[str], limit: int = 50, names: Optional[Dict
     # so we don't need a tight outer timeout. Use shutdown(wait=False) to
     # avoid hanging on executor cleanup.
     all_news = []
-    with ThreadPoolExecutor(max_workers=min(len(tickers), 6)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 4)) as pool:
         futures = {pool.submit(get_ticker_news, t): t for t in tickers}
         try:
             for f in as_completed(futures, timeout=45):
@@ -816,7 +816,7 @@ def get_market_news() -> List[Dict]:
             url, source = feed_url_source
             return _fetch_rss_feed(url, source, max_items=10)
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             futs = {pool.submit(_fetch_one, f): f for f in MARKET_RSS_FEEDS}
             for f in _as_done(futs, timeout=15):
                 try:
@@ -1155,7 +1155,7 @@ def get_mutualfund_holders(ticker: str) -> pd.DataFrame:
 # ─────────────────────────────────────────
 # HISTORICAL DATA (for performance charts)
 # ─────────────────────────────────────────
-@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
+@st.cache_data(ttl=HISTORY_TTL, show_spinner=False, max_entries=80)
 def _yf_fetch_history(ticker: str, period: str) -> pd.DataFrame:
     """Raw yfinance history fetch — delegates to core.yf_utils for sanitization."""
     from core.yf_utils import safe_ticker_history

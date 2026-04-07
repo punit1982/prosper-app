@@ -161,8 +161,13 @@ if not _portfolios.empty:
         _new_id = _ids[_names.index(_sel)]
         if _new_id != st.session_state.get("active_portfolio_id"):
             st.session_state["active_portfolio_id"] = _new_id
+            # Clear all portfolio-dependent caches to prevent stale data & free memory
+            _clear_prefixes = ("enriched_", "_prosper_holdings_cache", "sentiment_data_", "_de_")
+            _clear_exact = {"extended_df", "last_refresh_time", "summary_info_map",
+                            "portfolio_returns_cache", "portfolio_returns_ts",
+                            "chat_messages", "mini_chat"}
             for k in list(st.session_state.keys()):
-                if k.startswith("enriched_") or k.startswith("_prosper_holdings_cache") or k in ("extended_df", "last_refresh_time"):
+                if any(k.startswith(p) for p in _clear_prefixes) or k in _clear_exact:
                     del st.session_state[k]
             st.rerun()
 

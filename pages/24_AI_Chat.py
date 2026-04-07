@@ -74,15 +74,22 @@ Guidelines:
 """
 
 # ── Chat history ──
+_CHAT_MAX_MSGS = 40  # Keep last 40 messages (20 exchanges) to prevent memory bloat
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = []
+elif len(st.session_state["chat_messages"]) > _CHAT_MAX_MSGS:
+    st.session_state["chat_messages"] = st.session_state["chat_messages"][-_CHAT_MAX_MSGS:]
 
-# Display chat history
-for msg in st.session_state["chat_messages"]:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# Create separate container for chat to prevent sidebar click hijacking
+chat_container = st.container()
 
-# Chat input
+with chat_container:
+    # Display chat history
+    for msg in st.session_state["chat_messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+# Chat input (outside container to allow sidebar navigation)
 if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditions..."):
     # Add user message
     st.session_state["chat_messages"].append({"role": "user", "content": prompt})

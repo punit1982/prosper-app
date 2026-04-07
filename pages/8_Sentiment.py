@@ -63,7 +63,7 @@ if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts
             comp      = get_composite_sentiment(ticker, news_sent["score"])
             return ticker, news_sent, comp
 
-        pool = ThreadPoolExecutor(max_workers=min(len(tickers), 15))
+        pool = ThreadPoolExecutor(max_workers=min(len(tickers), 5))
         futures = {pool.submit(_fetch, t): t for t in tickers}
         try:
             for f in as_completed(futures, timeout=60):

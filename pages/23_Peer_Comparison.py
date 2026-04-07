@@ -128,9 +128,18 @@ def _get_peers(ticker, info, n=8):
 # ── UI: Ticker Selection ──
 col_sel1, col_sel2 = st.columns([1, 2])
 with col_sel1:
+    # Default to first preferred ticker that's in portfolio, else first portfolio ticker
+    default_idx = 0
+    preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
+    for i, pref in enumerate(preferred):
+        if pref in tickers:
+            default_idx = tickers.index(pref)
+            break
+
     selected_ticker = st.selectbox(
         "Select a holding to compare",
         tickers,
+        index=default_idx,
         format_func=lambda t: ticker_labels.get(t, t),
     )
 

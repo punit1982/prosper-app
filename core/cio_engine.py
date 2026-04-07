@@ -360,7 +360,7 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
     unique_currencies = df["currency"].unique().tolist()
     fx_rates: Dict[str, float] = {}
     if unique_currencies:
-        with ThreadPoolExecutor(max_workers=min(len(unique_currencies), 8)) as fx_pool:
+        with ThreadPoolExecutor(max_workers=min(len(unique_currencies), 4)) as fx_pool:
             fx_futures = {fx_pool.submit(get_exchange_rate, c, base_currency): c
                           for c in unique_currencies}
             try:
