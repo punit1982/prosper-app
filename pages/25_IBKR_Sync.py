@@ -1,14 +1,18 @@
 """
 Interactive Brokers Sync
 ========================
-Sync your IBKR portfolio automatically via Flex Query.
-Fetches open positions from IBKR and imports them into Prosper.
+Sync your IBKR portfolio automatically via:
+1. CSV Activity Statement (simplest - download from IBKR, upload here)
+2. Flex Query API (automatic - set token once, sync on demand)
+3. Pre-built Flex Query template (fastest - import template into IBKR in one click)
 """
 
 import streamlit as st
+import pandas as pd
+import io
 from datetime import datetime
 from core.settings import get_api_key, load_user_settings, save_user_settings
-from core.database import get_all_portfolios, get_active_portfolio_id
+from core.database import get_all_portfolios, get_active_portfolio_id, save_holdings
 
 # Graceful imports for modules that may not be deployed yet
 try:
@@ -28,201 +32,414 @@ except ImportError:
 st.markdown(
     "<h1 style='margin-bottom:0'>🔗 Interactive Brokers Sync</h1>"
     "<p style='color:#888;font-size:1.05rem;margin-top:0'>"
-    "Sync your IBKR portfolio automatically via Flex Query</p>",
+    "Import your IBKR portfolio — Choose the easiest method for you</p>",
     unsafe_allow_html=True,
 )
 
-# ── Configuration Section ────────────────────────────────────────────────────
-st.subheader("🔧 Configuration")
+# ── Helper Functions ─────────────────────────────────────────────────────────
+def parse_ibkr_csv(csv_file) -> pd.DataFrame:
+    """Parse IBKR Activity Statement CSV and extract open positions."""
+    try:
+        df = pd.read_csv(csv_file)
 
-# Check IBKR Flex Token status
-ibkr_token = get_api_key("IBKR_FLEX_TOKEN")
-_token_placeholder = "your_" in ibkr_token.lower() if ibkr_token else True
-token_configured = bool(ibkr_token) and not _token_placeholder
+        # IBKR CSV structure: Look for "Asset Category" = "Stocks" rows
+        # Required columns: Symbol, Quantity, Market Price, Currency
+        required_cols = ["Symbol", "Quantity", "Market Price", "Currency"]
 
-if token_configured:
-    st.markdown("✅ **IBKR Flex Token** — Configured")
-else:
-    st.markdown("❌ **IBKR Flex Token** — Not configured")
-    st.caption("Add `IBKR_FLEX_TOKEN` to your `.env` file or Render Environment Variables.")
+        # Find the data section (skip header rows)
+        data_start = None
+        for idx, row in df.iterrows():
+            if "Symbol" in str(row.values):
+                data_start = idx + 1
+                break
 
-# Flex Query ID (stored in user settings, not secrets)
-user_settings = load_user_settings()
-saved_query_id = user_settings.get("ibkr_flex_query_id", "")
+        if data_start is None:
+            return pd.DataFrame()
 
-col_qid, col_save = st.columns([3, 1])
-with col_qid:
-    flex_query_id = st.text_input(
-        "Flex Query ID",
-        value=saved_query_id,
-        placeholder="e.g. 123456",
-        help="The numeric ID of your IBKR Activity Flex Query for open positions.",
-    )
-with col_save:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("💾 Save Query ID", use_container_width=True):
-        save_user_settings({"ibkr_flex_query_id": flex_query_id.strip()})
-        st.success("Query ID saved!")
-        st.rerun()
+        # Reload to skip header rows
+        df = pd.read_csv(csv_file, skiprows=data_start)
 
-query_id_configured = bool(flex_query_id.strip())
+        # Filter to stocks only
+        if "Asset Category" in df.columns:
+            df = df[df["Asset Category"].str.contains("Stocks", na=False, case=False)]
 
-# ── Setup Instructions ───────────────────────────────────────────────────────
-with st.expander("📖 How to Set Up IBKR Flex Query"):
-    st.markdown("""
-**Step-by-step guide to create your Flex Query and token:**
+        # Extract required fields
+        positions = []
+        for _, row in df.iterrows():
+            try:
+                symbol = str(row.get("Symbol", "")).strip()
+                quantity = float(row.get("Quantity", 0))
+                market_price = float(row.get("Market Price", 0))
+                currency = str(row.get("Currency", "USD")).strip()
 
-1. **Log into** [IBKR Account Management](https://www.interactivebrokers.com/sso/Login) (Client Portal)
-2. **Navigate to** Performance & Reports → **Flex Queries**
-3. **Click "+"** to create a new **Activity Flex Query**
-4. Under **Sections**, check **"Open Positions"**
-5. **Select these fields:**
-   - `Symbol`, `Description`, `Position`, `CostBasisPrice`, `MarkPrice`, `Currency`, `ListingExchange`
-6. **Save** the query and note the **Query ID** (numeric, shown in the list)
-7. Go to the **Flex Query Token** page → generate a token
-8. **Add the token** as `IBKR_FLEX_TOKEN` in your `.env` file or Render Environment Variables:
+                if symbol and symbol != "Totals" and quantity != 0:
+                    # Calculate average cost from market value and quantity
+                    market_value = float(row.get("Position Value", market_price * quantity))
+                    avg_cost = market_value / quantity if quantity != 0 else market_price
 
-```toml
-IBKR_FLEX_TOKEN = "your-flex-token-here"
-```
+                    positions.append({
+                        "ticker": symbol,
+                        "name": str(row.get("Description", symbol)).strip(),
+                        "quantity": quantity,
+                        "avg_cost": avg_cost,
+                        "currency": currency,
+                        "market_price": market_price,
+                    })
+            except (ValueError, TypeError):
+                continue
 
-Then enter the **Query ID** in the field above and click **Save Query ID**.
-""")
+        return pd.DataFrame(positions)
+    except Exception as e:
+        st.error(f"CSV parsing error: {str(e)}")
+        return pd.DataFrame()
+
+
+def generate_flex_query_template() -> str:
+    """Generate a pre-configured Flex Query XML template for IBKR import."""
+    template = """<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    IBKR Flex Query Template for Prosper
+    Import this into your IBKR account at: Account Management → Flex Queries → Import
+
+    This template is pre-configured to extract the exact fields Prosper needs:
+    - Symbol, Description (company name), Position (quantity)
+    - CostBasisPrice (average cost), MarkPrice (market price)
+    - Currency, ListingExchange (for international stocks)
+
+    After import:
+    1. Generate a Flex Query Token (Account Management → Flex Query Token)
+    2. Enter the Token and Query ID in Prosper's IBKR Sync page
+    3. Click "Sync Now" to import automatically
+-->
+<FlexQueryRequest>
+    <FlexQuery>
+        <QueryName>Prosper Positions</QueryName>
+        <FlexTemplate>Activity</FlexTemplate>
+        <Sections>
+            <Section name="OpenPositions" />
+        </Sections>
+        <Columns>
+            <Column name="assetCategory" />
+            <Column name="symbol" />
+            <Column name="description" />
+            <Column name="position" />
+            <Column name="costBasisPrice" />
+            <Column name="markPrice" />
+            <Column name="markValue" />
+            <Column name="currency" />
+            <Column name="listingExchange" />
+        </Columns>
+    </FlexQuery>
+</FlexQueryRequest>"""
+    return template
+
+
+st.subheader("📥 Choose Your Sync Method")
+sync_method = st.radio(
+    "Select how you want to import from IBKR:",
+    ["📋 CSV Upload (Easiest)", "🔗 Flex Query API (Automatic)", "⚡ Flex Query Template (Quick Setup)"],
+    index=0,
+    help="CSV: Download a file, upload it here. Flex API: Set once, sync anytime. Template: Fast setup in IBKR.",
+    horizontal=False,
+)
 
 st.divider()
 
-# ── Sync Section (only if both token + query ID are configured) ──────────────
-if not token_configured or not query_id_configured:
-    st.info(
-        "Configure both the **IBKR Flex Token** and **Flex Query ID** above to enable syncing."
-    )
-    st.stop()
+# ────────────────────────────────────────────────────────────────────────────
+# METHOD 1: CSV UPLOAD
+# ────────────────────────────────────────────────────────────────────────────
+if sync_method == "📋 CSV Upload (Easiest)":
+    st.subheader("📋 CSV Upload Method")
 
-if not _IBKR_SYNC_AVAILABLE:
-    st.warning(
-        "The IBKR sync module (`core/ibkr_sync.py`) is not yet available. "
-        "Once deployed, syncing will be enabled automatically."
-    )
-    st.stop()
+    with st.expander("📖 How to download from IBKR (3 steps)", expanded=True):
+        st.markdown("""
+        1. **Log into** [IBKR Account Management](https://www.interactivebrokers.com/sso/Login)
+        2. **Go to** Reports → Activity → Activity Statement
+        3. **Download** the CSV file and upload it below
 
-st.subheader("🔄 Sync Portfolio")
+        That's it! No API keys or Flex Query setup needed.
+        """)
 
-# Sync mode
-col_mode, col_portfolio = st.columns(2)
+    uploaded_file = st.file_uploader("Choose IBKR CSV file", type="csv")
 
-with col_mode:
-    sync_mode = st.selectbox(
-        "Sync Mode",
-        ["Full Replace", "Smart Merge"],
-        index=0,
-        help=(
-            "**Full Replace:** Overwrites all IBKR holdings with the latest data.\n\n"
-            "**Smart Merge:** Adds new positions and updates existing ones without removing manually-added holdings."
-        ),
-    )
+    if uploaded_file:
+        positions_df = parse_ibkr_csv(uploaded_file)
 
-with col_portfolio:
-    portfolios_df = get_all_portfolios()
-    if not portfolios_df.empty:
-        pf_names = portfolios_df["name"].tolist()
-        pf_ids = portfolios_df["id"].tolist()
-        current_pid = get_active_portfolio_id()
-        current_idx = pf_ids.index(current_pid) if current_pid in pf_ids else 0
-        selected_pf = st.selectbox(
-            "Target Portfolio",
-            pf_names,
-            index=current_idx,
-            help="Which portfolio to sync IBKR holdings into.",
-        )
-        target_portfolio_id = pf_ids[pf_names.index(selected_pf)]
-    else:
-        st.caption("No portfolios found.")
-        target_portfolio_id = 1
+        if not positions_df.empty:
+            st.success(f"✅ Parsed {len(positions_df)} positions from CSV")
 
-# Last sync info
-try:
-    last_sync = get_last_sync_info()
-    if last_sync:
-        col_ls1, col_ls2, col_ls3 = st.columns(3)
-        with col_ls1:
-            st.metric("Last Sync", last_sync.get("timestamp", "Never"))
-        with col_ls2:
-            st.metric("Holdings Synced", last_sync.get("count", 0))
-        with col_ls3:
-            status = last_sync.get("status", "Unknown")
-            icon = "✅" if status == "Success" else "⚠️"
-            st.metric("Status", f"{icon} {status}")
-        st.divider()
-except Exception:
-    pass  # No last sync info available
-
-# Sync button
-if st.button("🔄 Sync Now", type="primary", use_container_width=True):
-    with st.spinner("Connecting to IBKR and fetching positions..."):
-        try:
-            result = sync_ibkr_portfolio(
-                flex_token=ibkr_token,
-                query_id=flex_query_id.strip(),
-                portfolio_id=target_portfolio_id,
-                mode="replace" if sync_mode == "Full Replace" else "merge",
-            )
-
-            if result.get("success"):
-                count = result.get("count", 0)
-                st.success(f"Synced **{count}** holdings from IBKR successfully!")
-
-                # Save sync info
-                try:
-                    save_sync_info({
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "count": count,
-                        "status": "Success",
-                        "mode": sync_mode,
-                        "portfolio_id": target_portfolio_id,
-                    })
-                except Exception:
-                    pass
-
-                # Show synced holdings
-                if result.get("holdings"):
-                    with st.expander(f"Synced Holdings ({count})", expanded=True):
-                        import pandas as pd
-                        df = pd.DataFrame(result["holdings"])
-                        st.dataframe(df, use_container_width=True)
-
-                # Invalidate enriched cache so dashboard reloads fresh data
-                for key in list(st.session_state.keys()):
-                    if key.startswith("enriched_") or key in ("last_refresh_time", "extended_df"):
-                        del st.session_state[key]
+            # Portfolio selector
+            portfolios_df = get_all_portfolios()
+            if not portfolios_df.empty:
+                pf_names = portfolios_df["name"].tolist()
+                pf_ids = portfolios_df["id"].tolist()
+                current_pid = get_active_portfolio_id()
+                current_idx = pf_ids.index(current_pid) if current_pid in pf_ids else 0
+                selected_pf = st.selectbox(
+                    "Target Portfolio",
+                    pf_names,
+                    index=current_idx,
+                )
+                target_portfolio_id = pf_ids[pf_names.index(selected_pf)]
             else:
-                error_msg = result.get("error", "Unknown error during sync.")
-                st.error(f"Sync failed: {error_msg}")
+                target_portfolio_id = 1
 
+            # Show preview
+            with st.expander("Preview positions from CSV"):
+                st.dataframe(positions_df, use_container_width=True)
+
+            # Import button
+            if st.button("📥 Import Positions", type="primary", use_container_width=True):
+                try:
+                    # Add broker_source and portfolio_id to each position
+                    positions_df["broker_source"] = "IBKR"
+
+                    # Save to database
+                    save_holdings(positions_df, broker_source="IBKR", portfolio_id=target_portfolio_id)
+
+                    st.success(f"✅ Imported {len(positions_df)} holdings from IBKR CSV!")
+
+                    # Invalidate cache
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("enriched_") or key in ("last_refresh_time", "extended_df"):
+                            del st.session_state[key]
+
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Import failed: {str(e)}")
+        else:
+            st.warning("Could not parse positions from CSV. Make sure it's an IBKR Activity Statement.")
+
+# ────────────────────────────────────────────────────────────────────────────
+# METHOD 2: FLEX QUERY TEMPLATE
+# ────────────────────────────────────────────────────────────────────────────
+elif sync_method == "⚡ Flex Query Template (Quick Setup)":
+    st.subheader("⚡ Flex Query Template")
+
+    st.markdown("""
+    This is the **fastest way to set up** automatic syncing:
+
+    1. **Download** the template below
+    2. **Import** it into your IBKR account (takes 1 click)
+    3. **Generate** a Flex Query Token
+    4. **Paste** token & Query ID into Prosper
+    5. **Click Sync Now** anytime to update
+    """)
+
+    template = generate_flex_query_template()
+
+    col_dl, col_help = st.columns([2, 3])
+    with col_dl:
+        st.download_button(
+            "⬇️ Download Template",
+            data=template,
+            file_name="prosper_flex_query_template.xml",
+            mime="application/xml",
+        )
+    with col_help:
+        st.caption("Import this into: Account Management → Flex Queries → Import")
+
+    st.info("""
+    **Next steps:**
+    1. Go to Account Management → Flex Queries → Import
+    2. Upload the template file above
+    3. Generate a Flex Query Token (Account Management → Flex Query Token)
+    4. Switch to the "Flex Query API" method below and enter your Token & Query ID
+    """)
+
+# ────────────────────────────────────────────────────────────────────────────
+# METHOD 3: FLEX QUERY API (AUTOMATIC)
+# ────────────────────────────────────────────────────────────────────────────
+else:  # "🔗 Flex Query API (Automatic)"
+    st.subheader("🔗 Flex Query API Setup")
+
+    # Check IBKR Flex Token status
+    ibkr_token = get_api_key("IBKR_FLEX_TOKEN")
+    _token_placeholder = "your_" in ibkr_token.lower() if ibkr_token else True
+    token_configured = bool(ibkr_token) and not _token_placeholder
+
+    if token_configured:
+        st.markdown("✅ **IBKR Flex Token** — Configured")
+    else:
+        st.markdown("❌ **IBKR Flex Token** — Not configured")
+        st.caption("Add `IBKR_FLEX_TOKEN` to your `.env` file or Render Environment Variables.")
+
+    # Flex Query ID (stored in user settings, not secrets)
+    user_settings = load_user_settings()
+    saved_query_id = user_settings.get("ibkr_flex_query_id", "")
+
+    col_qid, col_save = st.columns([3, 1])
+    with col_qid:
+        flex_query_id = st.text_input(
+            "Flex Query ID",
+            value=saved_query_id,
+            placeholder="e.g. 123456",
+            help="The numeric ID of your IBKR Activity Flex Query for open positions.",
+        )
+    with col_save:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("💾 Save Query ID", use_container_width=True):
+            save_user_settings({"ibkr_flex_query_id": flex_query_id.strip()})
+            st.success("Query ID saved!")
+            st.rerun()
+
+    query_id_configured = bool(flex_query_id.strip())
+
+    # Setup instructions for Flex Query API
+    with st.expander("📖 How to Set Up FLEX QUERY API (5 minutes)"):
+        st.markdown("""
+    **Option A: Use the Pre-built Template (Recommended)**
+    1. Switch to "⚡ Flex Query Template" method above
+    2. Download the template and import it into your IBKR account (1 click)
+    3. Follow the remaining steps below
+
+    **Option B: Manual Setup**
+    1. Log into [IBKR Account Management](https://www.interactivebrokers.com/sso/Login)
+    2. Go to Performance & Reports → Flex Queries → "+" (create new)
+    3. Select "Activity" template → Check "Open Positions"
+    4. Select fields: Symbol, Description, Position, CostBasisPrice, MarkPrice, Currency, ListingExchange
+    5. Save and note the **Query ID**
+
+    **In Prosper:**
+    1. Go to Account Management → Flex Query Token → Generate new token
+    2. Add token as `IBKR_FLEX_TOKEN` in your `.env` or Render environment variables
+    3. Enter **Query ID** above and click Save
+    4. Click **Sync Now** to import
+    """)
+
+    st.divider()
+
+    # ── Sync Section (only if both token + query ID are configured) ──────────────
+    if not token_configured or not query_id_configured:
+        st.info(
+            "Configure both the **IBKR Flex Token** and **Flex Query ID** above to enable syncing."
+        )
+        st.stop()
+
+    if not _IBKR_SYNC_AVAILABLE:
+        st.warning(
+            "The IBKR sync module (`core/ibkr_sync.py`) is not yet available. "
+            "Once deployed, syncing will be enabled automatically."
+        )
+        st.stop()
+
+    st.subheader("🔄 Sync Portfolio Now")
+
+    # Sync mode
+    col_mode, col_portfolio = st.columns(2)
+
+    with col_mode:
+        sync_mode = st.selectbox(
+            "Sync Mode",
+            ["Full Replace", "Smart Merge"],
+            index=0,
+            help=(
+                "**Full Replace:** Overwrites all IBKR holdings with the latest data.\n\n"
+                "**Smart Merge:** Adds new positions and updates existing ones without removing manually-added holdings."
+            ),
+        )
+
+    with col_portfolio:
+        portfolios_df = get_all_portfolios()
+        if not portfolios_df.empty:
+            pf_names = portfolios_df["name"].tolist()
+            pf_ids = portfolios_df["id"].tolist()
+            current_pid = get_active_portfolio_id()
+            current_idx = pf_ids.index(current_pid) if current_pid in pf_ids else 0
+            selected_pf = st.selectbox(
+                "Target Portfolio",
+                pf_names,
+                index=current_idx,
+                help="Which portfolio to sync IBKR holdings into.",
+            )
+            target_portfolio_id = pf_ids[pf_names.index(selected_pf)]
+        else:
+            st.caption("No portfolios found.")
+            target_portfolio_id = 1
+
+    # Last sync info
+    try:
+        last_sync = get_last_sync_info()
+        if last_sync:
+            col_ls1, col_ls2, col_ls3 = st.columns(3)
+            with col_ls1:
+                st.metric("Last Sync", last_sync.get("timestamp", "Never"))
+            with col_ls2:
+                st.metric("Holdings Synced", last_sync.get("count", 0))
+            with col_ls3:
+                status = last_sync.get("status", "Unknown")
+                icon = "✅" if status == "Success" else "⚠️"
+                st.metric("Status", f"{icon} {status}")
+            st.divider()
+    except Exception:
+        pass  # No last sync info available
+
+    # Sync button
+    if st.button("🔄 Sync Now", type="primary", use_container_width=True):
+        with st.spinner("Connecting to IBKR and fetching positions..."):
+            try:
+                result = sync_ibkr_portfolio(
+                    flex_token=ibkr_token,
+                    query_id=flex_query_id.strip(),
+                    portfolio_id=target_portfolio_id,
+                    mode="replace" if sync_mode == "Full Replace" else "merge",
+                )
+
+                if result.get("success"):
+                    count = result.get("count", 0)
+                    st.success(f"Synced **{count}** holdings from IBKR successfully!")
+
+                    # Save sync info
+                    try:
+                        save_sync_info({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "count": count,
+                            "status": "Success",
+                            "mode": sync_mode,
+                            "portfolio_id": target_portfolio_id,
+                        })
+                    except Exception:
+                        pass
+
+                    # Show synced holdings
+                    if result.get("holdings"):
+                        with st.expander(f"Synced Holdings ({count})", expanded=True):
+                            df = pd.DataFrame(result["holdings"])
+                            st.dataframe(df, use_container_width=True)
+
+                    # Invalidate enriched cache so dashboard reloads fresh data
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("enriched_") or key in ("last_refresh_time", "extended_df"):
+                            del st.session_state[key]
+                else:
+                    error_msg = result.get("error", "Unknown error during sync.")
+                    st.error(f"Sync failed: {error_msg}")
+
+                    try:
+                        save_sync_info({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "count": 0,
+                            "status": "Failed",
+                            "mode": sync_mode,
+                            "error": error_msg,
+                        })
+                    except Exception:
+                        pass
+
+                    # Show detailed errors if available
+                    if result.get("errors"):
+                        with st.expander("Error Details"):
+                            for err in result["errors"]:
+                                st.markdown(f"- {err}")
+
+            except Exception as e:
+                st.error(f"Sync error: {str(e)}")
                 try:
                     save_sync_info({
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "count": 0,
-                        "status": "Failed",
-                        "mode": sync_mode,
-                        "error": error_msg,
+                        "status": "Error",
+                        "error": str(e),
                     })
                 except Exception:
                     pass
-
-                # Show detailed errors if available
-                if result.get("errors"):
-                    with st.expander("Error Details"):
-                        for err in result["errors"]:
-                            st.markdown(f"- {err}")
-
-        except Exception as e:
-            st.error(f"Sync error: {str(e)}")
-            try:
-                save_sync_info({
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "count": 0,
-                    "status": "Error",
-                    "error": str(e),
-                })
-            except Exception:
-                pass
