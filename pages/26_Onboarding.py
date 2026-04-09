@@ -132,12 +132,49 @@ elif current_step == 3:
             if st.button("Parse File", type="primary", use_container_width=True):
                 with st.spinner("AI is reading your file..."):
                     try:
-                        if ext in ("csv",):
-                            df = pd.read_csv(uploaded_file)
-                            # Basic CSV parsing — reuse column alias logic
-                            from pages import _parse_tabular_for_onboarding
-                        elif ext in ("xlsx", "xls"):
-                            df = pd.read_excel(uploaded_file)
+                        if ext in ("csv", "xlsx", "xls"):
+                            if ext == "csv":
+                                df = pd.read_csv(uploaded_file)
+                            else:
+                                df = pd.read_excel(uploaded_file)
+                            # Minimal column auto-mapping for onboarding CSV/Excel
+                            _col_aliases = {
+                                "ticker": ["ticker", "symbol", "stock", "instrument", "code"],
+                                "name": ["name", "company", "company name", "description"],
+                                "quantity": ["quantity", "qty", "units", "shares", "position"],
+                                "avg_cost": ["avg_cost", "avg cost", "average cost", "avg price", "buy price"],
+                                "currency": ["currency", "ccy"],
+                            }
+                            df.columns = df.columns.str.strip()
+                            col_map = {}
+                            for field, aliases in _col_aliases.items():
+                                for c in df.columns:
+                                    if c.strip().lower() in aliases:
+                                        col_map[field] = c
+                                        break
+                            rows = []
+                            for _, row in df.iterrows():
+                                t = str(row.get(col_map.get("ticker", ""), "") or "").strip()
+                                if not t:
+                                    continue
+                                try:
+                                    q = float(str(row.get(col_map.get("quantity", ""), 0) or 0).replace(",", ""))
+                                except (ValueError, TypeError):
+                                    q = 0
+                                try:
+                                    c = float(str(row.get(col_map.get("avg_cost", ""), 0) or 0).replace(",", ""))
+                                except (ValueError, TypeError):
+                                    c = 0
+                                if q > 0:
+                                    rows.append({"ticker": t, "name": str(row.get(col_map.get("name", ""), "") or "").strip(),
+                                                 "quantity": q, "avg_cost": c,
+                                                 "currency": str(row.get(col_map.get("currency", ""), "USD") or "USD").strip().upper()})
+                            if rows:
+                                from core.database import save_holdings
+                                save_holdings(pd.DataFrame(rows))
+                                st.success(f"Extracted and saved **{len(rows)}** holdings!")
+                            else:
+                                st.warning("Could not extract holdings. Check that your file has ticker and quantity columns.")
                         else:
                             # Image or PDF — use AI parser
                             from core.screenshot_parser import parse_brokerage_image

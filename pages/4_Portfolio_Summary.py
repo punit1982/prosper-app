@@ -505,8 +505,9 @@ try:
 
 except Exception as _err:
     import traceback
+    import logging
+    logging.getLogger("prosper.pages").error("Portfolio Summary error: %s", _err, exc_info=True)
     st.error("⚠️ An error occurred on this page. Please try refreshing.")
-    with st.expander("🔍 Error details (for debugging)"):
-        st.code(traceback.format_exc())
+    st.caption(f"Error: {type(_err).__name__}")
     if st.button("🔄 Retry", key="page_retry"):
         st.rerun()

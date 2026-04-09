@@ -121,7 +121,9 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
                 st.markdown(reply)
                 st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
             except Exception as e:
-                st.error(f"Chat error: {e}")
+                import logging
+                logging.getLogger("prosper.chat").error("AI Chat error: %s", e)
+                st.error(f"Chat error: {type(e).__name__}. Please try again.")
 
 # Clear chat button
 if st.session_state.get("chat_messages"):
