@@ -1,4 +1,3 @@
 #!/bin/bash
-cd "/Users/singpu03/Documents/Prosper with Claude March 2026"
-source venv/bin/activate
+cd "$(dirname "$0")"
 streamlit run app.py
