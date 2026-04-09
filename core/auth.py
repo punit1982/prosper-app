@@ -46,6 +46,10 @@ if not _COOKIE_KEY:
         "PROSPER_COOKIE_SECRET not set — using random key. "
         "Sessions will not persist across restarts."
     )
+    # Surface the warning visibly so deployers notice in production
+    _COOKIE_SECRET_MISSING = True
+else:
+    _COOKIE_SECRET_MISSING = False
 _COOKIE_EXPIRY_DAYS = 30
 
 _GOOGLE_COOKIE_KEY = os.getenv("PROSPER_GOOGLE_COOKIE_SECRET", "")
@@ -278,7 +282,9 @@ def _handle_google_user(user_info: dict) -> bool:
     if not g_email:
         return False
 
-    g_username = g_email.split("@")[0].lower().replace(".", "_").replace("-", "_")
+    # Use full email (normalized) as username to avoid collisions
+    # (e.g., john@gmail.com vs john@company.com)
+    g_username = g_email.lower().replace("@", "_at_").replace(".", "_").replace("-", "_").replace("+", "_")
     g_hash = _hash_password(g_email)
     first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
     last_name = " ".join(g_name.split()[1:]) if g_name and len(g_name.split()) > 1 else ""
@@ -424,7 +430,7 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
             if pw != pw2:
                 errors.append("Passwords do not match.")
 
-            username = email.split("@")[0].lower().replace(".", "_").replace("-", "_").replace("+", "_") if email else ""
+            username = email.lower().replace("@", "_at_").replace(".", "_").replace("-", "_").replace("+", "_") if email else ""
 
             # Check DB for existing user (source of truth)
             if username and _db_get_user(username):
@@ -524,6 +530,13 @@ def run_auth() -> Dict[str, Any]:
     st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
+
+    # Warn if cookie secret is missing (sessions won't survive restarts)
+    if _COOKIE_SECRET_MISSING and auth_enabled:
+        st.warning(
+            "⚠️ PROSPER_COOKIE_SECRET is not set. User sessions will not persist "
+            "across server restarts. Set this environment variable for production."
+        )
 
     # ── Auth disabled ──
     if not auth_enabled:
@@ -651,18 +664,40 @@ def run_auth() -> Dict[str, Any]:
             unsafe_allow_html=True,
         )
 
-        # ── Email sign-in (primary action) ──
-        authenticator.login()
-        if st.session_state.get("authentication_status") is True:
-            # Login succeeded — set user_id and rerun to show the app
-            username = st.session_state.get("username", "")
-            user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
-            st.session_state["user_id"] = user_data.get("email", username)
-            st.session_state["auth_method"] = "email"
-            st.rerun()
-        elif st.session_state.get("authentication_status") is False:
-            st.error("Invalid username or password.")
-            st.caption("Forgot your password? Contact an administrator or create a new account.")
+        # ── Login rate limiting ──
+        import time as _time
+        _MAX_ATTEMPTS = 5
+        _LOCKOUT_SECONDS = 300  # 5 minutes
+        _fail_count = st.session_state.get("_login_fail_count", 0)
+        _fail_ts = st.session_state.get("_login_fail_ts", 0)
+        _locked_out = _fail_count >= _MAX_ATTEMPTS and (_time.time() - _fail_ts) < _LOCKOUT_SECONDS
+
+        if _locked_out:
+            _remaining = int(_LOCKOUT_SECONDS - (_time.time() - _fail_ts))
+            st.error(f"Too many failed login attempts. Please wait {_remaining // 60}m {_remaining % 60}s.")
+        else:
+            # Reset lockout if cooldown expired
+            if _fail_count >= _MAX_ATTEMPTS and (_time.time() - _fail_ts) >= _LOCKOUT_SECONDS:
+                st.session_state["_login_fail_count"] = 0
+
+            # ── Email sign-in (primary action) ──
+            authenticator.login()
+            if st.session_state.get("authentication_status") is True:
+                st.session_state["_login_fail_count"] = 0  # Reset on success
+                # Login succeeded — set user_id and rerun to show the app
+                username = st.session_state.get("username", "")
+                user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
+                st.session_state["user_id"] = user_data.get("email", username)
+                st.session_state["auth_method"] = "email"
+                st.rerun()
+            elif st.session_state.get("authentication_status") is False:
+                st.session_state["_login_fail_count"] = st.session_state.get("_login_fail_count", 0) + 1
+                st.session_state["_login_fail_ts"] = _time.time()
+                _remaining_attempts = _MAX_ATTEMPTS - st.session_state["_login_fail_count"]
+                st.error("Invalid username or password.")
+                if _remaining_attempts > 0:
+                    st.caption(f"{_remaining_attempts} attempts remaining before temporary lockout.")
+                st.caption("Forgot your password? Contact an administrator or create a new account.")
 
         # ── Registration form (secondary action) ──
         st.markdown("")
