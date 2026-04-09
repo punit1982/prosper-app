@@ -2,10 +2,13 @@ import sqlite3
 import os
 import json
 import time
+import logging
 import pandas as pd
 import streamlit as st
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+
+_db_log = logging.getLogger("prosper.db")
 
 from core.db_connector import get_connection as _get_cloud_connection, sync_to_cloud, is_cloud_db, DB_PATH
 
@@ -74,6 +77,7 @@ def init_db():
             ticker TEXT NOT NULL, name TEXT,
             quantity REAL NOT NULL, avg_cost REAL NOT NULL,
             currency TEXT DEFAULT 'USD', broker_source TEXT,
+            portfolio_id INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
         """CREATE TABLE IF NOT EXISTS parse_cache (
@@ -288,11 +292,12 @@ def delete_portfolio(portfolio_id: int):
     try:
         conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (portfolio_id,))
     except Exception:
-        pass  # portfolio_id column may not exist
-    try:
-        conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
-    except Exception:
-        pass
+        # portfolio_id column may not exist — try deleting by ticker match as fallback
+        import logging
+        logging.getLogger("prosper.db").warning(
+            f"Could not delete holdings for portfolio {portfolio_id} — portfolio_id column may not exist"
+        )
+    conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
     conn.commit()
     conn.close()
     _invalidate_holdings_cache()
@@ -353,8 +358,8 @@ def save_user_settings_db(user_id: str, settings: dict) -> None:
         )
         conn.commit()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        _db_log.warning("Failed to save user settings for %s: %s", user_id, e)
 
 
 # ─────────────────────────────────────────
@@ -712,8 +717,8 @@ def save_price_cache(quotes: Dict[str, dict]) -> None:
         )
         conn.commit()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        _db_log.warning("Failed to save price cache (%d entries): %s", len(rows), e)
 
 
 def save_failed_tickers(tickers: List[str]) -> None:

@@ -174,7 +174,7 @@ def get_api_key(key_name: str) -> str:
     return ""
 
 
-def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5", system=None):
+def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-20250514", system=None):
     """
     Call Claude API with automatic model fallback.
     Tries multiple model IDs until one works — handles different API tiers/regions.

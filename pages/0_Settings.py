@@ -290,7 +290,7 @@ if not db_info.get("persistent", False):
 
 ```toml
 TURSO_DATABASE_URL = "libsql://prosper-yourname.turso.io"
-TURSO_AUTH_TOKEN = "your-auth-token-here"
+TURSO_AUTH_TOKEN = "<your-auth-token>"
 ```
 
 6. Redeploy — Prosper will automatically use Turso for all data storage.

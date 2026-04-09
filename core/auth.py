@@ -294,8 +294,8 @@ def _handle_google_user(user_info: dict) -> bool:
 
     try:
         _db_create_user(g_username, g_email, first_name, last_name, g_hash, role)
-    except Exception:
-        pass
+    except Exception as e:
+        _auth_log.warning("Failed to create Google user %s: %s", g_username, e)
 
     _sync_user_to_yaml(g_username, g_email, first_name, last_name, g_hash, role)
 
@@ -329,7 +329,11 @@ def _show_google_signin() -> bool:
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
+    redirect = os.getenv("GOOGLE_REDIRECT_URI", "")
+    if not redirect:
+        _auth_log.warning("GOOGLE_REDIRECT_URI not set — Google OAuth will not work correctly.")
+        st.warning("Google sign-in is not fully configured (missing GOOGLE_REDIRECT_URI).")
+        return False
 
     try:
         import urllib.parse
