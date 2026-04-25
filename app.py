@@ -1,7 +1,7 @@
 """
 Prosper — AI-Native Investment Operating System
 Main entrypoint: page config, DB init, authentication, and navigation.
-v6.0 — Clean rebuild: auth extracted to core/auth.py, yf utils centralized.
+v6.1 — Fix: sidebar flash before login; OAuth HMAC state fix in auth.py.
 """
 
 import os
@@ -31,11 +31,32 @@ st.set_page_config(
     page_title="Prosper",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # FIX: Use "collapsed" so sidebar is hidden by default on the login screen.
+    # "expanded" caused the sidebar skeleton to flash before the hide-CSS
+    # injected by auth.py could take effect. Once authenticated, users can
+    # expand the sidebar normally — Streamlit persists their preference.
+    initial_sidebar_state="collapsed",
 )
 
 # ── Database Init ────────────────────────────────────────────────────────────
 init_db()
+
+# ── Pre-Auth Sidebar Hide (injected BEFORE run_auth renders anything) ────────
+# This must come BEFORE run_auth() so the CSS is in the page HEAD of the first
+# render — eliminating the sidebar flash on the login screen.
+_is_authed_early = st.session_state.get("authentication_status") is True
+if not _is_authed_early:
+    # Check if this is an OAuth callback — if so, we're mid-login, still hide.
+    _has_oauth_code = "code" in dict(st.query_params)
+    st.markdown(
+        '<style>'
+        '[data-testid="stSidebar"]{display:none !important;}'
+        '[data-testid="stSidebarCollapsedControl"]{display:none !important;}'
+        '[data-testid="stNavigation"]{display:none !important;}'
+        '[role="tablist"]{display:none !important;}'
+        '</style>',
+        unsafe_allow_html=True,
+    )
 
 # ── Global Styling ───────────────────────────────────────────────────────────
 st.markdown("""
@@ -101,21 +122,17 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 
 # ── Navigation (declared before auth so auto-discovery is suppressed on login) ─
-# When not authenticated, position="hidden" hides the page list completely.
-# When authenticated, we build the full nav dict below and pg.run() drives the app.
 from core.auth import run_auth as _run_auth
 
 _is_authed = st.session_state.get("authentication_status") is True
 
 if not _is_authed:
-    # Suppress Streamlit's auto-discovered page list during the login screen.
     pg = st.navigation(
         [st.Page("pages/00_Command_Center.py", default=True)],
         position="hidden",
     )
     _run_auth()  # shows login UI and calls st.stop() if not authenticated
-    # If run_auth() returned normally it means a cookie was just validated.
-    # Rerun so the authenticated branch (below) takes over cleanly.
+    # If run_auth() returned normally a cookie was just validated — rerun.
     if st.session_state.get("authentication_status") is True:
         st.rerun()
     st.stop()
@@ -130,7 +147,6 @@ if "onboarding_complete" not in st.session_state:
     if prefs.get("onboarding_complete", False):
         st.session_state["onboarding_complete"] = True
 
-# Also skip onboarding entirely when user already has holdings in the DB
 if not st.session_state.get("onboarding_complete", False):
     _existing_holdings = get_all_holdings()
     if not _existing_holdings.empty:
@@ -161,7 +177,6 @@ if not _portfolios.empty:
         _new_id = _ids[_names.index(_sel)]
         if _new_id != st.session_state.get("active_portfolio_id"):
             st.session_state["active_portfolio_id"] = _new_id
-            # Clear all portfolio-dependent caches to prevent stale data & free memory
             _clear_prefixes = ("enriched_", "_prosper_holdings_cache", "sentiment_data_", "_de_")
             _clear_exact = {"extended_df", "last_refresh_time", "summary_info_map",
                             "portfolio_returns_cache", "portfolio_returns_ts",
@@ -225,10 +240,6 @@ if not get_nav_snapshot_exists_today(_base):
             logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
 # ── Full Navigation (authenticated users) ────────────────────────────────────
-# ── Consolidated Navigation (Phase 3) ──────────────────────────────────────
-# Old nav had 7 sections; consolidated to 5 for cleaner UX:
-# - "AI" merged into "Research" (Ask Prosper fits with research tools)
-# - "Income & Calendar" merged into "Portfolio" (dividends/earnings are portfolio features)
 pg = st.navigation({
     "Prosper": [
         st.Page("pages/00_Command_Center.py", title="Command Center", icon="🏠", default=True),
@@ -314,9 +325,6 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
             _q = None
         if _q:
             st.session_state["_mini_chat_last_ts"] = _time.time()
-            # C10: trim AT APPEND time (not at render time), and cap message
-            # length, so st.session_state cannot grow unbounded with very long
-            # pasted messages.
             _CHAT_HISTORY_CAP = 20
             st.session_state["mini_chat"].append({"role": "user", "content": _q[:2000]})
             if len(st.session_state["mini_chat"]) > _CHAT_HISTORY_CAP:

@@ -5,7 +5,7 @@ Complete user authentication with database as the single source of truth.
 
 Supports:
   1. Email-based registration & login (bcrypt hashed passwords)
-  2. Google OAuth via streamlit-google-auth
+  2. Google OAuth via manual OAuth2 redirect flow
   3. Auth disabled mode (PROSPER_AUTH_ENABLED=false)
 
 All user data is stored in the Turso/SQLite database.
@@ -23,6 +23,7 @@ import os
 import re
 import json
 import hashlib
+import hmac
 import secrets as _secrets
 import logging as _logging
 from datetime import datetime
@@ -51,9 +52,6 @@ _COOKIE_NAME = "prosper_auth"
 _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
 if not _COOKIE_KEY:
     if _is_production():
-        # Refuse to boot. A random secret means every Render restart
-        # silently logs every user out and cookies cannot be verified
-        # across instances. Operator must set PROSPER_COOKIE_SECRET.
         raise RuntimeError(
             "PROSPER_COOKIE_SECRET is required in production. "
             "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
@@ -67,6 +65,12 @@ if not _GOOGLE_COOKIE_KEY:
     if _is_production():
         raise RuntimeError("PROSPER_GOOGLE_COOKIE_SECRET is required in production.")
     _GOOGLE_COOKIE_KEY = _secrets.token_hex(32)
+
+# ── OAuth state signing key ──────────────────────────────────────────────────
+# We sign the state token with HMAC-SHA256 using a stable secret so we can
+# verify it on the callback WITHOUT relying on session_state surviving the
+# redirect (Streamlit creates a NEW WebSocket session on every navigation).
+_OAUTH_SIGNING_KEY = os.getenv("PROSPER_COOKIE_SECRET", _COOKIE_KEY).encode()
 
 _HIDE_SIDEBAR_CSS = (
     '<style>'
@@ -88,6 +92,35 @@ _MIN_PASSWORD_LENGTH = 8
 
 
 # ─────────────────────────────────────────
+# OAUTH STATE — HMAC-signed, session-independent
+# ─────────────────────────────────────────
+def _make_oauth_state() -> str:
+    """Create a new HMAC-signed state token.
+
+    Format: {nonce}.{hmac_hex}
+    The nonce is random; the HMAC covers the nonce so we can verify it
+    on the callback without any server-side session storage.
+    This is the same pattern used by Auth0, Okta, and GitHub OAuth.
+    """
+    nonce = _secrets.token_urlsafe(32)
+    sig = hmac.new(_OAUTH_SIGNING_KEY, nonce.encode(), hashlib.sha256).hexdigest()
+    return f"{nonce}.{sig}"
+
+
+def _verify_oauth_state(state: str) -> bool:
+    """Verify a state token produced by _make_oauth_state().
+
+    Returns True only if the HMAC signature is valid.
+    Does NOT rely on session_state at all — works across redirects.
+    """
+    if not state or "." not in state:
+        return False
+    nonce, _, received_sig = state.partition(".")
+    expected_sig = hmac.new(_OAUTH_SIGNING_KEY, nonce.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_sig, received_sig)
+
+
+# ─────────────────────────────────────────
 # PASSWORD VALIDATION
 # ─────────────────────────────────────────
 def validate_password(pw: str) -> list:
@@ -103,7 +136,7 @@ def validate_password(pw: str) -> list:
 
 
 def _hash_password(pw: str) -> str:
-    """Hash password using bcrypt (streamlit-authenticator's Hasher.hash no longer works)."""
+    """Hash password using bcrypt."""
     import bcrypt
     return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -118,7 +151,7 @@ def _check_password(plain: str, hashed: str) -> bool:
 
 
 # ─────────────────────────────────────────
-# DATABASE HELPERS (single source of truth)
+# DATABASE HELPERS
 # ─────────────────────────────────────────
 def _db_get_all_users() -> list:
     try:
@@ -149,7 +182,6 @@ def _db_create_user(username, email, first_name, last_name, password_hash, role=
         from core.database import create_user
         return create_user(username, email, first_name, last_name, password_hash, role)
     except Exception as e:
-        # If duplicate, silently succeed
         if "UNIQUE" in str(e).upper() or "duplicate" in str(e).lower():
             return username
         raise
@@ -160,7 +192,6 @@ _ALLOWED_USER_FIELDS = {"email", "first_name", "last_name", "password_hash", "ro
 
 def _db_update_user(username, **fields):
     """Update user fields in the database. Only whitelisted column names accepted."""
-    # Sanitize: only allow known column names (prevents SQL injection via field names)
     safe_fields = {k: v for k, v in fields.items() if k in _ALLOWED_USER_FIELDS}
     if not safe_fields:
         return
@@ -192,17 +223,16 @@ def _db_update_user(username, **fields):
 
 
 def _db_delete_user(username: str):
-    """Delete a user from the database. Raises on failure so caller knows."""
+    """Delete a user from the database."""
     from core.database import delete_user
     delete_user(username)
 
 
 # ─────────────────────────────────────────
-# YAML CACHE (rebuilt from DB, used by
-# streamlit-authenticator for cookie auth)
+# YAML CACHE
 # ─────────────────────────────────────────
 def _rebuild_yaml_from_db():
-    """Rebuild auth_config.yaml from the database. Called on every cold start."""
+    """Rebuild auth_config.yaml from the database."""
     import yaml
     users = _db_get_all_users()
     config = {
@@ -272,27 +302,19 @@ def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, ro
 
 
 # ─────────────────────────────────────────
-# GOOGLE OAUTH — manual implementation
-# No dependency on streamlit-google-auth (which hardcodes key='init' causing
-# duplicate widget key conflicts with streamlit-authenticator).
-# Uses only 'requests' (already in requirements) + standard OAuth2 endpoints.
+# GOOGLE OAUTH
 # ─────────────────────────────────────────
 def _build_google_creds_file():
-    """No-op — kept for API compatibility. Manual flow uses env vars directly."""
+    """No-op — kept for API compatibility."""
     pass
 
 
 def _is_google_configured() -> bool:
-    """Check if Google OAuth env vars are set."""
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
 
 
 def _unique_username_from_email(email: str) -> str:
-    """A3: deterministic, collision-safe username from email.
-
-    Two distinct emails can no longer collapse into one row — the email's
-    full SHA-256 prefix disambiguates collisions.
-    """
+    """Deterministic, collision-safe username from email."""
     base = re.sub(r"[^a-z0-9]", "_", email.split("@")[0].lower()).strip("_") or "user"
     if not _db_get_user(base):
         return base
@@ -301,42 +323,27 @@ def _unique_username_from_email(email: str) -> str:
 
 
 def _handle_google_user(user_info: dict) -> bool:
-    """Process an authenticated Google profile — A3+A4 hardening:
-
-    1. Reject `email_verified=False` profiles (Google can return unverified).
-    2. Look up by EMAIL (UNIQUE column), never by collapsed username
-       (so distinct emails cannot share a row → no account takeover).
-    3. New accounts get a random bcrypt hash, NOT bcrypt(email),
-       so a Google user cannot be impersonated via the email login form.
-    4. First-user admin promotion only if the users query actually succeeded
-       (A5: a DB outage must not silently mint admins).
-    """
+    """Process an authenticated Google profile."""
     g_email = (user_info.get("email") or "").strip().lower()
     g_name = user_info.get("name") or ""
     if not g_email:
         return False
     if user_info.get("email_verified") is not True:
-        # Untrusted email — refuse the login.
         _auth_log.warning("Rejected Google login for unverified email: %s", g_email)
         return False
 
-    # Authoritative lookup by email (UNIQUE column in users table).
     existing_user = _db_get_user_by_email(g_email)
 
     if existing_user:
-        # Re-authenticate the SAME row. Do NOT mutate password or role.
         username = existing_user.get("username") or _unique_username_from_email(g_email)
         first_name = existing_user.get("first_name") or g_email.split("@")[0]
     else:
-        # New account.
         username = _unique_username_from_email(g_email)
         first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
         last_name = " ".join(g_name.split()[1:]) if len(g_name.split()) > 1 else ""
 
-        # A4: random hash — never derivable from the email.
         random_pw_hash = _hash_password(_secrets.token_urlsafe(32))
 
-        # A5: only promote to admin if the users query actually returned (no DB outage).
         try:
             from core.database import users_query_succeeded as _users_ok
             db_ok = _users_ok()
@@ -348,7 +355,6 @@ def _handle_google_user(user_info: dict) -> bool:
         try:
             _db_create_user(username, g_email, first_name, last_name, random_pw_hash, role)
         except Exception:
-            # Hard fail: do not silently log into someone else.
             _auth_log.exception("Failed to create Google OAuth user")
             return False
         _sync_user_to_yaml(username, g_email, first_name, last_name, random_pw_hash, role)
@@ -364,17 +370,15 @@ def _handle_google_user(user_info: dict) -> bool:
 def _show_google_signin() -> bool:
     """Show Google sign-in button using manual OAuth2 redirect flow.
 
-    Flow:
-      1. User clicks "Continue with Google" → redirected to Google consent
-      2. Google redirects back with ?code=... in URL
-      3. We exchange the code for an access token (server-side POST)
-      4. We fetch the user's profile and create/sync the account
+    FIX: State is now HMAC-signed and self-contained in the URL — no session_state
+    storage required. This means verification works even when Streamlit creates a
+    brand-new WebSocket session on the OAuth redirect (which it always does).
 
-    Uses only 'requests' — no streamlit-google-auth dependency, no key='init' conflict.
-
-    FIX (A2 regression): Process OAuth callback BEFORE checking the render guard.
-    The guard prevents button re-rendering within the same render cycle, but it
-    must not block callback handling on the rerun after Google redirects back.
+    The old approach stored the nonce in session_state before redirect, but
+    Streamlit's session is tied to a WebSocket connection. When Google redirects
+    the browser back to the app URL, Streamlit starts a FRESH session with an
+    empty session_state — so the stored nonce was always missing, causing the
+    'expired or tampered with' error on every login attempt.
     """
     if not _is_google_configured():
         return False
@@ -382,46 +386,35 @@ def _show_google_signin() -> bool:
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-    _OAUTH_STATE_KEY = "_oauth_state_pending"
 
     try:
         import urllib.parse
         import requests as _req
 
-        # ── Step 1: ALWAYS handle OAuth callback first (before guard) ──
+        # ── Step 1: Handle OAuth callback ──────────────────────────────────
+        # Check for ?code= in URL params — this is the Google redirect back.
         params = dict(st.query_params)
         if "code" in params and not st.session_state.get("_google_auth_done"):
-            # A2: CSRF protection — state must match the value we issued.
             received_state = params.get("state", "")
-            expected_state = st.session_state.pop(_OAUTH_STATE_KEY, None)
 
-            # DEBUG: Log state token details
-            all_keys = [k for k in st.session_state.keys()]
-            state_key_in_session = _OAUTH_STATE_KEY in all_keys
-            _auth_log.info(
-                f"OAuth callback RECEIVED: "
-                f"code={params['code'][:16] if params.get('code') else 'NONE'}... | "
-                f"received_state={received_state[:16] if received_state else 'NONE'}... | "
-                f"expected_state={expected_state[:16] if expected_state else 'NONE'}... | "
-                f"state_key_in_session={state_key_in_session} | "
-                f"match={expected_state and _secrets.compare_digest(str(received_state), str(expected_state)) if expected_state else False}"
-            )
-
-            if not expected_state or not _secrets.compare_digest(
-                str(received_state), str(expected_state)
-            ):
+            # HMAC verification — no session_state needed, works across redirects
+            if not _verify_oauth_state(received_state):
                 st.query_params.clear()
                 _auth_log.warning(
-                    f"OAuth callback rejected: expected_state={'MISSING' if not expected_state else 'PRESENT'}, "
-                    f"received_state={'PRESENT' if received_state else 'MISSING'}, "
-                    f"session_keys={list(st.session_state.keys())}"
+                    "OAuth callback rejected: HMAC verification failed. "
+                    "received_state=%s...",
+                    received_state[:16] if received_state else "NONE",
                 )
-                st.error("Authentication request expired or was tampered with. Please try again.")
+                st.error(
+                    "Authentication request could not be verified. "
+                    "Please try signing in again."
+                )
                 return False
 
             code = params["code"]
-            # Clear code+state from URL to prevent reuse
-            st.query_params.clear()
+            st.query_params.clear()  # prevent code reuse
+
+            _auth_log.info("OAuth callback: HMAC verified OK, exchanging code for token.")
 
             token_resp = _req.post(
                 "https://oauth2.googleapis.com/token",
@@ -449,33 +442,25 @@ def _show_google_signin() -> bool:
                         st.session_state["user_info"] = user_info
                         return _handle_google_user(user_info)
             else:
-                # Do NOT log token_resp.text — Google echoes credentials/refresh
-                # tokens on certain error paths.
                 _auth_log.warning("Google token exchange failed: HTTP %s", token_resp.status_code)
 
-        # ── Step 2: Already authenticated this session ──
+        # ── Step 2: Already authenticated this session ──────────────────────
         if st.session_state.get("connected") and st.session_state.get("user_info"):
             return _handle_google_user(st.session_state["user_info"])
 
-        # ── Step 3: Render guard — only prevent button re-rendering within a single render ──
+        # ── Step 3: Render guard — prevent duplicate button in same render ──
         if st.session_state.get("_google_auth_rendered_this_rerun"):
             return False
         st.session_state["_google_auth_rendered_this_rerun"] = True
 
-        # ── Step 4: Show the sign-in button — issue a fresh CSRF state every render.
-        new_state = _secrets.token_urlsafe(32)
-        st.session_state[_OAUTH_STATE_KEY] = new_state
-
-        # Verify state was actually stored
-        verify_store = st.session_state.get(_OAUTH_STATE_KEY)
-        if verify_store != new_state:
-            _auth_log.error(f"CRITICAL: State not stored! Tried to store {new_state[:16]}..., but got {verify_store}")
+        # ── Step 4: Show sign-in button with fresh HMAC-signed state ────────
+        new_state = _make_oauth_state()
+        # No need to store in session_state — HMAC is self-verifying
 
         _auth_log.info(
-            f"Generated OAuth state: {new_state[:16]}... | "
-            f"stored={verify_store == new_state} | "
-            f"redirect_uri={redirect} | "
-            f"session_keys={len(st.session_state)}"
+            "Generating OAuth URL: state=%s... redirect_uri=%s",
+            new_state[:16],
+            redirect,
         )
 
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
@@ -490,7 +475,7 @@ def _show_google_signin() -> bool:
         st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
 
     except Exception as google_err:
-        _auth_log.warning(f"Google sign-in error: {google_err}")
+        _auth_log.warning("Google sign-in error: %s", google_err)
         st.warning(f"Google sign-in error: {google_err}")
         st.caption("Please use email login, or check Google OAuth configuration.")
 
@@ -534,12 +519,8 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
             if pw != pw2:
                 errors.append("Passwords do not match.")
 
-            # A3: collision-safe username derivation (matches Google handler)
             username = _unique_username_from_email(email.strip().lower()) if email else ""
 
-            # B1: collapse user-enumeration to a single ambiguous message.
-            # Was previously TWO distinct errors that revealed whether the
-            # username OR email already existed.
             account_exists = bool(
                 (username and _db_get_user(username))
                 or (email and _db_get_user_by_email(email.strip()))
@@ -552,7 +533,6 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
                     st.error(e)
             else:
                 hashed = _hash_password(pw)
-                # A5: only promote to admin if DB is healthy AND empty.
                 try:
                     from core.database import users_query_succeeded as _users_ok
                     db_ok = _users_ok()
@@ -561,13 +541,9 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
                 existing = _db_get_all_users() if db_ok else None
                 role = "admin" if ((is_first_user or existing == []) and db_ok) else "user"
 
-                # Save to DB (source of truth)
                 _db_create_user(username, email.strip(), first.strip(), last.strip(), hashed, role)
-
-                # Sync to YAML cache
                 _sync_user_to_yaml(username, email.strip(), first.strip(), last.strip(), hashed, role)
 
-                # Auto-login
                 st.session_state["authentication_status"] = True
                 st.session_state["username"] = username
                 st.session_state["name"] = f"{first.strip()} {last.strip()}".strip()
@@ -586,14 +562,13 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
 # ─────────────────────────────────────────
 def do_logout():
     """Clear ALL auth-related session state including authenticator cookie state."""
-    # Keys that streamlit-authenticator / Google auth uses internally
     _auth_keys = {
         "authentication_status", "username", "name", "logout",
         "user_id", "auth_method", "connected", "user_info",
-        "_google_auth_rendered",
+        "_google_auth_rendered", "_google_auth_done",
+        "_oauth_state_pending",  # E2: clear any dangling CSRF token
         "FormSubmitter:Login-Login", "FormSubmitter:Login-Submit",
     }
-    # App-specific keys to clear
     _app_keys = {
         "mini_chat", "global_currency_filter", "active_portfolio_id",
         "onboarding_complete",
@@ -614,7 +589,6 @@ def do_logout():
         except KeyError:
             pass
 
-    # Force authenticator to recognize logout
     st.session_state["authentication_status"] = None
     st.session_state["logout"] = True
 
@@ -641,7 +615,7 @@ def run_auth() -> Dict[str, Any]:
         "method": "disabled",
     }
 
-    # Reset per-rerun flag so Google auth widget can render fresh each rerun
+    # Reset per-rerun render guard
     st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -669,10 +643,9 @@ def run_auth() -> Dict[str, Any]:
         st.stop()
         return result
 
-    # Build Google credentials file from env vars
     _build_google_creds_file()
 
-    # ── Rebuild YAML cache from DB (handles redeploys) ──
+    # ── Rebuild YAML cache from DB ──
     db_users = _db_get_all_users()
     if db_users:
         auth_config = _rebuild_yaml_from_db()
@@ -686,13 +659,11 @@ def run_auth() -> Dict[str, Any]:
 
     # ── No users yet: First-run setup ──
     if not has_users:
-        st.markdown(_HIDE_SIDEBAR_CSS, unsafe_allow_html=True)
         _, center, _ = st.columns([1, 2, 1])
         with center:
             st.markdown(_HEADER_HTML, unsafe_allow_html=True)
             st.markdown("")
 
-            # Google sign-in first
             if _show_google_signin():
                 st.rerun()
 
@@ -715,7 +686,6 @@ def run_auth() -> Dict[str, Any]:
             "expiry_days": _COOKIE_EXPIRY_DAYS,
         }
 
-    # Create authenticator instance
     authenticator = stauth.Authenticate(
         auth_config["credentials"],
         auth_config["cookie"]["name"],
@@ -738,12 +708,10 @@ def run_auth() -> Dict[str, Any]:
             method=st.session_state.get("auth_method", "email"),
         )
 
-        # Sidebar user info + logout
         with st.sidebar:
             st.markdown(f"👤 **{display_name}**")
             st.caption(f"_{user_email}_" if user_email != username else "")
             if st.button("🚪 Sign Out", key="sidebar_logout", use_container_width=True):
-                # Use authenticator's logout to clear cookie
                 try:
                     authenticator.logout(location="unrendered")
                 except Exception:
@@ -755,14 +723,12 @@ def run_auth() -> Dict[str, Any]:
         return result
 
     # ── Not authenticated: Show login page ──
-    st.markdown(_HIDE_SIDEBAR_CSS, unsafe_allow_html=True)
     _, center, _ = st.columns([1, 2, 1])
 
     with center:
         st.markdown(_HEADER_HTML, unsafe_allow_html=True)
         st.markdown("")
 
-        # Google sign-in
         if _show_google_signin():
             st.rerun()
 
@@ -772,10 +738,8 @@ def run_auth() -> Dict[str, Any]:
             unsafe_allow_html=True,
         )
 
-        # ── Email sign-in (primary action) ──
         authenticator.login()
         if st.session_state.get("authentication_status") is True:
-            # Login succeeded — set user_id and rerun to show the app
             username = st.session_state.get("username", "")
             user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
             st.session_state["user_id"] = user_data.get("email", username)
@@ -785,7 +749,6 @@ def run_auth() -> Dict[str, Any]:
             st.error("Invalid username or password.")
             st.caption("Forgot your password? Contact an administrator or create a new account.")
 
-        # ── Registration form (secondary action) ──
         st.markdown("")
         with st.expander("👤 Create New Account", expanded=False):
             _show_registration_form(is_first_user=False)
