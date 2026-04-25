@@ -396,10 +396,15 @@ def _show_google_signin() -> bool:
             expected_state = st.session_state.pop(_OAUTH_STATE_KEY, None)
 
             # DEBUG: Log state token details
+            all_keys = [k for k in st.session_state.keys()]
+            state_key_in_session = _OAUTH_STATE_KEY in all_keys
             _auth_log.info(
-                f"OAuth callback: received_state={received_state[:16] if received_state else 'NONE'}... "
-                f"expected_state={expected_state[:16] if expected_state else 'NONE'}... "
-                f"match={expected_state and _secrets.compare_digest(str(received_state), str(expected_state))}"
+                f"OAuth callback RECEIVED: "
+                f"code={params['code'][:16] if params.get('code') else 'NONE'}... | "
+                f"received_state={received_state[:16] if received_state else 'NONE'}... | "
+                f"expected_state={expected_state[:16] if expected_state else 'NONE'}... | "
+                f"state_key_in_session={state_key_in_session} | "
+                f"match={expected_state and _secrets.compare_digest(str(received_state), str(expected_state)) if expected_state else False}"
             )
 
             if not expected_state or not _secrets.compare_digest(
@@ -460,7 +465,19 @@ def _show_google_signin() -> bool:
         # ── Step 4: Show the sign-in button — issue a fresh CSRF state every render.
         new_state = _secrets.token_urlsafe(32)
         st.session_state[_OAUTH_STATE_KEY] = new_state
-        _auth_log.info(f"Generated OAuth state: {new_state[:16]}... (redirect_uri={redirect})")
+
+        # Verify state was actually stored
+        verify_store = st.session_state.get(_OAUTH_STATE_KEY)
+        if verify_store != new_state:
+            _auth_log.error(f"CRITICAL: State not stored! Tried to store {new_state[:16]}..., but got {verify_store}")
+
+        _auth_log.info(
+            f"Generated OAuth state: {new_state[:16]}... | "
+            f"stored={verify_store == new_state} | "
+            f"redirect_uri={redirect} | "
+            f"session_keys={len(st.session_state)}"
+        )
+
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
             "client_id": g_cid,
             "redirect_uri": redirect,
