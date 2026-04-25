@@ -394,11 +394,23 @@ def _show_google_signin() -> bool:
             # A2: CSRF protection — state must match the value we issued.
             received_state = params.get("state", "")
             expected_state = st.session_state.pop(_OAUTH_STATE_KEY, None)
+
+            # DEBUG: Log state token details
+            _auth_log.info(
+                f"OAuth callback: received_state={received_state[:16] if received_state else 'NONE'}... "
+                f"expected_state={expected_state[:16] if expected_state else 'NONE'}... "
+                f"match={expected_state and _secrets.compare_digest(str(received_state), str(expected_state))}"
+            )
+
             if not expected_state or not _secrets.compare_digest(
                 str(received_state), str(expected_state)
             ):
                 st.query_params.clear()
-                _auth_log.warning("OAuth callback rejected: state mismatch")
+                _auth_log.warning(
+                    f"OAuth callback rejected: expected_state={'MISSING' if not expected_state else 'PRESENT'}, "
+                    f"received_state={'PRESENT' if received_state else 'MISSING'}, "
+                    f"session_keys={list(st.session_state.keys())}"
+                )
                 st.error("Authentication request expired or was tampered with. Please try again.")
                 return False
 
@@ -448,6 +460,7 @@ def _show_google_signin() -> bool:
         # ── Step 4: Show the sign-in button — issue a fresh CSRF state every render.
         new_state = _secrets.token_urlsafe(32)
         st.session_state[_OAUTH_STATE_KEY] = new_state
+        _auth_log.info(f"Generated OAuth state: {new_state[:16]}... (redirect_uri={redirect})")
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
             "client_id": g_cid,
             "redirect_uri": redirect,
