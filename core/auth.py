@@ -1,22 +1,20 @@
 """
-Authentication Module for Prosper
-==================================
+Authentication Module for Prosper — v6.3
+==========================================
 Complete user authentication with database as the single source of truth.
 
 Supports:
   1. Email-based registration & login (bcrypt hashed passwords)
-  2. Google OAuth via manual OAuth2 redirect flow
+  2. Google OAuth via popup window flow (preserves main Streamlit session)
   3. Auth disabled mode (PROSPER_AUTH_ENABLED=false)
 
-All user data is stored in the Turso/SQLite database.
-A local YAML cache is rebuilt from the DB on every cold start
-(required by streamlit-authenticator for cookie-based sessions).
-
-Usage in app.py:
-    from core.auth import run_auth, do_logout
-    auth_result = run_auth()
-    if not auth_result["authenticated"]:
-        st.stop()
+OAuth flow (v6.3):
+  - Main app opens Google consent in a POPUP window (not same tab)
+  - Popup lands on pages/99_OAuth_Callback.py with ?code=&state=
+  - Callback page exchanges code, writes {email, name, status} to localStorage
+  - Main app polls localStorage every 500ms and logs the user in
+  - Popup is closed automatically after writing result
+  - Main session_state is never destroyed → no loop, no session loss
 """
 
 import os
@@ -35,18 +33,14 @@ _auth_log = _logging.getLogger("prosper.auth")
 
 
 def _is_production() -> bool:
-    """Production detection — Render sets RENDER=true, or set PROSPER_ENV=production explicitly."""
     return (
         os.getenv("PROSPER_ENV", "").lower() == "production"
         or bool(os.getenv("RENDER"))
     )
 
-# ─────────────────────────────────────────
-# CONSTANTS
-# ─────────────────────────────────────────
+
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AUTH_CONFIG_PATH = os.path.join(_APP_DIR, "auth_config.yaml")
-_GOOGLE_CREDS_PATH = os.path.join(_APP_DIR, "google_credentials.json")
 
 _COOKIE_NAME = "prosper_auth"
 _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
@@ -66,25 +60,59 @@ if not _GOOGLE_COOKIE_KEY:
         raise RuntimeError("PROSPER_GOOGLE_COOKIE_SECRET is required in production.")
     _GOOGLE_COOKIE_KEY = _secrets.token_hex(32)
 
-# ── OAuth state signing key ──────────────────────────────────────────────────
-# We sign the state token with HMAC-SHA256 using a stable secret so we can
-# verify it on the callback WITHOUT relying on session_state surviving the
-# redirect (Streamlit creates a NEW WebSocket session on every navigation).
 _OAUTH_SIGNING_KEY = os.getenv("PROSPER_COOKIE_SECRET", _COOKIE_KEY).encode()
 
-_HIDE_SIDEBAR_CSS = (
-    '<style>'
-    '[data-testid="stSidebar"]{display:none !important;}'
-    '[data-testid="stSidebarCollapsedControl"]{display:none !important;}'
-    '[data-testid="stNavigation"]{display:none !important;}'
-    '[role="tablist"]{display:none !important;}'
-    '</style>'
-)
+# ── Sidebar hide CSS — injected as early as possible ───────────────────────
+# Targets every possible Streamlit sidebar element across versions.
+SIDEBAR_HIDE_CSS = """
+<style>
+/* Hide sidebar and all its controls before login */
+[data-testid="stSidebar"],
+[data-testid="stSidebarNav"],
+[data-testid="stSidebarNavItems"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stNavigation"],
+[data-testid="collapsedControl"],
+button[kind="header"],
+.st-emotion-cache-1cypcdb,
+.st-emotion-cache-eczf16,
+.st-emotion-cache-po3dy8,
+section[data-testid="stSidebar"] {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    position: fixed !important;
+    left: -9999px !important;
+    z-index: -9999 !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+}
+/* Also hide the hamburger/collapse toggle button */
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] button {
+    display: none !important;
+}
+/* Ensure main content takes full width */
+.main .block-container {
+    max-width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+}
+</style>
+"""
 
 _HEADER_HTML = (
-    "<div style='text-align:center;margin-top:2rem'>"
-    "<h1 style='font-size:2.5rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
-    "<p style='color:#888;margin-top:4px;font-size:1.1rem'>AI-Native Investment Operating System</p>"
+    "<div style='text-align:center;margin-top:3rem;margin-bottom:0.5rem'>"
+    "<div style='font-size:2.8rem;font-weight:700;letter-spacing:-1.5px;"
+    "background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);"
+    "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+    "background-clip:text'>Prosper</div>"
+    "<p style='color:#888;margin-top:6px;font-size:1rem;letter-spacing:0.3px'>"
+    "AI-Native Investment Operating System</p>"
     "</div>"
 )
 
@@ -95,24 +123,12 @@ _MIN_PASSWORD_LENGTH = 8
 # OAUTH STATE — HMAC-signed, session-independent
 # ─────────────────────────────────────────
 def _make_oauth_state() -> str:
-    """Create a new HMAC-signed state token.
-
-    Format: {nonce}.{hmac_hex}
-    The nonce is random; the HMAC covers the nonce so we can verify it
-    on the callback without any server-side session storage.
-    This is the same pattern used by Auth0, Okta, and GitHub OAuth.
-    """
     nonce = _secrets.token_urlsafe(32)
     sig = hmac.new(_OAUTH_SIGNING_KEY, nonce.encode(), hashlib.sha256).hexdigest()
     return f"{nonce}.{sig}"
 
 
 def _verify_oauth_state(state: str) -> bool:
-    """Verify a state token produced by _make_oauth_state().
-
-    Returns True only if the HMAC signature is valid.
-    Does NOT rely on session_state at all — works across redirects.
-    """
     if not state or "." not in state:
         return False
     nonce, _, received_sig = state.partition(".")
@@ -121,10 +137,9 @@ def _verify_oauth_state(state: str) -> bool:
 
 
 # ─────────────────────────────────────────
-# PASSWORD VALIDATION
+# PASSWORD HELPERS
 # ─────────────────────────────────────────
 def validate_password(pw: str) -> list:
-    """Return list of error strings. Empty = valid."""
     errors = []
     if len(pw) < _MIN_PASSWORD_LENGTH:
         errors.append(f"At least {_MIN_PASSWORD_LENGTH} characters")
@@ -136,13 +151,11 @@ def validate_password(pw: str) -> list:
 
 
 def _hash_password(pw: str) -> str:
-    """Hash password using bcrypt."""
     import bcrypt
     return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _check_password(plain: str, hashed: str) -> bool:
-    """Verify a plain password against a bcrypt hash."""
     try:
         import bcrypt
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
@@ -191,11 +204,9 @@ _ALLOWED_USER_FIELDS = {"email", "first_name", "last_name", "password_hash", "ro
 
 
 def _db_update_user(username, **fields):
-    """Update user fields in the database. Only whitelisted column names accepted."""
     safe_fields = {k: v for k, v in fields.items() if k in _ALLOWED_USER_FIELDS}
     if not safe_fields:
         return
-
     from core.db_connector import get_connection
     conn = None
     try:
@@ -212,8 +223,7 @@ def _db_update_user(username, **fields):
         )
         conn.commit()
     except Exception as e:
-        import logging
-        logging.getLogger("prosper.auth").warning(f"Failed to update user {username}: {e}")
+        _auth_log.warning(f"Failed to update user {username}: {e}")
     finally:
         if conn:
             try:
@@ -223,7 +233,6 @@ def _db_update_user(username, **fields):
 
 
 def _db_delete_user(username: str):
-    """Delete a user from the database."""
     from core.database import delete_user
     delete_user(username)
 
@@ -232,7 +241,6 @@ def _db_delete_user(username: str):
 # YAML CACHE
 # ─────────────────────────────────────────
 def _rebuild_yaml_from_db():
-    """Rebuild auth_config.yaml from the database."""
     import yaml
     users = _db_get_all_users()
     config = {
@@ -260,7 +268,6 @@ def _rebuild_yaml_from_db():
 
 
 def _load_yaml_config() -> Optional[dict]:
-    """Load auth_config.yaml."""
     try:
         import yaml
         if not os.path.exists(_AUTH_CONFIG_PATH):
@@ -273,7 +280,6 @@ def _load_yaml_config() -> Optional[dict]:
 
 
 def _save_yaml_config(config: dict):
-    """Write auth_config.yaml."""
     try:
         import yaml
         with open(_AUTH_CONFIG_PATH, "w") as f:
@@ -283,7 +289,6 @@ def _save_yaml_config(config: dict):
 
 
 def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, role):
-    """Add or update a single user in the YAML cache."""
     config = _load_yaml_config()
     if not config:
         config = {
@@ -302,10 +307,9 @@ def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, ro
 
 
 # ─────────────────────────────────────────
-# GOOGLE OAUTH
+# GOOGLE OAUTH HELPERS
 # ─────────────────────────────────────────
 def _build_google_creds_file():
-    """No-op — kept for API compatibility."""
     pass
 
 
@@ -314,7 +318,6 @@ def _is_google_configured() -> bool:
 
 
 def _unique_username_from_email(email: str) -> str:
-    """Deterministic, collision-safe username from email."""
     base = re.sub(r"[^a-z0-9]", "_", email.split("@")[0].lower()).strip("_") or "user"
     if not _db_get_user(base):
         return base
@@ -323,7 +326,7 @@ def _unique_username_from_email(email: str) -> str:
 
 
 def _handle_google_user(user_info: dict) -> bool:
-    """Process an authenticated Google profile."""
+    """Process authenticated Google profile and populate session_state."""
     g_email = (user_info.get("email") or "").strip().lower()
     g_name = user_info.get("name") or ""
     if not g_email:
@@ -341,7 +344,6 @@ def _handle_google_user(user_info: dict) -> bool:
         username = _unique_username_from_email(g_email)
         first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
         last_name = " ".join(g_name.split()[1:]) if len(g_name.split()) > 1 else ""
-
         random_pw_hash = _hash_password(_secrets.token_urlsafe(32))
 
         try:
@@ -368,65 +370,74 @@ def _handle_google_user(user_info: dict) -> bool:
 
 
 def _show_google_signin() -> bool:
-    """Show Google sign-in button using manual OAuth2 redirect flow.
+    """Show Google sign-in using a POPUP window.
 
-    FIX: State is now HMAC-signed and self-contained in the URL — no session_state
-    storage required. This means verification works even when Streamlit creates a
-    brand-new WebSocket session on the OAuth redirect (which it always does).
+    v6.3 FIX — Root cause of the loop:
+      st.link_button() navigated the SAME browser tab to Google.
+      When Google redirected back, Streamlit created a brand-new WebSocket
+      session. The code exchange succeeded and set session_state, but then
+      st.rerun() created yet another new session (session_state wiped again),
+      causing an infinite auth → session_loss → auth loop with no error shown.
 
-    The old approach stored the nonce in session_state before redirect, but
-    Streamlit's session is tied to a WebSocket connection. When Google redirects
-    the browser back to the app URL, Streamlit starts a FRESH session with an
-    empty session_state — so the stored nonce was always missing, causing the
-    'expired or tampered with' error on every login attempt.
+    Solution:
+      1. JavaScript opens Google consent in a POPUP (window.open).
+      2. The MAIN Streamlit session stays alive with its session_state intact.
+      3. Popup lands on pages/99_OAuth_Callback.py which does the code exchange
+         server-side and writes {prosper_auth_result: {email, name, verified}}
+         into localStorage.
+      4. Main app polls localStorage every 500ms via a JS component.
+      5. On result detected → call _handle_google_user() → st.rerun() → logged in.
     """
     if not _is_google_configured():
         return False
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
-    g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-    redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
+    base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
+    # Callback page URL — Streamlit multi-page apps use this path pattern
+    callback_url = base_url.rstrip("/") + "/OAuth_Callback"
 
     try:
         import urllib.parse
-        import requests as _req
 
-        # ── Step 1: Handle OAuth callback ──────────────────────────────────
-        # Check for ?code= in URL params — this is the Google redirect back.
+        # ── Check if popup wrote result to localStorage ──────────────────────
+        # We use a hidden HTML component to read localStorage and signal back.
+        # Streamlit components can't directly read localStorage, so we use
+        # st.query_params as a relay: the callback page sets ?auth_done=1
+        # which triggers a rerun with the result in session_state.
         params = dict(st.query_params)
+
+        # Direct callback on main app URL (fallback if popup not supported)
         if "code" in params and not st.session_state.get("_google_auth_done"):
             received_state = params.get("state", "")
-
-            # HMAC verification — no session_state needed, works across redirects
             if not _verify_oauth_state(received_state):
                 st.query_params.clear()
-                _auth_log.warning(
-                    "OAuth callback rejected: HMAC verification failed. "
-                    "received_state=%s...",
-                    received_state[:16] if received_state else "NONE",
-                )
-                st.error(
-                    "Authentication request could not be verified. "
-                    "Please try signing in again."
-                )
+                _auth_log.warning("OAuth direct callback: HMAC failed. state=%s", received_state[:16] if received_state else "NONE")
+                st.error("Authentication could not be verified. Please try again.")
                 return False
 
+            import requests as _req
             code = params["code"]
-            st.query_params.clear()  # prevent code reuse
-
-            _auth_log.info("OAuth callback: HMAC verified OK, exchanging code for token.")
-
+            st.query_params.clear()
+            g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
+            # Try callback URL first (popup target), fallback to base_url
+            redirect_used = callback_url
             token_resp = _req.post(
                 "https://oauth2.googleapis.com/token",
-                data={
-                    "client_id": g_cid,
-                    "client_secret": g_csec,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": redirect,
-                },
+                data={"client_id": g_cid, "client_secret": g_csec,
+                      "code": code, "grant_type": "authorization_code",
+                      "redirect_uri": redirect_used},
                 timeout=10,
             )
+            if token_resp.status_code != 200:
+                # retry with base url as redirect
+                redirect_used = base_url
+                token_resp = _req.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={"client_id": g_cid, "client_secret": g_csec,
+                          "code": code, "grant_type": "authorization_code",
+                          "redirect_uri": redirect_used},
+                    timeout=10,
+                )
             if token_resp.status_code == 200:
                 access_token = token_resp.json().get("access_token", "")
                 if access_token:
@@ -436,48 +447,160 @@ def _show_google_signin() -> bool:
                         timeout=10,
                     )
                     if ui_resp.status_code == 200:
-                        user_info = ui_resp.json()
                         st.session_state["_google_auth_done"] = True
-                        st.session_state["connected"] = True
-                        st.session_state["user_info"] = user_info
-                        return _handle_google_user(user_info)
-            else:
-                _auth_log.warning("Google token exchange failed: HTTP %s", token_resp.status_code)
+                        return _handle_google_user(ui_resp.json())
+            _auth_log.warning("Google token exchange failed: %s", token_resp.status_code)
+            st.error("Google sign-in failed. Please try again or use email login.")
+            return False
 
-        # ── Step 2: Already authenticated this session ──────────────────────
-        if st.session_state.get("connected") and st.session_state.get("user_info"):
+        # ── Session already has google auth result ────────────────────────────
+        if st.session_state.get("_google_auth_done") and st.session_state.get("user_info"):
             return _handle_google_user(st.session_state["user_info"])
 
-        # ── Step 3: Render guard — prevent duplicate button in same render ──
+        # ── Render guard ──────────────────────────────────────────────────────
         if st.session_state.get("_google_auth_rendered_this_rerun"):
             return False
         st.session_state["_google_auth_rendered_this_rerun"] = True
 
-        # ── Step 4: Show sign-in button with fresh HMAC-signed state ────────
+        # ── Build auth URL targeting the callback page ───────────────────────
         new_state = _make_oauth_state()
-        # No need to store in session_state — HMAC is self-verifying
-
-        _auth_log.info(
-            "Generating OAuth URL: state=%s... redirect_uri=%s",
-            new_state[:16],
-            redirect,
-        )
-
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
             "client_id": g_cid,
-            "redirect_uri": redirect,
+            "redirect_uri": callback_url,
             "scope": "openid email profile",
             "response_type": "code",
             "access_type": "offline",
             "prompt": "select_account",
             "state": new_state,
         })
-        st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
+
+        # ── Popup-based OAuth button ─────────────────────────────────────────
+        # Opens Google in a popup so main Streamlit session is preserved.
+        # The callback page writes the auth result to localStorage and closes.
+        # We poll localStorage and relay via query_params.
+        popup_js = f"""
+        <script>
+        (function() {{
+            var _prosperPollInterval = null;
+
+            function openGoogleAuth() {{
+                var w = 500, h = 620;
+                var left = (screen.width - w) / 2;
+                var top = (screen.height - h) / 2;
+                var popup = window.open(
+                    {json.dumps(auth_url)},
+                    'prosper_google_auth',
+                    'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
+                    ',scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no'
+                );
+
+                if (!popup || popup.closed) {{
+                    // Popup blocked — fallback to same-tab redirect
+                    window.location.href = {json.dumps(auth_url)};
+                    return;
+                }}
+
+                // Poll localStorage for result written by callback page
+                _prosperPollInterval = setInterval(function() {{
+                    try {{
+                        var result = localStorage.getItem('prosper_auth_result');
+                        if (result) {{
+                            localStorage.removeItem('prosper_auth_result');
+                            clearInterval(_prosperPollInterval);
+                            // Relay via URL so Streamlit sees it on rerun
+                            var data = JSON.parse(result);
+                            if (data.verified && data.email) {{
+                                // Encode user info in query params for the main app
+                                var params = new URLSearchParams({{
+                                    _ga_email: data.email,
+                                    _ga_name: data.name || '',
+                                    _ga_token: data.token || '',
+                                }});
+                                window.location.href = window.location.pathname + '?' + params.toString();
+                            }} else {{
+                                // Auth failed
+                                window.location.href = window.location.pathname + '?_ga_error=1';
+                            }}
+                        }}
+                        // Also check if popup was closed without completing
+                        if (popup.closed) {{
+                            clearInterval(_prosperPollInterval);
+                        }}
+                    }} catch(e) {{ /* cross-origin or storage error, ignore */ }}
+                }}, 600);
+            }}
+
+            // Auto-attach to button after render
+            document.addEventListener('DOMContentLoaded', function() {{
+                var btn = document.getElementById('prosper-google-btn');
+                if (btn) btn.addEventListener('click', openGoogleAuth);
+            }});
+            // Also try immediately (Streamlit may have already loaded DOM)
+            setTimeout(function() {{
+                var btn = document.getElementById('prosper-google-btn');
+                if (btn) btn.addEventListener('click', openGoogleAuth);
+            }}, 100);
+        }})();
+        </script>
+        <style>
+        #prosper-google-btn {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 11px 16px;
+            background: #fff;
+            color: #3c4043;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: 'Google Sans', Roboto, Arial, sans-serif;
+            transition: background 0.2s, box-shadow 0.2s;
+            margin: 0;
+            letter-spacing: 0.2px;
+        }}
+        #prosper-google-btn:hover {{
+            background: #f8f9fa;
+            box-shadow: 0 1px 3px rgba(60,64,67,0.2);
+        }}
+        #prosper-google-btn img {{ width: 18px; height: 18px; }}
+        </style>
+        <button id="prosper-google-btn" type="button">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+            Continue with Google
+        </button>
+        """
+
+        # ── Handle result relayed back via query params ───────────────────────
+        if "_ga_email" in params and not st.session_state.get("_google_auth_done"):
+            email = params.get("_ga_email", "")
+            name = params.get("_ga_name", "")
+            ga_token = params.get("_ga_token", "")
+            st.query_params.clear()
+            if email:
+                # Verify the token is a valid HMAC-signed state (used as auth token)
+                if _verify_oauth_state(ga_token):
+                    user_info = {"email": email, "name": name, "email_verified": True}
+                    st.session_state["_google_auth_done"] = True
+                    return _handle_google_user(user_info)
+                else:
+                    st.error("Google sign-in could not be verified. Please try again.")
+                    return False
+
+        if "_ga_error" in params:
+            st.query_params.clear()
+            st.error("Google sign-in was cancelled or failed. Please try again.")
+            return False
+
+        st.html(popup_js)
 
     except Exception as google_err:
         _auth_log.warning("Google sign-in error: %s", google_err)
-        st.warning(f"Google sign-in error: {google_err}")
-        st.caption("Please use email login, or check Google OAuth configuration.")
+        st.warning(f"Google sign-in unavailable: {google_err}")
+        st.caption("Please use email login below.")
 
     return False
 
@@ -486,10 +609,8 @@ def _show_google_signin() -> bool:
 # REGISTRATION FORM
 # ─────────────────────────────────────────
 def _show_registration_form(is_first_user: bool = False) -> bool:
-    """Show registration form. Returns True if user registered & auto-logged-in."""
     label = "Create your Prosper account" if is_first_user else "Create Account"
     st.markdown(f"##### {label}")
-
     st.markdown(
         "<p style='color:#888;font-size:0.85rem'>"
         "Password: min 8 chars, 1 uppercase, 1 number</p>",
@@ -520,7 +641,6 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
                 errors.append("Passwords do not match.")
 
             username = _unique_username_from_email(email.strip().lower()) if email else ""
-
             account_exists = bool(
                 (username and _db_get_user(username))
                 or (email and _db_get_user_by_email(email.strip()))
@@ -561,12 +681,13 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
 # LOGOUT
 # ─────────────────────────────────────────
 def do_logout():
-    """Clear ALL auth-related session state including authenticator cookie state."""
+    """Clear ALL auth-related session state."""
     _auth_keys = {
         "authentication_status", "username", "name", "logout",
         "user_id", "auth_method", "connected", "user_info",
         "_google_auth_rendered", "_google_auth_done",
-        "_oauth_state_pending",  # E2: clear any dangling CSRF token
+        "_google_auth_rendered_this_rerun",
+        "_oauth_state_pending",
         "FormSubmitter:Login-Login", "FormSubmitter:Login-Submit",
     }
     _app_keys = {
@@ -597,17 +718,6 @@ def do_logout():
 # MAIN AUTH ENTRY POINT
 # ─────────────────────────────────────────
 def run_auth() -> Dict[str, Any]:
-    """
-    Run the complete authentication flow.
-
-    Returns dict:
-        authenticated: bool
-        user_id: str (email or username)
-        display_name: str
-        method: str ("google", "email", "disabled")
-
-    If not authenticated, renders login UI and calls st.stop().
-    """
     result = {
         "authenticated": False,
         "user_id": "default",
@@ -615,12 +725,10 @@ def run_auth() -> Dict[str, Any]:
         "method": "disabled",
     }
 
-    # Reset per-rerun render guard
     st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 
-    # ── Auth disabled ──
     if not auth_enabled:
         st.session_state.setdefault("user_id", "default")
         result.update(authenticated=True, method="disabled")
@@ -629,12 +737,10 @@ def run_auth() -> Dict[str, Any]:
             st.divider()
         return result
 
-    # ── Check for logout request ──
     if st.session_state.get("logout") is True:
         st.session_state["logout"] = False
         st.session_state["authentication_status"] = None
 
-    # ── Load dependencies ──
     try:
         import yaml
         import streamlit_authenticator as stauth
@@ -645,7 +751,6 @@ def run_auth() -> Dict[str, Any]:
 
     _build_google_creds_file()
 
-    # ── Rebuild YAML cache from DB ──
     db_users = _db_get_all_users()
     if db_users:
         auth_config = _rebuild_yaml_from_db()
@@ -657,28 +762,22 @@ def run_auth() -> Dict[str, Any]:
         and auth_config.get("credentials", {}).get("usernames")
     )
 
-    # ── No users yet: First-run setup ──
     if not has_users:
         _, center, _ = st.columns([1, 2, 1])
         with center:
             st.markdown(_HEADER_HTML, unsafe_allow_html=True)
             st.markdown("")
-
             if _show_google_signin():
                 st.rerun()
-
             st.markdown(
                 "<div style='text-align:center;margin:1rem 0'>"
-                "<span style='color:#555'>─── or ───</span></div>",
+                "<span style='color:#aaa;font-size:0.9rem'>─── or ───</span></div>",
                 unsafe_allow_html=True,
             )
-
             _show_registration_form(is_first_user=True)
-
         st.stop()
         return result
 
-    # ── Has users: Ensure YAML config has cookie section ──
     if not auth_config.get("cookie"):
         auth_config["cookie"] = {
             "name": _COOKIE_NAME,
@@ -693,7 +792,6 @@ def run_auth() -> Dict[str, Any]:
         auth_config["cookie"]["expiry_days"],
     )
 
-    # ── Already authenticated (cookie or session) ──
     if st.session_state.get("authentication_status") is True:
         username = st.session_state.get("username", "default")
         display_name = st.session_state.get("name", "User")
@@ -724,7 +822,6 @@ def run_auth() -> Dict[str, Any]:
 
     # ── Not authenticated: Show login page ──
     _, center, _ = st.columns([1, 2, 1])
-
     with center:
         st.markdown(_HEADER_HTML, unsafe_allow_html=True)
         st.markdown("")
@@ -734,7 +831,7 @@ def run_auth() -> Dict[str, Any]:
 
         st.markdown(
             "<div style='text-align:center;margin:0.8rem 0'>"
-            "<span style='color:#555'>─── or sign in with email ───</span></div>",
+            "<span style='color:#aaa;font-size:0.9rem'>─── or sign in with email ───</span></div>",
             unsafe_allow_html=True,
         )
 

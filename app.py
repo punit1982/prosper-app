@@ -1,7 +1,7 @@
 """
 Prosper — AI-Native Investment Operating System
 Main entrypoint: page config, DB init, authentication, and navigation.
-v6.1 — Fix: sidebar flash before login; OAuth HMAC state fix in auth.py.
+v6.3 — Fix: popup OAuth flow + aggressive sidebar hide before login.
 """
 
 import os
@@ -18,45 +18,32 @@ from core.database import (
     get_nav_snapshot_exists_today,
     get_total_realized_pnl,
 )
-
 from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
 from core.database import get_or_create_user_portfolios
 
-# Load .env from app directory
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 load_dotenv(_env_path, override=True)
 
-# ── Page Config (must be first Streamlit command) ────────────────────────────
+# ── Page Config (must be FIRST Streamlit command) ────────────────────────────
 st.set_page_config(
     page_title="Prosper",
     page_icon="📈",
     layout="wide",
-    # FIX: Use "collapsed" so sidebar is hidden by default on the login screen.
-    # "expanded" caused the sidebar skeleton to flash before the hide-CSS
-    # injected by auth.py could take effect. Once authenticated, users can
-    # expand the sidebar normally — Streamlit persists their preference.
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed",  # Sidebar starts hidden — no flash
 )
+
+# ── SIDEBAR HIDE — injected immediately after set_page_config ────────────────
+# Must happen before ANYTHING else renders (DB init, auth, imports).
+# We check auth status from session_state (no DB call) to decide whether to hide.
+# st.html() is used instead of st.markdown() because it bypasses the component
+# queue and gets injected closer to the page HEAD in Streamlit's render pipeline.
+from core.auth import SIDEBAR_HIDE_CSS as _SIDEBAR_HIDE_CSS
+_is_authed_early = st.session_state.get("authentication_status") is True
+if not _is_authed_early:
+    st.html(_SIDEBAR_HIDE_CSS)
 
 # ── Database Init ────────────────────────────────────────────────────────────
 init_db()
-
-# ── Pre-Auth Sidebar Hide (injected BEFORE run_auth renders anything) ────────
-# This must come BEFORE run_auth() so the CSS is in the page HEAD of the first
-# render — eliminating the sidebar flash on the login screen.
-_is_authed_early = st.session_state.get("authentication_status") is True
-if not _is_authed_early:
-    # Check if this is an OAuth callback — if so, we're mid-login, still hide.
-    _has_oauth_code = "code" in dict(st.query_params)
-    st.markdown(
-        '<style>'
-        '[data-testid="stSidebar"]{display:none !important;}'
-        '[data-testid="stSidebarCollapsedControl"]{display:none !important;}'
-        '[data-testid="stNavigation"]{display:none !important;}'
-        '[role="tablist"]{display:none !important;}'
-        '</style>',
-        unsafe_allow_html=True,
-    )
 
 # ── Global Styling ───────────────────────────────────────────────────────────
 st.markdown("""
@@ -71,7 +58,6 @@ h1, h2, h3, h4, h5, h6 {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     letter-spacing: -0.5px;
 }
-/* Metric cards — NEVER truncate values */
 [data-testid="stMetricValue"] {
     font-weight: 600 !important;
     font-size: clamp(1rem, 2.2vw, 1.8rem) !important;
@@ -106,7 +92,6 @@ h1, h2, h3, h4, h5, h6 {
     overflow: visible !important;
 }
 .stDataFrame { overflow-x: auto; }
-/* Mobile responsive */
 @media (max-width: 768px) {
     [data-testid="stSidebar"] { min-width: 180px !important; max-width: 220px !important; }
     .stDataFrame { font-size: 0.75rem; }
@@ -121,7 +106,7 @@ h1, h2, h3, h4, h5, h6 {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Navigation (declared before auth so auto-discovery is suppressed on login) ─
+# ── Navigation & Auth ────────────────────────────────────────────────────────
 from core.auth import run_auth as _run_auth
 
 _is_authed = st.session_state.get("authentication_status") is True
@@ -131,14 +116,13 @@ if not _is_authed:
         [st.Page("pages/00_Command_Center.py", default=True)],
         position="hidden",
     )
-    _run_auth()  # shows login UI and calls st.stop() if not authenticated
-    # If run_auth() returned normally a cookie was just validated — rerun.
+    _run_auth()
     if st.session_state.get("authentication_status") is True:
         st.rerun()
     st.stop()
 
-# ── Authenticated: build full navigation ─────────────────────────────────────
-_run_auth()  # validates cookie / refreshes session without showing login UI
+# ── Authenticated ─────────────────────────────────────────────────────────────
+_run_auth()
 
 # ── Onboarding Check ────────────────────────────────────────────────────────
 if "onboarding_complete" not in st.session_state:
@@ -239,7 +223,7 @@ if not get_nav_snapshot_exists_today(_base):
             import logging
             logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
-# ── Full Navigation (authenticated users) ────────────────────────────────────
+# ── Full Navigation ──────────────────────────────────────────────────────────
 pg = st.navigation({
     "Prosper": [
         st.Page("pages/00_Command_Center.py", title="Command Center", icon="🏠", default=True),
@@ -332,14 +316,12 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
             try:
                 import anthropic
                 from core.settings import call_claude, SETTINGS
-
                 from core.settings import enriched_cache_key as _eck
                 _enr = st.session_state.get(_eck(SETTINGS.get('base_currency', 'USD')))
                 _ctx = "No portfolio loaded."
                 if _enr is not None and not _enr.empty:
                     _tv = pd.to_numeric(_enr.get("market_value"), errors="coerce").sum()
                     _ctx = f"Portfolio: {len(_enr)} holdings, {SETTINGS.get('base_currency', 'USD')} {_tv:,.0f} total value."
-
                 client = anthropic.Anthropic(api_key=_chat_key)
                 msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state["mini_chat"][-6:]]
                 resp = call_claude(
