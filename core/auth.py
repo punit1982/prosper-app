@@ -371,15 +371,13 @@ def _show_google_signin() -> bool:
       4. We fetch the user's profile and create/sync the account
 
     Uses only 'requests' — no streamlit-google-auth dependency, no key='init' conflict.
-    """
-    # Guard: only render once per rerun cycle
-    if st.session_state.get("_google_auth_rendered_this_rerun"):
-        return False
 
+    FIX (A2 regression): Process OAuth callback BEFORE checking the render guard.
+    The guard prevents button re-rendering within the same render cycle, but it
+    must not block callback handling on the rerun after Google redirects back.
+    """
     if not _is_google_configured():
         return False
-
-    st.session_state["_google_auth_rendered_this_rerun"] = True
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -390,7 +388,7 @@ def _show_google_signin() -> bool:
         import urllib.parse
         import requests as _req
 
-        # ── Step 1: Handle OAuth callback (code in URL params) ──
+        # ── Step 1: ALWAYS handle OAuth callback first (before guard) ──
         params = dict(st.query_params)
         if "code" in params and not st.session_state.get("_google_auth_done"):
             # A2: CSRF protection — state must match the value we issued.
@@ -442,7 +440,12 @@ def _show_google_signin() -> bool:
         if st.session_state.get("connected") and st.session_state.get("user_info"):
             return _handle_google_user(st.session_state["user_info"])
 
-        # ── Step 3: Show the sign-in button — issue a fresh CSRF state every render.
+        # ── Step 3: Render guard — only prevent button re-rendering within a single render ──
+        if st.session_state.get("_google_auth_rendered_this_rerun"):
+            return False
+        st.session_state["_google_auth_rendered_this_rerun"] = True
+
+        # ── Step 4: Show the sign-in button — issue a fresh CSRF state every render.
         new_state = _secrets.token_urlsafe(32)
         st.session_state[_OAUTH_STATE_KEY] = new_state
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
