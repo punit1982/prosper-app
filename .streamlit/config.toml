@@ -8,6 +8,9 @@ font = "sans serif"
 [server]
 maxUploadSize = 50
 headless = true
+# Streamlit's enableCORS is inverted vs. generic web servers: "true" means
+# RESTRICT to same-origin (which we want), and is also REQUIRED for XSRF
+# cookie protection to work. Keep both true.
 enableCORS = true
 enableXsrfProtection = true
 

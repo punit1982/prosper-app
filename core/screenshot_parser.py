@@ -39,6 +39,18 @@ def parse_brokerage_image(image_bytes: bytes, media_type: str) -> ParseResult:
     from core.settings import SETTINGS
     from core.database import get_cached_parse, save_parse_cache
 
+    # C8: pre-flight size check. Anthropic Vision rejects ≥5 MB; reject early
+    # so we don't burn an API call (and a few seconds of latency) on a doomed
+    # request. Streamlit caps upload at 50 MB but doesn't enforce per-image.
+    _MAX_IMAGE_BYTES = 4_500_000  # ~4.5 MB — safe under Anthropic's 5 MB limit
+    if not image_bytes:
+        return "Empty file — please re-upload."
+    if len(image_bytes) > _MAX_IMAGE_BYTES:
+        return (
+            f"Image too large ({len(image_bytes)/1_000_000:.1f} MB). "
+            f"Please use an image under 4.5 MB — try cropping or reducing resolution."
+        )
+
     cache_enabled = SETTINGS.get("parse_cache_enabled", True)
     image_hash = hashlib.sha256(image_bytes).hexdigest()
 
@@ -206,13 +218,12 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
     client = anthropic.Anthropic(api_key=api_key)
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
 
-    # Try models in order — Sonnet handles 95%+ of screenshots correctly and
-    # costs ~60% less than Opus.  Opus is kept as first fallback for edge cases.
+    # D5: import the canonical model list from settings — was duplicated here.
+    # Sonnet first because it handles 95%+ of screenshots at ~60% the cost of Opus.
+    from core.settings import CLAUDE_MODEL_PRIORITY
     _MODELS_TO_TRY = [
         "claude-sonnet-4-20250514",
-        "claude-opus-4-1-20250805",
-        "claude-haiku-4-5-20250514",
-    ]
+    ] + [m for m in CLAUDE_MODEL_PRIORITY if m != "claude-sonnet-4-20250514"]
 
     content = [
         {

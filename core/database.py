@@ -24,13 +24,37 @@ def _get_connection():
     return _get_cloud_connection()
 
 
-def _invalidate_holdings_cache():
-    """Clear cached holdings so next read hits the DB. Call after any write."""
+def _current_user_id() -> str:
+    """Resolve the active user_id from session_state.
+
+    A1 multi-tenancy guard: every multi-tenant query MUST scope by this.
+    Returns 'default' for the legacy single-user shard or when auth disabled.
+    """
     try:
+        uid = st.session_state.get("user_id") or "default"
+        return str(uid).strip() or "default"
+    except Exception:
+        return "default"
+
+
+def _invalidate_holdings_cache(portfolio_id: int = None):
+    """Clear cached holdings for the active portfolio so next read hits the DB.
+
+    B11: scoped to the active portfolio when possible — clearing every
+    `enriched_*` key on any write thrashes unrelated portfolios in the same session.
+    """
+    try:
+        pid = portfolio_id or st.session_state.get("active_portfolio_id", 1)
+        prefixes_to_clear = (
+            f"{_HOLDINGS_CACHE_KEY}_{pid}",
+            f"enriched_{pid}_",
+        )
+        exact_to_clear = {
+            "extended_df", "last_refresh_time",
+            _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY,
+        }
         for key in list(st.session_state.keys()):
-            if key.startswith(_HOLDINGS_CACHE_KEY) or key.startswith("enriched_") or key in (
-                "extended_df", "last_refresh_time", _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY,
-            ):
+            if any(key.startswith(p) for p in prefixes_to_clear) or key in exact_to_clear:
                 del st.session_state[key]
     except Exception:
         pass
@@ -167,9 +191,16 @@ def init_db():
     _INDEX_STATEMENTS = [
         "CREATE INDEX IF NOT EXISTS idx_holdings_portfolio ON holdings(portfolio_id)",
         "CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON holdings(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_cash_user ON cash_positions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_price_cache_ticker ON price_cache(ticker)",
         "CREATE INDEX IF NOT EXISTS idx_nav_snapshots_currency ON nav_snapshots(base_currency)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_ticker ON transactions(ticker)",
+        # A5: bootstrap admin uniqueness — at most one admin during first-run.
+        # Day-2 promotion via UPDATE works because the index targets INSERT paths.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uniq_one_admin ON users(role) WHERE role = 'admin'",
     ]
 
     conn = _get_connection()
@@ -208,12 +239,31 @@ def init_db():
             conn2.commit()
         except Exception:
             pass  # Column already exists — that's fine
+        # A1 multi-tenancy migration: add user_id to every multi-tenant table.
+        # Existing rows fall into the 'default' shard, preserving legacy single-user data.
+        for _table in (
+            "holdings", "transactions", "cash_positions", "watchlist",
+            "nav_snapshots", "prosper_analysis", "briefing_cache",
+            "fortress_state", "parse_cache", "ai_call_cache",
+        ):
+            try:
+                conn2.execute(f"ALTER TABLE {_table} ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+                conn2.commit()
+            except Exception:
+                pass  # Column already exists
         conn2.close()
     except Exception:
         pass  # Migration is best-effort — app works without it
 
     # ── Migration: copy users from auth_config.yaml into the users table ──
     _migrate_yaml_users_to_db()
+
+    # A4: rotate any password_hash equal to bcrypt(email) — closes
+    # the email-as-password fallback for legacy Google-OAuth users.
+    try:
+        rotate_oauth_user_passwords()
+    except Exception:
+        pass
 
     st.session_state["_db_initialized"] = True
 
@@ -223,102 +273,253 @@ def init_db():
 # ─────────────────────────────────────────
 
 def get_all_portfolios(user_id: str = None) -> pd.DataFrame:
-    """Return all portfolios. If user_id is provided, filter by it."""
+    """Return portfolios scoped to user_id.
+
+    A1: defaults to the current user — never returns unfiltered results,
+    which previously leaked every user's portfolios across tenants.
+    """
+    if user_id is None:
+        user_id = _current_user_id()
     conn = _get_connection()
-    if user_id is not None:
-        try:
-            df = _read_sql("SELECT * FROM portfolios WHERE user_id = ? ORDER BY id ASC", conn, params=(user_id,))
-        except Exception:
-            # user_id column may not exist yet — fall back to unfiltered
-            df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
-    else:
-        df = _read_sql("SELECT * FROM portfolios ORDER BY id ASC", conn)
-    conn.close()
+    try:
+        df = _read_sql(
+            "SELECT * FROM portfolios WHERE user_id = ? ORDER BY id ASC",
+            conn, params=(user_id,),
+        )
+    except Exception:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
     return df
 
 
-def create_portfolio(name: str, description: str = "", user_id: str = "default") -> int:
-    """Create a new portfolio. Returns its ID."""
+def create_portfolio(name: str, description: str = "", user_id: str = None) -> int:
+    """Create a new portfolio for the given user. Returns its ID.
+
+    A1: legacy schema has UNIQUE on portfolios.name, so two users can't both
+    claim "Main Portfolio" by name. We retry with " (alice@…)" suffix on
+    collision so each tenant gets its own row instead of silently sharing
+    the global ID=1 portfolio.
+    """
+    if user_id is None:
+        user_id = _current_user_id()
+    base_name = name.strip()
+    desc = description.strip()
+
+    candidate = base_name
+    for attempt in range(5):
+        conn = _get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
+                (candidate, desc, user_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT id FROM portfolios WHERE name = ? AND user_id = ?",
+                (candidate, user_id),
+            ).fetchone()
+            if row:
+                return row[0] if isinstance(row, (tuple, list)) else row["id"]
+            return -1
+        except Exception:
+            # UNIQUE collision on `name` — disambiguate with the user_id suffix.
+            short_uid = (user_id or "user").split("@")[0][:12]
+            candidate = f"{base_name} ({short_uid})" if attempt == 0 else f"{base_name} ({short_uid} {attempt})"
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    # Last resort — re-query for any portfolio owned by this user
     conn = _get_connection()
     try:
-        conn.execute("INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
-                     (name.strip(), description.strip(), user_id))
-    except Exception:
-        try:
-            conn.execute("INSERT INTO portfolios (name, description) VALUES (?, ?)",
-                         (name.strip(), description.strip()))
-        except Exception:
-            # Table may not exist — create it and retry
-            try:
-                conn.execute("""CREATE TABLE IF NOT EXISTS portfolios (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL, user_id TEXT DEFAULT 'default',
-                    description TEXT DEFAULT '',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-                conn.execute("INSERT INTO portfolios (name, description, user_id) VALUES (?, ?, ?)",
-                             (name.strip(), description.strip(), user_id))
-            except Exception:
-                conn.close()
-                return 1  # Return default portfolio ID on total failure
-    try:
-        conn.commit()
-        row = conn.execute("SELECT id FROM portfolios WHERE name = ?", (name.strip(),)).fetchone()
-        conn.close()
+        row = conn.execute(
+            "SELECT id FROM portfolios WHERE user_id = ? ORDER BY id ASC LIMIT 1",
+            (user_id,),
+        ).fetchone()
         if row:
-            return row[0] if isinstance(row, (tuple, list)) else row.get("id", 1)
-        return 1
-    except Exception:
+            return row[0] if isinstance(row, (tuple, list)) else row["id"]
+    finally:
         conn.close()
-        return 1
+    return -1  # signal failure rather than the legacy magic ID 1
 
 
 def rename_portfolio(portfolio_id: int, new_name: str):
-    """Rename a portfolio."""
+    """Rename a portfolio — verifies the caller owns it."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("UPDATE portfolios SET name = ? WHERE id = ?", (new_name.strip(), portfolio_id))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE portfolios SET name = ? WHERE id = ? AND user_id = ?",
+            (new_name.strip(), portfolio_id, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_portfolio(portfolio_id: int):
-    """Delete a portfolio and all its holdings."""
-    if portfolio_id == 1:
-        return  # Protect default
+    """Delete a portfolio and all its holdings — verifies ownership first.
+
+    A1: scope by user_id so a logged-in user cannot delete another user's portfolio
+    by passing its ID. Also refuses to delete the user's last remaining portfolio
+    (the legacy magic-number `portfolio_id == 1` check was wrong post-multitenancy
+    because every user now gets their own "Main Portfolio" with a different ID).
+    """
+    uid = _current_user_id()
     conn = _get_connection()
     try:
-        conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (portfolio_id,))
-    except Exception:
-        pass  # portfolio_id column may not exist
-    try:
-        conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
-    except Exception:
-        pass
-    conn.commit()
-    conn.close()
+        # Ownership check
+        owner_row = conn.execute(
+            "SELECT user_id FROM portfolios WHERE id = ?", (portfolio_id,)
+        ).fetchone()
+        if not owner_row:
+            return
+        owner = owner_row[0] if isinstance(owner_row, (tuple, list)) else owner_row["user_id"]
+        if owner != uid:
+            return  # Not owned by this user — silent refuse
+
+        # Refuse deletion of the user's last portfolio
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM portfolios WHERE user_id = ?", (uid,)
+        ).fetchone()
+        count = remaining[0] if isinstance(remaining, (tuple, list)) else remaining[0]
+        if count <= 1:
+            return  # Cannot delete last portfolio for this user
+
+        try:
+            conn.execute(
+                "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ?",
+                (portfolio_id, uid),
+            )
+        except Exception:
+            pass
+        conn.execute("DELETE FROM portfolios WHERE id = ? AND user_id = ?", (portfolio_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_holdings_cache()
 
 
 def get_active_portfolio_id() -> int:
-    """Return the currently selected portfolio ID from session state."""
-    return st.session_state.get("active_portfolio_id", 1)
+    """Return the currently selected portfolio ID from session state.
+
+    Falls back to the user's first owned portfolio (NOT magic ID 1, which
+    leaks across users). Lazily creates one if none exists.
+    """
+    pid = st.session_state.get("active_portfolio_id")
+    if pid:
+        return pid
+    uid = _current_user_id()
+    pid = _ensure_user_default_portfolio(uid)
+    st.session_state["active_portfolio_id"] = pid
+    return pid
+
+
+def _ensure_user_default_portfolio(user_id: str) -> int:
+    """Return the user's main portfolio ID, creating one if needed.
+
+    A1: each user gets their own portfolio row instead of sharing global ID=1.
+
+    Legacy data inheritance: if this is the FIRST admin signing in AND legacy
+    rows tagged user_id='default' exist (from pre-multitenancy single-user
+    mode), reassign them to this admin so the user keeps seeing their data.
+    Idempotent — runs at most once because subsequent calls find the user's
+    own portfolio row immediately.
+    """
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT id FROM portfolios WHERE user_id = ? ORDER BY id ASC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+        if row:
+            return row[0] if isinstance(row, (tuple, list)) else row["id"]
+    except Exception:
+        pass
+
+    # Legacy auto-claim: only when there's exactly ONE user (this admin)
+    # and legacy 'default' data exists. Multi-user installs are unaffected.
+    try:
+        _claim_legacy_default_shard(user_id)
+        # After reassignment the user's portfolio query may now succeed.
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT id FROM portfolios WHERE user_id = ? ORDER BY id ASC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        conn.close()
+        if row:
+            return row[0] if isinstance(row, (tuple, list)) else row["id"]
+    except Exception:
+        pass
+    # Create one — create_portfolio returns -1 on hard failure rather
+    # than the legacy magic ID 1 (which would cause cross-tenant sharing).
+    try:
+        new_id = create_portfolio(
+            name="Main Portfolio",
+            description="Default portfolio",
+            user_id=user_id,
+        )
+        if new_id and new_id > 0:
+            return new_id
+    except Exception:
+        pass
+    return 1  # Last-resort fallback (legacy single-user); user_id scope still isolates data
+
+
+def _claim_legacy_default_shard(user_id: str) -> None:
+    """One-shot reassignment of pre-multitenancy data ('default' shard) to user_id.
+
+    Runs only when:
+      1. There's exactly ONE non-default user account in the DB (this user).
+      2. Legacy rows tagged user_id='default' actually exist.
+
+    Both conditions ensure we only touch single-user installs upgrading from
+    the old schema. Multi-user installs see this as a no-op.
+    """
+    if not user_id or user_id == "default":
+        return
+    conn = _get_connection()
+    try:
+        # Count real users (excluding the legacy 'default' sentinel).
+        users_row = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE username != 'default'"
+        ).fetchone()
+        n_users = users_row[0] if users_row else 0
+        if n_users != 1:
+            return  # Multi-user install — refuse to auto-claim.
+
+        # Reassign every multi-tenant table.
+        tables = (
+            "holdings", "transactions", "cash_positions", "watchlist",
+            "nav_snapshots", "portfolios",
+        )
+        for tbl in tables:
+            try:
+                conn.execute(f"UPDATE {tbl} SET user_id = ? WHERE user_id = 'default'", (user_id,))
+            except Exception:
+                continue
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 def get_or_create_user_portfolios(user_id: str) -> pd.DataFrame:
-    """Get portfolios for a user_id. If none exist, create a 'Main Portfolio' and return it."""
-    try:
+    """Return portfolios owned by user_id, creating a default one if none exist.
+
+    A1: NEVER falls back to unfiltered queries — the previous behavior
+    silently leaked all users' portfolios when the per-user query came up empty.
+    """
+    df = get_all_portfolios(user_id=user_id)
+    if df.empty:
+        _ensure_user_default_portfolio(user_id)
         df = get_all_portfolios(user_id=user_id)
-        if df.empty:
-            # Try without user filter — maybe user_id column doesn't exist
-            df = get_all_portfolios()
-        if df.empty:
-            try:
-                create_portfolio(name="Main Portfolio", description="Default portfolio", user_id=user_id)
-            except Exception:
-                pass
-            df = get_all_portfolios()
-        return df if not df.empty else pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
-    except Exception:
-        return pd.DataFrame({"id": [1], "name": ["Main Portfolio"], "description": [""]})
+    return df
 
 
 # ─────────────────────────────────────────
@@ -400,15 +601,16 @@ def get_latest_briefing(currency: str = "USD") -> Optional[Dict]:
 # ─────────────────────────────────────────
 
 def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int = None):
-    """Insert holdings from a DataFrame into the database.
+    """Upsert holdings from a DataFrame into the database — atomic per A1+B2.
 
-    Uses batched operations: one bulk DELETE then one bulk INSERT,
-    reducing N×2 round-trips to 2 (or 1 on Turso via pipeline).
+    A1: every row is tagged with the active user_id so it cannot leak to others.
+    B2: DELETE+INSERT happens inside a single transaction (BEGIN/COMMIT) so a
+        mid-flight failure cannot orphan or destroy holdings.
     """
+    uid = _current_user_id()
     pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
     try:
-        # Pre-process all rows into clean tuples
         rows = []
         for _, row in df.iterrows():
             _ticker = str(row.get("ticker", "") or "").strip()
@@ -421,59 +623,65 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             _src = broker_source or ""
             rows.append((_ticker, _name, _qty, _cost, _ccy, _src))
 
-        # Batch DELETE existing rows for these tickers (upsert step 1)
-        delete_params = [(pid, t[0]) for t in rows]
-        try:
-            conn.executemany(
-                "DELETE FROM holdings WHERE portfolio_id = ? AND ticker = ?",
-                delete_params,
-            )
-        except Exception:
-            # portfolio_id column may not exist — fall back to ticker-only delete
+        if not rows:
+            conn.close()
+            return
+
+        # B2: prefer atomic pipeline transaction on Turso
+        if hasattr(conn, "execute_in_transaction"):
+            stmts = []
+            for t in rows:
+                stmts.append((
+                    "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ?",
+                    (pid, uid, t[0]),
+                ))
+            for t in rows:
+                stmts.append((
+                    "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id, user_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (t[0], t[1], t[2], t[3], t[4], t[5], pid, uid),
+                ))
+            conn.execute_in_transaction(stmts)
+        else:
+            # SQLite path — `with conn:` is implicit transactional
             try:
-                conn.executemany(
-                    "DELETE FROM holdings WHERE ticker = ?",
-                    [(t[0],) for t in rows],
-                )
+                conn.execute("BEGIN")
             except Exception:
                 pass
-
-        # Batch INSERT all holdings (upsert step 2)
-        insert_params = [
-            (t[0], t[1], t[2], t[3], t[4], t[5], pid)
-            for t in rows
-        ]
-        try:
             conn.executemany(
-                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                insert_params,
+                "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ?",
+                [(pid, uid, t[0]) for t in rows],
             )
-        except Exception:
-            # portfolio_id column may not exist — insert without it
             conn.executemany(
-                """INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                [(t[0], t[1], t[2], t[3], t[4], t[5]) for t in rows],
+                "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(t[0], t[1], t[2], t[3], t[4], t[5], pid, uid) for t in rows],
             )
+            conn.commit()
 
-        conn.commit()
         conn.close()
-        _invalidate_holdings_cache()
+        _invalidate_holdings_cache(pid)
     except Exception as e:
-        error_msg = str(e)
-        st.error(f"Database save failed: {error_msg}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        # Log server-side; do NOT echo raw exception to UI (can leak schema/path info)
+        import logging as _lg
+        _lg.getLogger("prosper.db").exception("save_holdings failed")
+        st.error("Database save failed. Please try again or contact support.")
         raise
 
 
 def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
-    """Retrieve holdings for the active portfolio as a DataFrame.
+    """Retrieve holdings for the active portfolio AND active user (A1).
 
-    PERFORMANCE: Returns session-cached copy if available.
-    Cache is invalidated automatically by save/update/delete functions.
+    Session-cached. Returns empty DataFrame if user/portfolio combination
+    has no rows — never falls back to unfiltered (which leaked across users).
     """
+    uid = _current_user_id()
     pid = portfolio_id or get_active_portfolio_id()
-    cache_key = f"{_HOLDINGS_CACHE_KEY}_{pid}"
+    cache_key = f"{_HOLDINGS_CACHE_KEY}_{uid}_{pid}"
     try:
         cached = st.session_state.get(cache_key)
         if cached is not None:
@@ -483,17 +691,14 @@ def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
 
     conn = _get_connection()
     try:
-        df = _read_sql("SELECT * FROM holdings WHERE portfolio_id = ? ORDER BY ticker ASC", conn, params=(pid,))
+        df = _read_sql(
+            "SELECT * FROM holdings WHERE portfolio_id = ? AND user_id = ? ORDER BY ticker ASC",
+            conn, params=(pid, uid),
+        )
     except Exception:
-        # portfolio_id column may not exist yet — fall back to unfiltered query
         df = pd.DataFrame()
-    conn.close()
-
-    # Fallback: if portfolio_id column doesn't exist or returned empty
-    if df.empty:
-        conn2 = _get_connection()
-        df = _read_sql("SELECT * FROM holdings ORDER BY ticker ASC", conn2)
-        conn2.close()
+    finally:
+        conn.close()
 
     try:
         st.session_state[cache_key] = df.copy()
@@ -503,41 +708,53 @@ def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
 
 
 def update_holding(holding_id: int, **kwargs):
-    """Update specific fields of a holding by ID."""
+    """Update fields of a holding — scoped by current user_id (A1)."""
     allowed = {"quantity", "avg_cost", "currency", "broker_source"}
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return
+    uid = _current_user_id()
     set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [holding_id]
+    values = list(updates.values()) + [holding_id, uid]
     conn = _get_connection()
-    conn.execute(f"UPDATE holdings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            f"UPDATE holdings SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+            f"WHERE id = ? AND user_id = ?",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_holdings_cache()
 
 
 def delete_holding(holding_id: int):
-    """Remove a single holding by its ID."""
+    """Delete a holding by ID — scoped by current user_id (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM holdings WHERE id = ? AND user_id = ?", (holding_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_holdings_cache()
 
 
 def clear_all_holdings(portfolio_id: int = None):
-    """Delete all holdings for the active portfolio."""
+    """Delete all holdings for active portfolio + active user (A1)."""
+    uid = _current_user_id()
     pid = portfolio_id or get_active_portfolio_id()
     conn = _get_connection()
     try:
-        conn.execute("DELETE FROM holdings WHERE portfolio_id = ?", (pid,))
-    except Exception:
-        # portfolio_id column may not exist — delete all
-        conn.execute("DELETE FROM holdings")
-    conn.commit()
-    conn.close()
-    _invalidate_holdings_cache()
+        conn.execute(
+            "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ?",
+            (pid, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _invalidate_holdings_cache(pid)
 
 
 # ─────────────────────────────────────────
@@ -966,16 +1183,19 @@ def save_ticker_resolution_cache(resolutions: Dict[str, str]) -> None:
 def save_transaction(ticker: str, txn_type: str, quantity: float, price: float,
                      currency: str = "USD", fees: float = 0, date: str = "",
                      broker_source: str = None, notes: str = None, name: str = None):
-    """Insert a single BUY or SELL transaction."""
+    """Insert a single BUY or SELL transaction — scoped to current user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute(
-        """INSERT INTO transactions (ticker, name, type, quantity, price, currency, fees, date, broker_source, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker.strip(), name, txn_type.upper(), abs(quantity), abs(price),
-         currency.strip(), abs(fees), date, broker_source, notes),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT INTO transactions (ticker, name, type, quantity, price, currency, fees, date, broker_source, notes, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ticker.strip(), name, txn_type.upper(), abs(quantity), abs(price),
+             currency.strip(), abs(fees), date, broker_source, notes, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     try:
         st.session_state.pop(_REALIZED_PNL_CACHE_KEY, None)
     except Exception:
@@ -984,34 +1204,40 @@ def save_transaction(ticker: str, txn_type: str, quantity: float, price: float,
 
 def get_transactions(ticker: str = None, txn_type: str = None,
                      date_from: str = None, date_to: str = None) -> pd.DataFrame:
-    """Retrieve transactions with optional filters. Returns a DataFrame."""
+    """Retrieve transactions with optional filters — scoped to current user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    query = "SELECT * FROM transactions WHERE 1=1"
-    params = []
-    if ticker:
-        query += " AND ticker = ?"
-        params.append(ticker)
-    if txn_type:
-        query += " AND type = ?"
-        params.append(txn_type.upper())
-    if date_from:
-        query += " AND date >= ?"
-        params.append(date_from)
-    if date_to:
-        query += " AND date <= ?"
-        params.append(date_to)
-    query += " ORDER BY date DESC, created_at DESC"
-    df = _read_sql(query, conn, params=params)
-    conn.close()
+    try:
+        query = "SELECT * FROM transactions WHERE user_id = ?"
+        params = [uid]
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker)
+        if txn_type:
+            query += " AND type = ?"
+            params.append(txn_type.upper())
+        if date_from:
+            query += " AND date >= ?"
+            params.append(date_from)
+        if date_to:
+            query += " AND date <= ?"
+            params.append(date_to)
+        query += " ORDER BY date DESC, created_at DESC"
+        df = _read_sql(query, conn, params=params)
+    finally:
+        conn.close()
     return df
 
 
 def delete_transaction(txn_id: int):
-    """Remove a single transaction by its ID."""
+    """Delete a transaction by ID — scoped by current user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM transactions WHERE id = ? AND user_id = ?", (txn_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
     try:
         st.session_state.pop(_REALIZED_PNL_CACHE_KEY, None)
     except Exception:
@@ -1020,17 +1246,18 @@ def delete_transaction(txn_id: int):
 
 def get_realized_pnl_summary() -> pd.DataFrame:
     """
-    Calculate realized P&L per ticker using FIFO (First In, First Out).
-    Returns DataFrame with: ticker, total_bought_qty, total_sold_qty,
-    total_buy_cost, total_sell_revenue, realized_pnl, avg_buy_price, avg_sell_price
+    Calculate realized P&L per ticker using FIFO — scoped to current user (A1).
     """
+    uid = _current_user_id()
     conn = _get_connection()
-    # Get all transactions sorted by date (FIFO order)
-    df = _read_sql(
-        "SELECT ticker, type, quantity, price, fees, date FROM transactions ORDER BY date ASC, id ASC",
-        conn,
-    )
-    conn.close()
+    try:
+        df = _read_sql(
+            "SELECT ticker, type, quantity, price, fees, date FROM transactions "
+            "WHERE user_id = ? ORDER BY date ASC, id ASC",
+            conn, params=(uid,),
+        )
+    finally:
+        conn.close()
 
     if df.empty:
         return pd.DataFrame(columns=["ticker", "total_bought_qty", "total_sold_qty",
@@ -1111,39 +1338,57 @@ def get_total_realized_pnl() -> float:
 
 def add_to_watchlist(ticker: str, name: str = None, currency: str = "USD",
                      target_price: float = None, notes: str = None):
-    """Add a stock to the watchlist."""
+    """Add a stock to the user's watchlist (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute(
-        """INSERT INTO watchlist (ticker, name, currency, target_price, notes)
-           VALUES (?, ?, ?, ?, ?)""",
-        (ticker.strip().upper(), name, currency.strip(), target_price, notes),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT INTO watchlist (ticker, name, currency, target_price, notes, user_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker.strip().upper(), name, currency.strip(), target_price, notes, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_watchlist() -> pd.DataFrame:
-    """Retrieve all watchlist items."""
+    """Retrieve current user's watchlist (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    df = _read_sql("SELECT * FROM watchlist ORDER BY ticker ASC", conn)
-    conn.close()
+    try:
+        df = _read_sql(
+            "SELECT * FROM watchlist WHERE user_id = ? ORDER BY ticker ASC",
+            conn, params=(uid,),
+        )
+    finally:
+        conn.close()
     return df
 
 
 def remove_from_watchlist(item_id: int):
-    """Remove a single item from the watchlist."""
+    """Remove a watchlist item — scoped by user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM watchlist WHERE id = ?", (item_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM watchlist WHERE id = ? AND user_id = ?", (item_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_watchlist_target(item_id: int, target_price: float):
-    """Update the target price for a watchlist item."""
+    """Update target price — scoped by user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("UPDATE watchlist SET target_price = ? WHERE id = ?", (target_price, item_id))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE watchlist SET target_price = ? WHERE id = ? AND user_id = ?",
+            (target_price, item_id, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ─────────────────────────────────────────
@@ -1153,30 +1398,45 @@ def update_watchlist_target(item_id: int, target_price: float):
 def save_nav_snapshot(date: str, total_value: float, total_cost: float = None,
                       unrealized_pnl: float = None, realized_pnl: float = None,
                       holdings_count: int = None, base_currency: str = "USD"):
-    """Save a daily portfolio snapshot. Uses INSERT OR REPLACE (1 per day per currency)."""
+    """Save a daily portfolio snapshot — scoped to current user (A1).
+
+    Uses DELETE+INSERT scoped by (date, base_currency, user_id) so two users
+    can both have a snapshot for the same day in the same currency.
+    """
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute(
-        """INSERT OR REPLACE INTO nav_snapshots
-           (date, total_value, total_cost, unrealized_pnl, realized_pnl,
-            holdings_count, base_currency)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (date, total_value, total_cost, unrealized_pnl, realized_pnl,
-         holdings_count, base_currency),
-    )
-    conn.commit()
-    conn.close()
-    # Invalidate NAV history cache
+    try:
+        conn.execute(
+            "DELETE FROM nav_snapshots WHERE date = ? AND base_currency = ? AND user_id = ?",
+            (date, base_currency, uid),
+        )
+        conn.execute(
+            """INSERT INTO nav_snapshots
+               (date, total_value, total_cost, unrealized_pnl, realized_pnl,
+                holdings_count, base_currency, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (date, total_value, total_cost, unrealized_pnl, realized_pnl,
+             holdings_count, base_currency, uid),
+        )
+        conn.commit()
+    except Exception:
+        # Best-effort: legacy UNIQUE(date, base_currency) constraint may still
+        # exist from pre-multitenancy schema. App continues without snapshot.
+        pass
+    finally:
+        conn.close()
     try:
         for key in list(st.session_state.keys()):
-            if key.startswith(_NAV_HISTORY_CACHE_KEY):
+            if key.startswith(_NAV_HISTORY_CACHE_KEY) or key.startswith("_nav_exists_today_"):
                 del st.session_state[key]
     except Exception:
         pass
 
 
 def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
-    """Retrieve NAV history for the last N days. Session-cached."""
-    cache_key = f"{_NAV_HISTORY_CACHE_KEY}_{base_currency or 'all'}"
+    """Retrieve NAV history for the current user (A1). Session-cached."""
+    uid = _current_user_id()
+    cache_key = f"{_NAV_HISTORY_CACHE_KEY}_{uid}_{base_currency or 'all'}"
     try:
         cached = st.session_state.get(cache_key)
         if cached is not None:
@@ -1185,14 +1445,16 @@ def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
         pass
 
     conn = _get_connection()
-    query = "SELECT * FROM nav_snapshots WHERE 1=1"
-    params = []
-    if base_currency:
-        query += " AND base_currency = ?"
-        params.append(base_currency)
-    query += " ORDER BY date ASC"
-    df = _read_sql(query, conn, params=params)
-    conn.close()
+    try:
+        query = "SELECT * FROM nav_snapshots WHERE user_id = ?"
+        params = [uid]
+        if base_currency:
+            query += " AND base_currency = ?"
+            params.append(base_currency)
+        query += " ORDER BY date ASC"
+        df = _read_sql(query, conn, params=params)
+    finally:
+        conn.close()
 
     try:
         st.session_state[cache_key] = df.copy()
@@ -1202,8 +1464,9 @@ def get_nav_history(days: int = 365, base_currency: str = None) -> pd.DataFrame:
 
 
 def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
-    """Check if a NAV snapshot already exists for today. Session-cached."""
-    cache_key = f"_nav_exists_today_{base_currency}"
+    """Check if a NAV snapshot already exists for today FOR THE CURRENT USER (A1)."""
+    uid = _current_user_id()
+    cache_key = f"_nav_exists_today_{uid}_{base_currency}"
     try:
         cached = st.session_state.get(cache_key)
         if cached is not None:
@@ -1213,12 +1476,14 @@ def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
 
     today = datetime.now().strftime("%Y-%m-%d")
     conn = _get_connection()
-    row = conn.execute(
-        "SELECT COUNT(*) FROM nav_snapshots WHERE date = ? AND base_currency = ?",
-        (today, base_currency),
-    ).fetchone()
-    conn.close()
-    result = row[0] > 0 if row else False
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM nav_snapshots WHERE date = ? AND base_currency = ? AND user_id = ?",
+            (today, base_currency, uid),
+        ).fetchone()
+    finally:
+        conn.close()
+    result = (row[0] > 0) if row else False
 
     try:
         st.session_state[cache_key] = result
@@ -1341,65 +1606,82 @@ def _invalidate_cash_cache():
 def save_cash_position(account_name: str, currency: str = "USD", amount: float = 0,
                        is_margin: bool = False, margin_rate: float = None,
                        broker_source: str = None, notes: str = None):
-    """Insert a cash position (positive = cash, negative = margin)."""
+    """Insert a cash position scoped to current user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute(
-        """INSERT INTO cash_positions
-           (account_name, currency, amount, is_margin, margin_rate, broker_source, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (account_name.strip(), currency.strip(), amount,
-         1 if is_margin else 0, margin_rate, broker_source, notes),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT INTO cash_positions
+               (account_name, currency, amount, is_margin, margin_rate, broker_source, notes, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_name.strip(), currency.strip(), amount,
+             1 if is_margin else 0, margin_rate, broker_source, notes, uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_cash_cache()
 
 
 def get_all_cash_positions() -> pd.DataFrame:
-    """Retrieve all cash positions as a DataFrame. Session-cached."""
+    """Retrieve cash positions for current user (A1)."""
+    uid = _current_user_id()
+    cache_key = f"{_CASH_POSITIONS_CACHE_KEY}_{uid}"
     try:
-        cached = st.session_state.get(_CASH_POSITIONS_CACHE_KEY)
+        cached = st.session_state.get(cache_key)
         if cached is not None:
             return cached.copy()
     except Exception:
         pass
 
     conn = _get_connection()
-    df = _read_sql("SELECT * FROM cash_positions ORDER BY account_name ASC", conn)
-    conn.close()
+    try:
+        df = _read_sql(
+            "SELECT * FROM cash_positions WHERE user_id = ? ORDER BY account_name ASC",
+            conn, params=(uid,),
+        )
+    finally:
+        conn.close()
 
     try:
-        st.session_state[_CASH_POSITIONS_CACHE_KEY] = df.copy()
+        st.session_state[cache_key] = df.copy()
     except Exception:
         pass
     return df
 
 
 def update_cash_position(position_id: int, **kwargs):
-    """Update specific fields of a cash position by ID."""
+    """Update fields of a cash position — scoped by user (A1)."""
     allowed = {"account_name", "currency", "amount", "is_margin", "margin_rate",
                "broker_source", "notes"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
+    uid = _current_user_id()
     set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [position_id]
+    values = list(updates.values()) + [position_id, uid]
     conn = _get_connection()
-    conn.execute(
-        f"UPDATE cash_positions SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            f"UPDATE cash_positions SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+            f"WHERE id = ? AND user_id = ?",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_cash_cache()
 
 
 def delete_cash_position(position_id: int):
-    """Remove a single cash position by its ID."""
+    """Delete a cash position — scoped by user (A1)."""
+    uid = _current_user_id()
     conn = _get_connection()
-    conn.execute("DELETE FROM cash_positions WHERE id = ?", (position_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM cash_positions WHERE id = ? AND user_id = ?", (position_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
     _invalidate_cash_cache()
 
 
@@ -1604,3 +1886,74 @@ def delete_user(username: str):
     conn.execute("DELETE FROM users WHERE username = ?", (username,))
     conn.commit()
     conn.close()
+
+
+# ─────────────────────────────────────────
+# A4: rotate any password_hash that equals bcrypt(email).
+# Closes the legacy "email-as-password" fallback for Google OAuth users.
+# Idempotent: runs at every cold start; once rotated, hashes never match again.
+# ─────────────────────────────────────────
+def rotate_oauth_user_passwords() -> int:
+    """Replace any password_hash == bcrypt(email) with a random hash.
+
+    Returns: number of users rotated (0 once stable).
+    """
+    try:
+        import bcrypt
+        import secrets as _s
+    except ImportError:
+        return 0
+    conn = _get_connection()
+    rotated = 0
+    try:
+        rows = conn.execute("SELECT username, email, password_hash FROM users").fetchall()
+        for r in rows:
+            try:
+                if isinstance(r, (tuple, list)):
+                    username, email, hash_ = r[0], r[1], r[2]
+                elif hasattr(r, "keys"):
+                    username = r["username"]
+                    email = r["email"]
+                    hash_ = r["password_hash"]
+                else:
+                    continue
+                if not (email and hash_):
+                    continue
+                if bcrypt.checkpw(email.encode("utf-8"), hash_.encode("utf-8")):
+                    new_hash = bcrypt.hashpw(
+                        _s.token_urlsafe(32).encode("utf-8"), bcrypt.gensalt()
+                    ).decode("utf-8")
+                    conn.execute(
+                        "UPDATE users SET password_hash = ? WHERE username = ?",
+                        (new_hash, username),
+                    )
+                    rotated += 1
+            except Exception:
+                continue
+        if rotated:
+            conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return rotated
+
+
+# ─────────────────────────────────────────
+# A5: distinguish "DB unreachable" from "DB empty" before promoting to admin.
+# ─────────────────────────────────────────
+def users_query_succeeded() -> bool:
+    """Run a tiny SELECT against the users table — return True only if it didn't raise.
+
+    Used by core.auth before granting first-user admin role: a DB outage
+    must NOT silently make the next signup an admin.
+    """
+    try:
+        conn = _get_connection()
+        try:
+            conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+            return True
+        finally:
+            conn.close()
+    except Exception:
+        return False

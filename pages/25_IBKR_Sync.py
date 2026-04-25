@@ -7,12 +7,23 @@ Sync your IBKR portfolio automatically via:
 3. Pre-built Flex Query template (fastest - import template into IBKR in one click)
 """
 
+import re
+import csv
+import io
+import logging
+
 import streamlit as st
 import pandas as pd
-import io
 from datetime import datetime
 from core.settings import get_api_key, load_user_settings, save_user_settings
 from core.database import get_all_portfolios, get_active_portfolio_id, save_holdings
+
+_log = logging.getLogger("prosper.ibkr_sync")
+
+# B5: IBKR Flex token + query ID validation. Reject anything that could be
+# URL injection before reflecting these into the IBKR request URL.
+_IBKR_TOKEN_RE = re.compile(r"^[A-Za-z0-9]{8,128}$")
+_IBKR_QUERY_ID_RE = re.compile(r"^[0-9]{4,12}$")
 
 # Graceful imports for modules that may not be deployed yet
 try:
@@ -40,27 +51,35 @@ st.markdown(
 def parse_ibkr_csv(csv_file) -> pd.DataFrame:
     """Parse IBKR Activity Statement CSV and extract open positions.
 
-    Handles IBKR's multi-section CSV format by:
-    1. Reading entire file as text
-    2. Finding "Open Positions" section
-    3. Extracting header row and data rows from that section
-    4. Parsing positions with flexible column matching
+    B7: uses csv.reader (RFC-4178-correct quoting) instead of `line.split(',')`
+        — embedded commas inside quoted descriptions no longer corrupt columns.
+    B6: catches exceptions and shows a generic message; the full traceback goes
+        to the server log via logger.exception() rather than the Streamlit UI.
     """
     try:
-        # Read as text first to handle IBKR's complex format
-        content = csv_file.read().decode('utf-8') if isinstance(csv_file.read(), bytes) else csv_file.read()
-        if isinstance(content, bytes):
-            content = content.decode('utf-8')
+        # Read as text — handle bytes/str; reset pointer for downstream re-reads.
+        try:
+            csv_file.seek(0)
+        except Exception:
+            pass
+        raw = csv_file.read()
+        if isinstance(raw, bytes):
+            content = raw.decode('utf-8', errors='replace')
+        else:
+            content = raw
+        try:
+            csv_file.seek(0)
+        except Exception:
+            pass
 
-        # Reset file pointer if needed
-        csv_file.seek(0)
+        # B7: split on logical CSV rows with proper quote handling so embedded
+        # commas in "Description, Inc" don't shift columns.
+        all_rows = list(csv.reader(io.StringIO(content)))
 
-        lines = content.split('\n')
-
-        # Find "Open Positions" section
+        # Find "Open Positions" section (any cell on the row contains the marker)
         open_pos_idx = None
-        for i, line in enumerate(lines):
-            if 'Open Positions' in line:
+        for i, row in enumerate(all_rows):
+            if any('Open Positions' in (cell or '') for cell in row):
                 open_pos_idx = i
                 break
 
@@ -68,17 +87,18 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
             st.error("Could not find 'Open Positions' section in CSV")
             return pd.DataFrame()
 
-        # Find header row (should be right after "Open Positions" or shortly after)
+        # Find header row
         header_idx = None
-        for i in range(open_pos_idx, min(open_pos_idx + 10, len(lines))):
-            if 'Symbol' in lines[i] or 'Ticker' in lines[i]:
+        for i in range(open_pos_idx, min(open_pos_idx + 10, len(all_rows))):
+            row = all_rows[i]
+            joined = ",".join(row)
+            if 'Symbol' in joined or 'Ticker' in joined:
                 header_idx = i
                 break
 
         if header_idx is None:
-            # Try alternative: look for first non-empty line after section
-            for i in range(open_pos_idx + 1, min(open_pos_idx + 10, len(lines))):
-                if lines[i].strip() and ',' in lines[i]:
+            for i in range(open_pos_idx + 1, min(open_pos_idx + 10, len(all_rows))):
+                if all_rows[i] and any(c.strip() for c in all_rows[i]):
                     header_idx = i
                     break
 
@@ -86,9 +106,7 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
             st.error("Could not find header row in 'Open Positions' section")
             return pd.DataFrame()
 
-        # Extract header and data rows
-        header_line = lines[header_idx]
-        headers = [h.strip() for h in header_line.split(',')]
+        headers = [h.strip() for h in all_rows[header_idx]]
 
         # Normalize header names (IBKR sometimes uses different cases)
         header_map = {}
@@ -117,16 +135,16 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
 
         # Parse data rows
         positions = []
-        for i in range(header_idx + 1, len(lines)):
-            line = lines[i].strip()
+        for i in range(header_idx + 1, len(all_rows)):
+            parts = [p.strip() for p in all_rows[i]]
 
-            # Stop at totals or empty lines
-            if not line or 'Total' in line or ',' not in line:
+            # Stop at totals or empty rows
+            if not parts or not any(parts):
+                continue
+            if any('Total' in p for p in parts):
                 continue
 
             try:
-                parts = [p.strip() for p in line.split(',')]
-
                 # Map parts to columns based on header
                 row_dict = {}
                 for col_idx, col_name in enumerate(headers):
@@ -168,10 +186,14 @@ def parse_ibkr_csv(csv_file) -> pd.DataFrame:
             return pd.DataFrame()
 
         return pd.DataFrame(positions)
-    except Exception as e:
-        st.error(f"CSV parsing error: {str(e)}")
-        import traceback
-        st.error(f"Debug: {traceback.format_exc()}")
+    except Exception:
+        # B6: never echo stack traces or raw exception strings to the UI
+        # — they leak file paths, package versions, and occasionally env values.
+        _log.exception("Failed to parse IBKR CSV")
+        st.error(
+            "Could not parse this CSV. Please make sure it's an IBKR Activity Statement "
+            "with an 'Open Positions' section."
+        )
         return pd.DataFrame()
 
 
@@ -457,11 +479,23 @@ else:  # "🔗 Flex Query API (Automatic)"
 
     # Sync button
     if st.button("🔄 Sync Now", type="primary", use_container_width=True):
+        # B5: validate token + query ID format BEFORE reflecting them into a request URL.
+        _token_clean = (ibkr_token or "").strip()
+        _qid_clean = (flex_query_id or "").strip()
+        if not _IBKR_TOKEN_RE.fullmatch(_token_clean):
+            st.error(
+                "IBKR Flex Token has an unexpected format. "
+                "It should be 8–128 alphanumeric characters from IBKR Account Management."
+            )
+            st.stop()
+        if not _IBKR_QUERY_ID_RE.fullmatch(_qid_clean):
+            st.error("Flex Query ID must be a numeric ID (4–12 digits) from IBKR.")
+            st.stop()
         with st.spinner("Connecting to IBKR and fetching positions..."):
             try:
                 result = sync_ibkr_portfolio(
-                    flex_token=ibkr_token,
-                    query_id=flex_query_id.strip(),
+                    flex_token=_token_clean,
+                    query_id=_qid_clean,
                     portfolio_id=target_portfolio_id,
                     mode="replace" if sync_mode == "Full Replace" else "merge",
                 )

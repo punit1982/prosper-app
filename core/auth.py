@@ -22,6 +22,7 @@ Usage in app.py:
 import os
 import re
 import json
+import hashlib
 import secrets as _secrets
 import logging as _logging
 from datetime import datetime
@@ -30,6 +31,14 @@ from typing import Dict, Any, Optional
 import streamlit as st
 
 _auth_log = _logging.getLogger("prosper.auth")
+
+
+def _is_production() -> bool:
+    """Production detection — Render sets RENDER=true, or set PROSPER_ENV=production explicitly."""
+    return (
+        os.getenv("PROSPER_ENV", "").lower() == "production"
+        or bool(os.getenv("RENDER"))
+    )
 
 # ─────────────────────────────────────────
 # CONSTANTS
@@ -41,15 +50,22 @@ _GOOGLE_CREDS_PATH = os.path.join(_APP_DIR, "google_credentials.json")
 _COOKIE_NAME = "prosper_auth"
 _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
 if not _COOKIE_KEY:
+    if _is_production():
+        # Refuse to boot. A random secret means every Render restart
+        # silently logs every user out and cookies cannot be verified
+        # across instances. Operator must set PROSPER_COOKIE_SECRET.
+        raise RuntimeError(
+            "PROSPER_COOKIE_SECRET is required in production. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
     _COOKIE_KEY = _secrets.token_hex(32)
-    _auth_log.warning(
-        "PROSPER_COOKIE_SECRET not set — using random key. "
-        "Sessions will not persist across restarts."
-    )
+    _auth_log.warning("PROSPER_COOKIE_SECRET not set — using ephemeral dev key.")
 _COOKIE_EXPIRY_DAYS = 30
 
 _GOOGLE_COOKIE_KEY = os.getenv("PROSPER_GOOGLE_COOKIE_SECRET", "")
 if not _GOOGLE_COOKIE_KEY:
+    if _is_production():
+        raise RuntimeError("PROSPER_GOOGLE_COOKIE_SECRET is required in production.")
     _GOOGLE_COOKIE_KEY = _secrets.token_hex(32)
 
 _HIDE_SIDEBAR_CSS = (
@@ -271,30 +287,74 @@ def _is_google_configured() -> bool:
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
 
 
+def _unique_username_from_email(email: str) -> str:
+    """A3: deterministic, collision-safe username from email.
+
+    Two distinct emails can no longer collapse into one row — the email's
+    full SHA-256 prefix disambiguates collisions.
+    """
+    base = re.sub(r"[^a-z0-9]", "_", email.split("@")[0].lower()).strip("_") or "user"
+    if not _db_get_user(base):
+        return base
+    suffix = hashlib.sha256(email.encode("utf-8")).hexdigest()[:8]
+    return f"{base}_{suffix}"
+
+
 def _handle_google_user(user_info: dict) -> bool:
-    """Process authenticated Google user — create/sync DB record and set session state."""
-    g_email = user_info.get("email", "")
-    g_name = user_info.get("name", "")
+    """Process an authenticated Google profile — A3+A4 hardening:
+
+    1. Reject `email_verified=False` profiles (Google can return unverified).
+    2. Look up by EMAIL (UNIQUE column), never by collapsed username
+       (so distinct emails cannot share a row → no account takeover).
+    3. New accounts get a random bcrypt hash, NOT bcrypt(email),
+       so a Google user cannot be impersonated via the email login form.
+    4. First-user admin promotion only if the users query actually succeeded
+       (A5: a DB outage must not silently mint admins).
+    """
+    g_email = (user_info.get("email") or "").strip().lower()
+    g_name = user_info.get("name") or ""
     if not g_email:
         return False
+    if user_info.get("email_verified") is not True:
+        # Untrusted email — refuse the login.
+        _auth_log.warning("Rejected Google login for unverified email: %s", g_email)
+        return False
 
-    g_username = g_email.split("@")[0].lower().replace(".", "_").replace("-", "_")
-    g_hash = _hash_password(g_email)
-    first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
-    last_name = " ".join(g_name.split()[1:]) if g_name and len(g_name.split()) > 1 else ""
+    # Authoritative lookup by email (UNIQUE column in users table).
+    existing_user = _db_get_user_by_email(g_email)
 
-    existing = _db_get_all_users()
-    role = "admin" if not existing else "user"
+    if existing_user:
+        # Re-authenticate the SAME row. Do NOT mutate password or role.
+        username = existing_user.get("username") or _unique_username_from_email(g_email)
+        first_name = existing_user.get("first_name") or g_email.split("@")[0]
+    else:
+        # New account.
+        username = _unique_username_from_email(g_email)
+        first_name = (g_name.split()[0] if g_name else g_email.split("@")[0]).title()
+        last_name = " ".join(g_name.split()[1:]) if len(g_name.split()) > 1 else ""
 
-    try:
-        _db_create_user(g_username, g_email, first_name, last_name, g_hash, role)
-    except Exception:
-        pass
+        # A4: random hash — never derivable from the email.
+        random_pw_hash = _hash_password(_secrets.token_urlsafe(32))
 
-    _sync_user_to_yaml(g_username, g_email, first_name, last_name, g_hash, role)
+        # A5: only promote to admin if the users query actually returned (no DB outage).
+        try:
+            from core.database import users_query_succeeded as _users_ok
+            db_ok = _users_ok()
+        except Exception:
+            db_ok = False
+        existing = _db_get_all_users() if db_ok else None
+        role = "admin" if (db_ok and existing == []) else "user"
+
+        try:
+            _db_create_user(username, g_email, first_name, last_name, random_pw_hash, role)
+        except Exception:
+            # Hard fail: do not silently log into someone else.
+            _auth_log.exception("Failed to create Google OAuth user")
+            return False
+        _sync_user_to_yaml(username, g_email, first_name, last_name, random_pw_hash, role)
 
     st.session_state["authentication_status"] = True
-    st.session_state["username"] = g_username
+    st.session_state["username"] = username
     st.session_state["name"] = g_name or first_name
     st.session_state["user_id"] = g_email
     st.session_state["auth_method"] = "google"
@@ -324,6 +384,7 @@ def _show_google_signin() -> bool:
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redirect = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
+    _OAUTH_STATE_KEY = "_oauth_state_pending"
 
     try:
         import urllib.parse
@@ -332,8 +393,19 @@ def _show_google_signin() -> bool:
         # ── Step 1: Handle OAuth callback (code in URL params) ──
         params = dict(st.query_params)
         if "code" in params and not st.session_state.get("_google_auth_done"):
+            # A2: CSRF protection — state must match the value we issued.
+            received_state = params.get("state", "")
+            expected_state = st.session_state.pop(_OAUTH_STATE_KEY, None)
+            if not expected_state or not _secrets.compare_digest(
+                str(received_state), str(expected_state)
+            ):
+                st.query_params.clear()
+                _auth_log.warning("OAuth callback rejected: state mismatch")
+                st.error("Authentication request expired or was tampered with. Please try again.")
+                return False
+
             code = params["code"]
-            # Clear the code from URL immediately to prevent reuse
+            # Clear code+state from URL to prevent reuse
             st.query_params.clear()
 
             token_resp = _req.post(
@@ -362,13 +434,17 @@ def _show_google_signin() -> bool:
                         st.session_state["user_info"] = user_info
                         return _handle_google_user(user_info)
             else:
-                _auth_log.warning(f"Google token exchange failed ({token_resp.status_code}): {token_resp.text[:200]}")
+                # Do NOT log token_resp.text — Google echoes credentials/refresh
+                # tokens on certain error paths.
+                _auth_log.warning("Google token exchange failed: HTTP %s", token_resp.status_code)
 
         # ── Step 2: Already authenticated this session ──
         if st.session_state.get("connected") and st.session_state.get("user_info"):
             return _handle_google_user(st.session_state["user_info"])
 
-        # ── Step 3: Show the sign-in button ──
+        # ── Step 3: Show the sign-in button — issue a fresh CSRF state every render.
+        new_state = _secrets.token_urlsafe(32)
+        st.session_state[_OAUTH_STATE_KEY] = new_state
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
             "client_id": g_cid,
             "redirect_uri": redirect,
@@ -376,6 +452,7 @@ def _show_google_signin() -> bool:
             "response_type": "code",
             "access_type": "offline",
             "prompt": "select_account",
+            "state": new_state,
         })
         st.link_button("🔑 Continue with Google", auth_url, use_container_width=True)
 
@@ -424,21 +501,32 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
             if pw != pw2:
                 errors.append("Passwords do not match.")
 
-            username = email.split("@")[0].lower().replace(".", "_").replace("-", "_").replace("+", "_") if email else ""
+            # A3: collision-safe username derivation (matches Google handler)
+            username = _unique_username_from_email(email.strip().lower()) if email else ""
 
-            # Check DB for existing user (source of truth)
-            if username and _db_get_user(username):
-                errors.append("An account with this email already exists. Please sign in.")
-            if email and _db_get_user_by_email(email.strip()):
-                errors.append("This email is already registered. Please sign in.")
+            # B1: collapse user-enumeration to a single ambiguous message.
+            # Was previously TWO distinct errors that revealed whether the
+            # username OR email already existed.
+            account_exists = bool(
+                (username and _db_get_user(username))
+                or (email and _db_get_user_by_email(email.strip()))
+            )
+            if account_exists:
+                errors.append("Could not register that account. If you already have one, please sign in.")
 
             if errors:
                 for e in errors:
                     st.error(e)
             else:
                 hashed = _hash_password(pw)
-                existing = _db_get_all_users()
-                role = "admin" if (is_first_user or not existing) else "user"
+                # A5: only promote to admin if DB is healthy AND empty.
+                try:
+                    from core.database import users_query_succeeded as _users_ok
+                    db_ok = _users_ok()
+                except Exception:
+                    db_ok = False
+                existing = _db_get_all_users() if db_ok else None
+                role = "admin" if ((is_first_user or existing == []) and db_ok) else "user"
 
                 # Save to DB (source of truth)
                 _db_create_user(username, email.strip(), first.strip(), last.strip(), hashed, role)

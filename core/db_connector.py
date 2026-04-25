@@ -286,6 +286,25 @@ class TursoConnection:
         if statements:
             self._send_pipeline(statements)
 
+    def execute_in_transaction(self, statements_and_params):
+        """B2: atomic transaction across mixed statements.
+
+        Wraps a list of (sql, params) tuples in BEGIN/COMMIT and sends as a
+        single HTTP pipeline. If any statement errors, Turso rolls back —
+        previously save_holdings could DELETE rows then fail to INSERT them,
+        permanently destroying portfolio data.
+        """
+        if not statements_and_params:
+            return
+        stmts = [{"sql": "BEGIN"}]
+        for sql, params in statements_and_params:
+            s = {"sql": sql}
+            if params:
+                s["args"] = [self._type_for_value(v) for v in params]
+            stmts.append(s)
+        stmts.append({"sql": "COMMIT"})
+        self._send_pipeline(stmts)
+
     def commit(self):
         """No-op — Turso HTTP API auto-commits each request."""
         pass

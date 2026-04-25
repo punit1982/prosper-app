@@ -174,6 +174,16 @@ def get_api_key(key_name: str) -> str:
     return ""
 
 
+# D5: single source of truth for the Claude fallback ladder.
+# Imported by core/screenshot_parser.py and any other future caller so a
+# new Claude release only requires one edit, not N.
+CLAUDE_MODEL_PRIORITY = [
+    "claude-opus-4-1-20250805",
+    "claude-sonnet-4-20250514",
+    "claude-haiku-4-5-20250514",
+]
+
+
 def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5", system=None):
     """
     Call Claude API with automatic model fallback.
@@ -181,14 +191,8 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
     Returns the API response object.
     Raises Exception if ALL models fail.
     """
-    _FALLBACK_MODELS = [
-        "claude-opus-4-1-20250805",
-        "claude-sonnet-4-20250514",
-        "claude-haiku-4-5-20250514",
-    ]
-
-    # Put the preferred model first, deduplicate
-    models_to_try = [preferred_model] + [m for m in _FALLBACK_MODELS if m != preferred_model]
+    # Put the preferred model first, deduplicate against CLAUDE_MODEL_PRIORITY
+    models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
 
     _extra = {}
     if system:

@@ -314,7 +314,13 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
             _q = None
         if _q:
             st.session_state["_mini_chat_last_ts"] = _time.time()
-            st.session_state["mini_chat"].append({"role": "user", "content": _q})
+            # C10: trim AT APPEND time (not at render time), and cap message
+            # length, so st.session_state cannot grow unbounded with very long
+            # pasted messages.
+            _CHAT_HISTORY_CAP = 20
+            st.session_state["mini_chat"].append({"role": "user", "content": _q[:2000]})
+            if len(st.session_state["mini_chat"]) > _CHAT_HISTORY_CAP:
+                st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]
             try:
                 import anthropic
                 from core.settings import call_claude, SETTINGS
@@ -336,6 +342,8 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
                     preferred_model="claude-sonnet-4-20250514",
                 )
                 st.session_state["mini_chat"].append({"role": "assistant", "content": resp.content[0].text})
+                if len(st.session_state["mini_chat"]) > _CHAT_HISTORY_CAP:
+                    st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {str(e)[:80]}")
