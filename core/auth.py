@@ -1,5 +1,5 @@
 """
-Authentication Module for Prosper — v6.3
+Authentication Module for Prosper — v6.4
 ==========================================
 Complete user authentication with database as the single source of truth.
 
@@ -8,13 +8,23 @@ Supports:
   2. Google OAuth via popup window flow (preserves main Streamlit session)
   3. Auth disabled mode (PROSPER_AUTH_ENABLED=false)
 
-OAuth flow (v6.3):
+OAuth flow (v6.4):
   - Main app opens Google consent in a POPUP window (not same tab)
   - Popup lands on pages/99_OAuth_Callback.py with ?code=&state=
-  - Callback page exchanges code, writes {email, name, status} to localStorage
-  - Main app polls localStorage every 500ms and logs the user in
+  - Callback page exchanges code, writes {email, name, token, verified} to localStorage
+  - token = HMAC-signed email (email.sig format, matches _make_signed_token in callback)
+  - Main app polls localStorage every 500ms and verifies token via _verify_signed_token()
   - Popup is closed automatically after writing result
   - Main session_state is never destroyed → no loop, no session loss
+  - postMessage fallback for Safari/private mode where localStorage is blocked
+
+Changes in v6.4:
+  - FIXED: _verify_signed_token() added — verifies email.sig tokens from callback page
+    Previously _verify_oauth_state() (nonce.sig format) was used, which always failed
+  - FIXED: Direct OAuth path no longer retries with a second redirect_uri
+    The retry invalidated the auth code → 'code already used' Google error
+  - FIXED: Logout clears query params to prevent stale _ga_* params on re-login
+  - FIXED: postMessage listener added in popup JS for localStorage-blocked browsers
 """
 
 import os
@@ -63,7 +73,6 @@ if not _GOOGLE_COOKIE_KEY:
 _OAUTH_SIGNING_KEY = os.getenv("PROSPER_COOKIE_SECRET", _COOKIE_KEY).encode()
 
 # ── Sidebar hide CSS — injected as early as possible ───────────────────────
-# Targets every possible Streamlit sidebar element across versions.
 SIDEBAR_HIDE_CSS = """
 <style>
 /* Hide sidebar and all its controls before login */
@@ -91,12 +100,10 @@ section[data-testid="stSidebar"] {
     pointer-events: none !important;
     opacity: 0 !important;
 }
-/* Also hide the hamburger/collapse toggle button */
 [data-testid="stSidebarCollapsedControl"] svg,
 [data-testid="stSidebarCollapsedControl"] button {
     display: none !important;
 }
-/* Ensure main content takes full width */
 .main .block-container {
     max-width: 100% !important;
     padding-left: 1rem !important;
@@ -121,6 +128,7 @@ _MIN_PASSWORD_LENGTH = 8
 
 # ─────────────────────────────────────────
 # OAUTH STATE — HMAC-signed, session-independent
+# nonce.sig format — used for the Google redirect state param
 # ─────────────────────────────────────────
 def _make_oauth_state() -> str:
     nonce = _secrets.token_urlsafe(32)
@@ -129,10 +137,29 @@ def _make_oauth_state() -> str:
 
 
 def _verify_oauth_state(state: str) -> bool:
+    """Verify nonce.sig format state param (used in Google redirect URL)."""
     if not state or "." not in state:
         return False
     nonce, _, received_sig = state.partition(".")
     expected_sig = hmac.new(_OAUTH_SIGNING_KEY, nonce.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_sig, received_sig)
+
+
+def _verify_signed_token(token: str, email: str) -> bool:
+    """Verify email.sig format token produced by 99_OAuth_Callback._make_signed_token().
+
+    The callback page signs the EMAIL (not a nonce) to create the relay token:
+        sig = HMAC(OAUTH_SIGNING_KEY, email)
+        token = email + '.' + sig
+
+    This is distinct from _verify_oauth_state() which verifies the state
+    parameter in the Google redirect URL (nonce.sig format).
+    """
+    if not token or not email or "." not in token:
+        return False
+    expected_sig = hmac.new(_OAUTH_SIGNING_KEY, email.encode(), hashlib.sha256).hexdigest()
+    # token format is  email.sig  — split on LAST dot to handle email addresses with dots
+    _, _, received_sig = token.rpartition(".")
     return hmac.compare_digest(expected_sig, received_sig)
 
 
@@ -372,41 +399,29 @@ def _handle_google_user(user_info: dict) -> bool:
 def _show_google_signin() -> bool:
     """Show Google sign-in using a POPUP window.
 
+    v6.4 FIX — Token verification mismatch resolved:
+      99_OAuth_Callback.py produces tokens in email.sig format via _make_signed_token().
+      auth.py was verifying with _verify_oauth_state() which expects nonce.sig format.
+      Added _verify_signed_token(token, email) to correctly verify email.sig tokens.
+
     v6.3 FIX — Root cause of the loop:
       st.link_button() navigated the SAME browser tab to Google.
-      When Google redirected back, Streamlit created a brand-new WebSocket
-      session. The code exchange succeeded and set session_state, but then
-      st.rerun() created yet another new session (session_state wiped again),
-      causing an infinite auth → session_loss → auth loop with no error shown.
-
-    Solution:
-      1. JavaScript opens Google consent in a POPUP (window.open).
-      2. The MAIN Streamlit session stays alive with its session_state intact.
-      3. Popup lands on pages/99_OAuth_Callback.py which does the code exchange
-         server-side and writes {prosper_auth_result: {email, name, verified}}
-         into localStorage.
-      4. Main app polls localStorage every 500ms via a JS component.
-      5. On result detected → call _handle_google_user() → st.rerun() → logged in.
+      Solution: JavaScript opens Google consent in a POPUP (window.open).
     """
     if not _is_google_configured():
         return False
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-    # Callback page URL — Streamlit multi-page apps use this path pattern
+    # Callback page URL — must match exactly what's registered in Google Cloud Console
     callback_url = base_url.rstrip("/") + "/OAuth_Callback"
 
     try:
         import urllib.parse
 
-        # ── Check if popup wrote result to localStorage ──────────────────────
-        # We use a hidden HTML component to read localStorage and signal back.
-        # Streamlit components can't directly read localStorage, so we use
-        # st.query_params as a relay: the callback page sets ?auth_done=1
-        # which triggers a rerun with the result in session_state.
         params = dict(st.query_params)
 
-        # Direct callback on main app URL (fallback if popup not supported)
+        # ── Direct callback on main app URL (fallback if popup not supported) ──
         if "code" in params and not st.session_state.get("_google_auth_done"):
             received_state = params.get("state", "")
             if not _verify_oauth_state(received_state):
@@ -419,25 +434,21 @@ def _show_google_signin() -> bool:
             code = params["code"]
             st.query_params.clear()
             g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-            # Try callback URL first (popup target), fallback to base_url
-            redirect_used = callback_url
+
+            # BUG-2 FIX: Single token exchange only — using callback_url (the registered URI).
+            # Previously retried with base_url which invalidated the code and caused
+            # Google's 'code already used' error. OAuth auth codes are single-use.
             token_resp = _req.post(
                 "https://oauth2.googleapis.com/token",
-                data={"client_id": g_cid, "client_secret": g_csec,
-                      "code": code, "grant_type": "authorization_code",
-                      "redirect_uri": redirect_used},
+                data={
+                    "client_id": g_cid,
+                    "client_secret": g_csec,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": callback_url,
+                },
                 timeout=10,
             )
-            if token_resp.status_code != 200:
-                # retry with base url as redirect
-                redirect_used = base_url
-                token_resp = _req.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={"client_id": g_cid, "client_secret": g_csec,
-                          "code": code, "grant_type": "authorization_code",
-                          "redirect_uri": redirect_used},
-                    timeout=10,
-                )
             if token_resp.status_code == 200:
                 access_token = token_resp.json().get("access_token", "")
                 if access_token:
@@ -449,7 +460,7 @@ def _show_google_signin() -> bool:
                     if ui_resp.status_code == 200:
                         st.session_state["_google_auth_done"] = True
                         return _handle_google_user(ui_resp.json())
-            _auth_log.warning("Google token exchange failed: %s", token_resp.status_code)
+            _auth_log.warning("Google token exchange failed: %s — %s", token_resp.status_code, token_resp.text[:200])
             st.error("Google sign-in failed. Please try again or use email login.")
             return False
 
@@ -474,14 +485,58 @@ def _show_google_signin() -> bool:
             "state": new_state,
         })
 
+        # ── Handle result relayed back via query params (popup flow) ──────────
+        # BUG-1 FIX: Use _verify_signed_token(token, email) instead of
+        # _verify_oauth_state(token). The callback page signs the EMAIL with HMAC,
+        # not a nonce. _verify_oauth_state() always returned False for these tokens.
+        if "_ga_email" in params and not st.session_state.get("_google_auth_done"):
+            email = params.get("_ga_email", "").strip().lower()
+            name = params.get("_ga_name", "")
+            ga_token = params.get("_ga_token", "")
+            st.query_params.clear()
+            if email:
+                if _verify_signed_token(ga_token, email):
+                    user_info = {"email": email, "name": name, "email_verified": True}
+                    st.session_state["_google_auth_done"] = True
+                    return _handle_google_user(user_info)
+                else:
+                    _auth_log.warning("Popup relay token verification failed for email: %s", email)
+                    st.error("Google sign-in could not be verified. Please try again.")
+                    return False
+
+        if "_ga_error" in params:
+            st.query_params.clear()
+            st.error("Google sign-in was cancelled or failed. Please try again.")
+            return False
+
         # ── Popup-based OAuth button ─────────────────────────────────────────
-        # Opens Google in a popup so main Streamlit session is preserved.
-        # The callback page writes the auth result to localStorage and closes.
-        # We poll localStorage and relay via query_params.
         popup_js = f"""
         <script>
         (function() {{
             var _prosperPollInterval = null;
+
+            function handleAuthResult(data) {{
+                if (data && data.verified && data.email) {{
+                    var params = new URLSearchParams({{
+                        _ga_email: data.email,
+                        _ga_name: data.name || '',
+                        _ga_token: data.token || '',
+                    }});
+                    window.location.href = window.location.pathname + '?' + params.toString();
+                }} else {{
+                    window.location.href = window.location.pathname + '?_ga_error=1';
+                }}
+            }}
+
+            // BUG-4 FIX: postMessage listener for Safari/private mode
+            // where localStorage may be blocked by ITP
+            window.addEventListener('message', function(event) {{
+                if (event.origin !== window.location.origin) return;
+                if (event.data && event.data.type === 'prosper_auth') {{
+                    if (_prosperPollInterval) clearInterval(_prosperPollInterval);
+                    handleAuthResult(event.data.payload);
+                }}
+            }});
 
             function openGoogleAuth() {{
                 var w = 500, h = 620;
@@ -507,35 +562,20 @@ def _show_google_signin() -> bool:
                         if (result) {{
                             localStorage.removeItem('prosper_auth_result');
                             clearInterval(_prosperPollInterval);
-                            // Relay via URL so Streamlit sees it on rerun
-                            var data = JSON.parse(result);
-                            if (data.verified && data.email) {{
-                                // Encode user info in query params for the main app
-                                var params = new URLSearchParams({{
-                                    _ga_email: data.email,
-                                    _ga_name: data.name || '',
-                                    _ga_token: data.token || '',
-                                }});
-                                window.location.href = window.location.pathname + '?' + params.toString();
-                            }} else {{
-                                // Auth failed
-                                window.location.href = window.location.pathname + '?_ga_error=1';
-                            }}
+                            handleAuthResult(JSON.parse(result));
                         }}
                         // Also check if popup was closed without completing
                         if (popup.closed) {{
                             clearInterval(_prosperPollInterval);
                         }}
-                    }} catch(e) {{ /* cross-origin or storage error, ignore */ }}
+                    }} catch(e) {{ /* cross-origin or storage error — postMessage handles this */ }}
                 }}, 600);
             }}
 
-            // Auto-attach to button after render
             document.addEventListener('DOMContentLoaded', function() {{
                 var btn = document.getElementById('prosper-google-btn');
                 if (btn) btn.addEventListener('click', openGoogleAuth);
             }});
-            // Also try immediately (Streamlit may have already loaded DOM)
             setTimeout(function() {{
                 var btn = document.getElementById('prosper-google-btn');
                 if (btn) btn.addEventListener('click', openGoogleAuth);
@@ -573,27 +613,6 @@ def _show_google_signin() -> bool:
             Continue with Google
         </button>
         """
-
-        # ── Handle result relayed back via query params ───────────────────────
-        if "_ga_email" in params and not st.session_state.get("_google_auth_done"):
-            email = params.get("_ga_email", "")
-            name = params.get("_ga_name", "")
-            ga_token = params.get("_ga_token", "")
-            st.query_params.clear()
-            if email:
-                # Verify the token is a valid HMAC-signed state (used as auth token)
-                if _verify_oauth_state(ga_token):
-                    user_info = {"email": email, "name": name, "email_verified": True}
-                    st.session_state["_google_auth_done"] = True
-                    return _handle_google_user(user_info)
-                else:
-                    st.error("Google sign-in could not be verified. Please try again.")
-                    return False
-
-        if "_ga_error" in params:
-            st.query_params.clear()
-            st.error("Google sign-in was cancelled or failed. Please try again.")
-            return False
 
         st.html(popup_js)
 
@@ -681,7 +700,7 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
 # LOGOUT
 # ─────────────────────────────────────────
 def do_logout():
-    """Clear ALL auth-related session state."""
+    """Clear ALL auth-related session state and stale query params."""
     _auth_keys = {
         "authentication_status", "username", "name", "logout",
         "user_id", "auth_method", "connected", "user_info",
@@ -710,6 +729,13 @@ def do_logout():
         except KeyError:
             pass
 
+    # BUG-3 FIX: Clear any stale _ga_* query params so re-login isn't
+    # accidentally pre-populated with the previous user's relay data
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
+
     st.session_state["authentication_status"] = None
     st.session_state["logout"] = True
 
@@ -725,6 +751,7 @@ def run_auth() -> Dict[str, Any]:
         "method": "disabled",
     }
 
+    # Clear render guard at start of each rerun (not before auth check)
     st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
