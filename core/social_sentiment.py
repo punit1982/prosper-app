@@ -7,12 +7,22 @@ Combines with news headline sentiment into a composite score with dynamic weight
 redistribution — empty sources have their weight redistributed proportionally.
 
 Reddit approach: uses the public *.json feed — no API key or OAuth required.
+
+Changes in v1.1:
+  - get_composite_sentiment() is now cached with @st.cache_data(ttl=3600) to
+    prevent hammering 4 external APIs on every Streamlit rerun. The cache is
+    keyed on (ticker, news_score) so different tickers always get fresh data.
+    TTL = 1 hour — sentiment doesn't change meaningfully faster than that.
+  - get_composite_sentiment_batch() calls the cached single-ticker function
+    so batch calls benefit from the cache automatically.
 """
 
 import requests
 import xml.etree.ElementTree as ET
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
+
+import streamlit as st
 
 _REDDIT_HEADERS = {
     "User-Agent": "prosper-sentiment/1.0 (public JSON feed)"
@@ -55,11 +65,10 @@ def get_stocktwits_sentiment(ticker: str) -> Dict:
                 })
 
         total = bulls + bears
-        # Normalize to -1..+1 range; require minimum sample (3 msgs) for confidence
         if total >= 3:
             score = round(max(-1.0, min(1.0, (bulls - bears) / total)), 2)
         elif total > 0:
-            score = round(max(-1.0, min(1.0, (bulls - bears) / total * 0.5)), 2)  # dampen thin data
+            score = round(max(-1.0, min(1.0, (bulls - bears) / total * 0.5)), 2)
         else:
             score = 0
 
@@ -82,9 +91,7 @@ def get_reddit_sentiment(ticker: str) -> Dict:
     No API key or OAuth required — hits /search.json directly.
     Returns: {score, mentions, top_posts, source}
     """
-    # Strip exchange suffix for cleaner Reddit search (e.g. "EMAAR.AE" → "EMAAR")
     base_ticker = ticker.split(".")[0] if "." in ticker else ticker
-    # Strip Twelve Data exchange format too (e.g. "EMAAR:DFM" → "EMAAR")
     if ":" in base_ticker:
         base_ticker = base_ticker.split(":")[0]
 
@@ -109,7 +116,6 @@ def get_reddit_sentiment(ticker: str) -> Dict:
             for p in posts_data[:5]
         ]
 
-        # Keyword sentiment analysis on post titles
         from core.data_engine import calculate_headline_sentiment
         score = calculate_headline_sentiment(titles)
 
@@ -128,8 +134,6 @@ def get_reddit_sentiment(ticker: str) -> Dict:
 def get_analyst_sentiment(ticker: str) -> Dict:
     """
     Derive sentiment from analyst buy/hold/sell recommendations.
-    Contrarian-adjusted: Score = (strongBuy*2 + buy*0.5 + hold*-0.5 + sell*-1.5 + strongSell*-2) / total
-    Normalized to -1..+1 range.
     """
     try:
         from core.data_engine import get_recommendations_summary
@@ -137,7 +141,7 @@ def get_analyst_sentiment(ticker: str) -> Dict:
         if not recs or not isinstance(recs, list) or len(recs) == 0:
             return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
 
-        latest = recs[0]  # Most recent period
+        latest = recs[0]
         strong_buy = latest.get("strongBuy", 0) or 0
         buy = latest.get("buy", 0) or 0
         hold = latest.get("hold", 0) or 0
@@ -148,33 +152,27 @@ def get_analyst_sentiment(ticker: str) -> Dict:
         if total == 0:
             return {"score": 0, "total_recs": 0, "breakdown": {}, "source": "Analyst Consensus"}
 
-        # FORTRESS-aligned contrarian scoring:
-        # Wall Street "Hold" is a soft sell (banking relationships prevent real downgrades).
-        # Near-unanimous consensus = crowded trade risk → dampen.
         raw_score = (strong_buy * 1.5 + buy * 0.8 + hold * -0.3 + sell * -1.2 + strong_sell * -2.0) / total
 
-        # Contrarian dampening — extreme consensus is historically a contrary indicator
         max_bucket = max(strong_buy, buy, hold, sell, strong_sell)
         consensus_pct = max_bucket / total if total > 0 else 0
         if consensus_pct > 0.80:
-            raw_score *= 0.6   # >80% agree → likely crowded, heavy dampen
+            raw_score *= 0.6
         elif consensus_pct > 0.60:
-            raw_score *= 0.8   # >60% agree → moderate dampen
+            raw_score *= 0.8
 
-        # Downgrade trend check — if available, penalize recent downgrades
         try:
             from core.data_engine import get_upgrade_downgrade
             ud = get_upgrade_downgrade(ticker)
             if ud and isinstance(ud, list) and len(ud) > 0:
-                recent = ud[:10]  # Last 10 changes
+                recent = ud[:10]
                 upgrades = sum(1 for x in recent if str(x.get("action", "")).lower() in ("upgrade", "up"))
                 downgrades = sum(1 for x in recent if str(x.get("action", "")).lower() in ("downgrade", "down"))
                 if downgrades > upgrades and downgrades >= 2:
-                    raw_score -= 0.15  # Downgrade trend penalty
+                    raw_score -= 0.15
         except Exception:
             pass
 
-        # Normalize to -1..+1
         score = round(max(-1.0, min(1.0, raw_score)), 2)
 
         return {
@@ -230,24 +228,26 @@ def get_google_news_sentiment(ticker: str) -> Dict:
 
 # ── Composite Score ──────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
     """
     Combine all sentiment sources into a weighted composite with dynamic
     weight redistribution.
 
+    Cached for 1 hour per (ticker, news_score) pair.
+    This prevents 4 external API calls on every Streamlit rerun — sentiment
+    data doesn't change meaningfully within an hour.
+
     Default weights:
-      - News headlines:   30%
-      - StockTwits:       15%
-      - Reddit:           10%
-      - Analyst Consensus: 20%
-      - Google News RSS:  25%
+      - News headlines:    25%
+      - StockTwits:        15%
+      - Reddit:            10%
+      - Analyst Consensus: 25%
+      - Google News RSS:   25%
 
     If a source returns empty data, its weight is redistributed proportionally
     to sources that DO have real data.
-
-    Returns dict with composite_score, per-source breakdown, and sources_active count.
     """
-    # Fetch all 4 sources in parallel (within this single ticker)
     from concurrent.futures import as_completed
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_st = pool.submit(get_stocktwits_sentiment, ticker)
@@ -272,16 +272,14 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
         except Exception:
             gn_data = {"score": 0, "headlines": 0, "source": "Google News RSS"}
 
-    # Default weights — analyst weight increased (now de-biased), news reduced (noisiest)
     sources = {
-        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},  # news always counted
+        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},
         "stocktwits":  {"score": st_data["score"],  "default_weight": 0.15, "has_data": st_data.get("messages", 0) > 0},
         "reddit":      {"score": rd_data["score"],  "default_weight": 0.10, "has_data": rd_data.get("mentions", 0) > 0},
         "analyst":     {"score": an_data["score"],   "default_weight": 0.25, "has_data": an_data.get("total_recs", 0) > 0},
         "google_news": {"score": gn_data["score"],  "default_weight": 0.25, "has_data": gn_data.get("headlines", 0) > 0},
     }
 
-    # Calculate redistributed weights
     active_weight = sum(s["default_weight"] for s in sources.values() if s["has_data"])
     sources_active = sum(1 for s in sources.values() if s["has_data"])
 
@@ -290,7 +288,7 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
     if active_weight > 0:
         for name, info in sources.items():
             if info["has_data"]:
-                actual_w = info["default_weight"] / active_weight  # redistribute proportionally
+                actual_w = info["default_weight"] / active_weight
                 actual_weights[name] = actual_w
                 composite += info["score"] * actual_w
             else:
@@ -317,6 +315,8 @@ def get_composite_sentiment_batch(tickers_with_news: List[tuple]) -> Dict[str, D
     """
     Fetch composite sentiment for multiple tickers in parallel.
     Input: [(ticker, news_score), ...]
+    Calls the cached get_composite_sentiment() per ticker so the cache is
+    shared between single-ticker and batch calls.
     """
     results = {}
 

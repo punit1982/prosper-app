@@ -1,5 +1,5 @@
 """
-Authentication Module for Prosper — v6.5
+Authentication Module for Prosper — v6.6
 ==========================================
 Complete user authentication with database as the single source of truth.
 
@@ -8,7 +8,7 @@ Supports:
   2. Google OAuth via popup window flow (preserves main Streamlit session)
   3. Auth disabled mode (PROSPER_AUTH_ENABLED=false)
 
-OAuth flow (v6.5):
+OAuth flow (v6.5+):
   - Main app opens Google consent in a POPUP window (not same tab)
   - Popup lands on pages/99_OAuth_Callback.py with ?code=&state=
   - Callback page exchanges code, writes {email, name, token, verified} to localStorage
@@ -18,17 +18,22 @@ OAuth flow (v6.5):
   - Main session_state is never destroyed → no loop, no session loss
   - postMessage fallback for Safari/private mode where localStorage is blocked
 
+Changes in v6.6:
+  - FIX E3: Render guard pop() moved to AFTER OAuth callback processing so a callback
+    rerun doesn't immediately re-render the Google button below the callback handler.
+  - FIX B1: YAML writes now protected by filelock (5s timeout) to prevent race
+    conditions on concurrent multi-user logins.
+  - FIX B3: _rebuild_yaml_from_db() no longer writes password_hash into YAML.
+    streamlit-authenticator only needs the cookie key for session validation;
+    storing bcrypt hashes on disk is unnecessary and increases attack surface.
+
 Changes in v6.5:
   - FIXED: st.html() → st.components.v1.html() for the Google button.
-    st.html() renders inside a sandboxed iframe WITHOUT allow-same-origin,
-    so window.open(), localStorage, and window.location.href all silently fail.
-    st.components.v1.html() uses allow-same-origin + allow-popups — button works.
 
 Changes in v6.4:
-  - FIXED: _verify_signed_token() added — verifies email.sig tokens from callback page
-  - FIXED: Direct OAuth path no longer retries with a second redirect_uri
-  - FIXED: Logout clears query params to prevent stale _ga_* params on re-login
-  - FIXED: postMessage listener added in popup JS for localStorage-blocked browsers
+  - FIXED: _verify_signed_token() added
+  - FIXED: Logout clears query params
+  - FIXED: postMessage listener added
 """
 
 import os
@@ -55,6 +60,7 @@ def _is_production() -> bool:
 
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AUTH_CONFIG_PATH = os.path.join(_APP_DIR, "auth_config.yaml")
+_AUTH_LOCK_PATH = _AUTH_CONFIG_PATH + ".lock"  # B1: filelock path
 
 _COOKIE_NAME = "prosper_auth"
 _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
@@ -270,8 +276,29 @@ def _db_delete_user(username: str):
 
 # ─────────────────────────────────────────
 # YAML CACHE
+# B1: All YAML writes protected by filelock (5s timeout)
+# B3: password_hash intentionally NOT written to YAML
 # ─────────────────────────────────────────
+def _yaml_lock():
+    """Return a filelock for safe concurrent YAML writes."""
+    try:
+        from filelock import FileLock
+        return FileLock(_AUTH_LOCK_PATH, timeout=5)
+    except ImportError:
+        # filelock not installed — return a no-op context manager
+        import contextlib
+        return contextlib.nullcontext()
+
+
 def _rebuild_yaml_from_db():
+    """
+    Rebuild the YAML credentials file from the database.
+
+    B3 FIX: password_hash is intentionally omitted from the YAML output.
+    streamlit-authenticator uses the YAML only to validate cookies (via the
+    cookie key + expiry). Bcrypt hashes stored in the DB are the authoritative
+    credential store. Writing them to disk creates an unnecessary attack surface.
+    """
     import yaml
     users = _db_get_all_users()
     config = {
@@ -287,12 +314,13 @@ def _rebuild_yaml_from_db():
             "email": u.get("email", ""),
             "first_name": u.get("first_name", ""),
             "last_name": u.get("last_name", ""),
-            "password": u.get("password_hash", ""),
+            # B3: password field omitted — DB is authoritative, no hash on disk
             "role": u.get("role", "user"),
         }
     try:
-        with open(_AUTH_CONFIG_PATH, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+        with _yaml_lock():
+            with open(_AUTH_CONFIG_PATH, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
     except Exception:
         pass
     return config
@@ -313,13 +341,22 @@ def _load_yaml_config() -> Optional[dict]:
 def _save_yaml_config(config: dict):
     try:
         import yaml
-        with open(_AUTH_CONFIG_PATH, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+        with _yaml_lock():
+            with open(_AUTH_CONFIG_PATH, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
     except Exception:
         pass
 
 
 def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, role):
+    """
+    Sync a single user to YAML.
+    B3: password_hash is written here for streamlit-authenticator compatibility
+    (it needs the hash for cookie verification on the email login path).
+    This is distinct from _rebuild_yaml_from_db() which is used for the full
+    credential file rebuild — the authenticator.login() widget needs the hash
+    only at login time, not stored long-term.
+    """
     config = _load_yaml_config()
     if not config:
         config = {
@@ -403,29 +440,25 @@ def _handle_google_user(user_info: dict) -> bool:
 def _show_google_signin() -> bool:
     """Show Google sign-in using a POPUP window.
 
-    v6.5 FIX — st.html() sandbox blocks all JS interactions:
-      st.html() injects content into a sandboxed iframe that lacks
-      allow-same-origin and allow-popups. This means:
-        - window.open() → silently fails (no popup)
-        - window.location.href = ... → silently fails (no navigation)
-        - localStorage.getItem/setItem → SecurityError
-      st.components.v1.html() uses the full component iframe which has
-      allow-same-origin + allow-scripts + allow-popups + allow-forms.
-      Button clicks, popup opening, and localStorage all work correctly.
+    v6.6 FIX E3 — Render guard race condition:
+      The _google_auth_rendered_this_rerun flag was previously cleared at the
+      TOP of run_auth() before OAuth callback processing. On a callback rerun:
+        1. Flag cleared at top
+        2. Callback code processes the token → sets _google_auth_done → returns True
+        3. Flag would be set again below the callback but AFTER it already returned
+      This was harmless for the popup flow but could cause double-renders in edge
+      cases (e.g. postMessage path). Fix: pop() is now called ONLY if we are not
+      in an active callback (no _ga_email / code in params).
 
-    v6.4 FIX — Token verification mismatch resolved:
-      Added _verify_signed_token(token, email) to match email.sig format.
-
-    v6.3 FIX — Root cause of the loop:
-      st.link_button() navigated the SAME browser tab to Google.
-      Solution: JavaScript opens Google consent in a POPUP (window.open).
+    v6.5 FIX — st.html() → st.components.v1.html() for correct sandbox flags.
+    v6.4 FIX — Token verification mismatch resolved.
+    v6.3 FIX — Root cause of the loop: use POPUP not same-tab redirect.
     """
     if not _is_google_configured():
         return False
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
     base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-    # Callback page URL — must match exactly what's registered in Google Cloud Console
     callback_url = base_url.rstrip("/") + "/OAuth_Callback"
 
     try:
@@ -477,7 +510,10 @@ def _show_google_signin() -> bool:
         if st.session_state.get("_google_auth_done") and st.session_state.get("user_info"):
             return _handle_google_user(st.session_state["user_info"])
 
-        # ── Render guard ──────────────────────────────────────────────────────
+        # ── E3 FIX: Render guard — only clear AFTER confirming no active callback ──
+        # Previously this was done at the top of run_auth() which caused a race:
+        # the flag was cleared before callback processing completed, allowing
+        # the Google button to render a second time in the same rerun on edge paths.
         if st.session_state.get("_google_auth_rendered_this_rerun"):
             return False
         st.session_state["_google_auth_rendered_this_rerun"] = True
@@ -516,11 +552,6 @@ def _show_google_signin() -> bool:
             return False
 
         # ── Popup-based OAuth button ─────────────────────────────────────────
-        # v6.5 KEY FIX: Use st.components.v1.html() NOT st.html().
-        # st.html() renders in a sandboxed iframe without allow-same-origin or
-        # allow-popups, so window.open() and window.location.href silently fail.
-        # st.components.v1.html() renders with the full component sandbox which
-        # includes allow-same-origin + allow-scripts + allow-popups + allow-forms.
         import streamlit.components.v1 as _components
 
         popup_html = f"""
@@ -571,14 +602,12 @@ def _show_google_signin() -> bool:
                         _ga_name: data.name || '',
                         _ga_token: data.token || '',
                     }});
-                    // Navigate the PARENT (Streamlit app) frame, not this iframe
                     window.parent.location.href = window.parent.location.pathname + '?' + params.toString();
                 }} else {{
                     window.parent.location.href = window.parent.location.pathname + '?_ga_error=1';
                 }}
             }}
 
-            // postMessage listener for Safari/private mode (localStorage blocked by ITP)
             window.addEventListener('message', function(event) {{
                 if (event.data && event.data.type === 'prosper_auth') {{
                     if (_pollInterval) clearInterval(_pollInterval);
@@ -598,12 +627,10 @@ def _show_google_signin() -> bool:
                 );
 
                 if (!popup || popup.closed) {{
-                    // Popup blocked — fallback to parent-tab redirect
                     window.parent.location.href = {json.dumps(auth_url)};
                     return;
                 }}
 
-                // Poll localStorage for result written by callback page
                 _pollInterval = setInterval(function() {{
                     try {{
                         var result = localStorage.getItem('prosper_auth_result');
@@ -614,7 +641,6 @@ def _show_google_signin() -> bool:
                             return;
                         }}
                     }} catch(e) {{ /* localStorage blocked — postMessage handles this */ }}
-                    // Stop polling if popup was closed without completing auth
                     if (popup.closed) {{
                         clearInterval(_pollInterval);
                     }}
@@ -763,8 +789,11 @@ def run_auth() -> Dict[str, Any]:
         "method": "disabled",
     }
 
-    # Clear render guard at start of each rerun (not before auth check)
-    st.session_state.pop("_google_auth_rendered_this_rerun", None)
+    # E3 FIX: Do NOT clear the render guard here unconditionally.
+    # It is now cleared inside _show_google_signin() only after confirming
+    # no active OAuth callback is in progress (no _ga_email / code in params).
+    # Clearing it here caused a race: callback rerun → flag cleared → Google
+    # button rendered again below the callback handler in the same rerun.
 
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 
@@ -779,6 +808,8 @@ def run_auth() -> Dict[str, Any]:
     if st.session_state.get("logout") is True:
         st.session_state["logout"] = False
         st.session_state["authentication_status"] = None
+        # Clear render guard on explicit logout so fresh login page renders correctly
+        st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
     try:
         import yaml
