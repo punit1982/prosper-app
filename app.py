@@ -1,7 +1,7 @@
 """
 Prosper — AI-Native Investment Operating System
 Main entrypoint: page config, DB init, authentication, and navigation.
-v6.3 — Fix: popup OAuth flow + aggressive sidebar hide before login.
+v6.5 — Fix: init_db() deferred after auth so login page renders instantly.
 """
 
 import os
@@ -10,16 +10,6 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
-
-from core.database import (
-    init_db,
-    get_all_holdings,
-    save_nav_snapshot,
-    get_nav_snapshot_exists_today,
-    get_total_realized_pnl,
-)
-from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
-from core.database import get_or_create_user_portfolios
 
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 load_dotenv(_env_path, override=True)
@@ -34,16 +24,10 @@ st.set_page_config(
 
 # ── SIDEBAR HIDE — injected immediately after set_page_config ────────────────
 # Must happen before ANYTHING else renders (DB init, auth, imports).
-# We check auth status from session_state (no DB call) to decide whether to hide.
-# st.html() is used instead of st.markdown() because it bypasses the component
-# queue and gets injected closer to the page HEAD in Streamlit's render pipeline.
 from core.auth import SIDEBAR_HIDE_CSS as _SIDEBAR_HIDE_CSS
 _is_authed_early = st.session_state.get("authentication_status") is True
 if not _is_authed_early:
     st.html(_SIDEBAR_HIDE_CSS)
-
-# ── Database Init ────────────────────────────────────────────────────────────
-init_db()
 
 # ── Global Styling ───────────────────────────────────────────────────────────
 st.markdown("""
@@ -107,6 +91,9 @@ h1, h2, h3, h4, h5, h6 {
 """, unsafe_allow_html=True)
 
 # ── Navigation & Auth ────────────────────────────────────────────────────────
+# v6.5: run_auth() BEFORE init_db() so the login page renders instantly.
+# init_db() can take 2-4s on cold start — deferring it means the login UI
+# is visible immediately rather than after a blank loading screen.
 from core.auth import run_auth as _run_auth
 
 _is_authed = st.session_state.get("authentication_status") is True
@@ -120,6 +107,19 @@ if not _is_authed:
     if st.session_state.get("authentication_status") is True:
         st.rerun()
     st.stop()
+
+# ── Database Init (deferred — only runs after login) ─────────────────────────
+from core.database import (
+    init_db,
+    get_all_holdings,
+    save_nav_snapshot,
+    get_nav_snapshot_exists_today,
+    get_total_realized_pnl,
+)
+from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
+from core.database import get_or_create_user_portfolios
+
+init_db()
 
 # ── Authenticated ─────────────────────────────────────────────────────────────
 _run_auth()

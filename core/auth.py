@@ -1,5 +1,5 @@
 """
-Authentication Module for Prosper — v6.4
+Authentication Module for Prosper — v6.5
 ==========================================
 Complete user authentication with database as the single source of truth.
 
@@ -8,7 +8,7 @@ Supports:
   2. Google OAuth via popup window flow (preserves main Streamlit session)
   3. Auth disabled mode (PROSPER_AUTH_ENABLED=false)
 
-OAuth flow (v6.4):
+OAuth flow (v6.5):
   - Main app opens Google consent in a POPUP window (not same tab)
   - Popup lands on pages/99_OAuth_Callback.py with ?code=&state=
   - Callback page exchanges code, writes {email, name, token, verified} to localStorage
@@ -18,11 +18,15 @@ OAuth flow (v6.4):
   - Main session_state is never destroyed → no loop, no session loss
   - postMessage fallback for Safari/private mode where localStorage is blocked
 
+Changes in v6.5:
+  - FIXED: st.html() → st.components.v1.html() for the Google button.
+    st.html() renders inside a sandboxed iframe WITHOUT allow-same-origin,
+    so window.open(), localStorage, and window.location.href all silently fail.
+    st.components.v1.html() uses allow-same-origin + allow-popups — button works.
+
 Changes in v6.4:
   - FIXED: _verify_signed_token() added — verifies email.sig tokens from callback page
-    Previously _verify_oauth_state() (nonce.sig format) was used, which always failed
   - FIXED: Direct OAuth path no longer retries with a second redirect_uri
-    The retry invalidated the auth code → 'code already used' Google error
   - FIXED: Logout clears query params to prevent stale _ga_* params on re-login
   - FIXED: postMessage listener added in popup JS for localStorage-blocked browsers
 """
@@ -399,10 +403,18 @@ def _handle_google_user(user_info: dict) -> bool:
 def _show_google_signin() -> bool:
     """Show Google sign-in using a POPUP window.
 
+    v6.5 FIX — st.html() sandbox blocks all JS interactions:
+      st.html() injects content into a sandboxed iframe that lacks
+      allow-same-origin and allow-popups. This means:
+        - window.open() → silently fails (no popup)
+        - window.location.href = ... → silently fails (no navigation)
+        - localStorage.getItem/setItem → SecurityError
+      st.components.v1.html() uses the full component iframe which has
+      allow-same-origin + allow-scripts + allow-popups + allow-forms.
+      Button clicks, popup opening, and localStorage all work correctly.
+
     v6.4 FIX — Token verification mismatch resolved:
-      99_OAuth_Callback.py produces tokens in email.sig format via _make_signed_token().
-      auth.py was verifying with _verify_oauth_state() which expects nonce.sig format.
-      Added _verify_signed_token(token, email) to correctly verify email.sig tokens.
+      Added _verify_signed_token(token, email) to match email.sig format.
 
     v6.3 FIX — Root cause of the loop:
       st.link_button() navigated the SAME browser tab to Google.
@@ -435,9 +447,6 @@ def _show_google_signin() -> bool:
             st.query_params.clear()
             g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
-            # BUG-2 FIX: Single token exchange only — using callback_url (the registered URI).
-            # Previously retried with base_url which invalidated the code and caused
-            # Google's 'code already used' error. OAuth auth codes are single-use.
             token_resp = _req.post(
                 "https://oauth2.googleapis.com/token",
                 data={
@@ -486,9 +495,6 @@ def _show_google_signin() -> bool:
         })
 
         # ── Handle result relayed back via query params (popup flow) ──────────
-        # BUG-1 FIX: Use _verify_signed_token(token, email) instead of
-        # _verify_oauth_state(token). The callback page signs the EMAIL with HMAC,
-        # not a nonce. _verify_oauth_state() always returned False for these tokens.
         if "_ga_email" in params and not st.session_state.get("_google_auth_done"):
             email = params.get("_ga_email", "").strip().lower()
             name = params.get("_ga_name", "")
@@ -510,79 +516,20 @@ def _show_google_signin() -> bool:
             return False
 
         # ── Popup-based OAuth button ─────────────────────────────────────────
-        popup_js = f"""
-        <script>
-        (function() {{
-            var _prosperPollInterval = null;
+        # v6.5 KEY FIX: Use st.components.v1.html() NOT st.html().
+        # st.html() renders in a sandboxed iframe without allow-same-origin or
+        # allow-popups, so window.open() and window.location.href silently fail.
+        # st.components.v1.html() renders with the full component sandbox which
+        # includes allow-same-origin + allow-scripts + allow-popups + allow-forms.
+        import streamlit.components.v1 as _components
 
-            function handleAuthResult(data) {{
-                if (data && data.verified && data.email) {{
-                    var params = new URLSearchParams({{
-                        _ga_email: data.email,
-                        _ga_name: data.name || '',
-                        _ga_token: data.token || '',
-                    }});
-                    window.location.href = window.location.pathname + '?' + params.toString();
-                }} else {{
-                    window.location.href = window.location.pathname + '?_ga_error=1';
-                }}
-            }}
-
-            // BUG-4 FIX: postMessage listener for Safari/private mode
-            // where localStorage may be blocked by ITP
-            window.addEventListener('message', function(event) {{
-                if (event.origin !== window.location.origin) return;
-                if (event.data && event.data.type === 'prosper_auth') {{
-                    if (_prosperPollInterval) clearInterval(_prosperPollInterval);
-                    handleAuthResult(event.data.payload);
-                }}
-            }});
-
-            function openGoogleAuth() {{
-                var w = 500, h = 620;
-                var left = (screen.width - w) / 2;
-                var top = (screen.height - h) / 2;
-                var popup = window.open(
-                    {json.dumps(auth_url)},
-                    'prosper_google_auth',
-                    'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
-                    ',scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no'
-                );
-
-                if (!popup || popup.closed) {{
-                    // Popup blocked — fallback to same-tab redirect
-                    window.location.href = {json.dumps(auth_url)};
-                    return;
-                }}
-
-                // Poll localStorage for result written by callback page
-                _prosperPollInterval = setInterval(function() {{
-                    try {{
-                        var result = localStorage.getItem('prosper_auth_result');
-                        if (result) {{
-                            localStorage.removeItem('prosper_auth_result');
-                            clearInterval(_prosperPollInterval);
-                            handleAuthResult(JSON.parse(result));
-                        }}
-                        // Also check if popup was closed without completing
-                        if (popup.closed) {{
-                            clearInterval(_prosperPollInterval);
-                        }}
-                    }} catch(e) {{ /* cross-origin or storage error — postMessage handles this */ }}
-                }}, 600);
-            }}
-
-            document.addEventListener('DOMContentLoaded', function() {{
-                var btn = document.getElementById('prosper-google-btn');
-                if (btn) btn.addEventListener('click', openGoogleAuth);
-            }});
-            setTimeout(function() {{
-                var btn = document.getElementById('prosper-google-btn');
-                if (btn) btn.addEventListener('click', openGoogleAuth);
-            }}, 100);
-        }})();
-        </script>
+        popup_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
         <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ background: transparent; }}
         #prosper-google-btn {{
             display: flex;
             align-items: center;
@@ -599,7 +546,6 @@ def _show_google_signin() -> bool:
             cursor: pointer;
             font-family: 'Google Sans', Roboto, Arial, sans-serif;
             transition: background 0.2s, box-shadow 0.2s;
-            margin: 0;
             letter-spacing: 0.2px;
         }}
         #prosper-google-btn:hover {{
@@ -608,13 +554,81 @@ def _show_google_signin() -> bool:
         }}
         #prosper-google-btn img {{ width: 18px; height: 18px; }}
         </style>
+        </head>
+        <body>
         <button id="prosper-google-btn" type="button">
             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
             Continue with Google
         </button>
+        <script>
+        (function() {{
+            var _pollInterval = null;
+
+            function handleAuthResult(data) {{
+                if (data && data.verified && data.email) {{
+                    var params = new URLSearchParams({{
+                        _ga_email: data.email,
+                        _ga_name: data.name || '',
+                        _ga_token: data.token || '',
+                    }});
+                    // Navigate the PARENT (Streamlit app) frame, not this iframe
+                    window.parent.location.href = window.parent.location.pathname + '?' + params.toString();
+                }} else {{
+                    window.parent.location.href = window.parent.location.pathname + '?_ga_error=1';
+                }}
+            }}
+
+            // postMessage listener for Safari/private mode (localStorage blocked by ITP)
+            window.addEventListener('message', function(event) {{
+                if (event.data && event.data.type === 'prosper_auth') {{
+                    if (_pollInterval) clearInterval(_pollInterval);
+                    handleAuthResult(event.data.payload);
+                }}
+            }});
+
+            function openGoogleAuth() {{
+                var w = 500, h = 620;
+                var left = Math.round((screen.width - w) / 2);
+                var top = Math.round((screen.height - h) / 2);
+                var popup = window.open(
+                    {json.dumps(auth_url)},
+                    'prosper_google_auth',
+                    'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
+                    ',scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no'
+                );
+
+                if (!popup || popup.closed) {{
+                    // Popup blocked — fallback to parent-tab redirect
+                    window.parent.location.href = {json.dumps(auth_url)};
+                    return;
+                }}
+
+                // Poll localStorage for result written by callback page
+                _pollInterval = setInterval(function() {{
+                    try {{
+                        var result = localStorage.getItem('prosper_auth_result');
+                        if (result) {{
+                            localStorage.removeItem('prosper_auth_result');
+                            clearInterval(_pollInterval);
+                            handleAuthResult(JSON.parse(result));
+                            return;
+                        }}
+                    }} catch(e) {{ /* localStorage blocked — postMessage handles this */ }}
+                    // Stop polling if popup was closed without completing auth
+                    if (popup.closed) {{
+                        clearInterval(_pollInterval);
+                    }}
+                }}, 500);
+            }}
+
+            document.getElementById('prosper-google-btn').addEventListener('click', openGoogleAuth);
+        }})();
+        </script>
+        </body>
+        </html>
         """
 
-        st.html(popup_js)
+        _components.html(popup_html, height=52, scrolling=False)
 
     except Exception as google_err:
         _auth_log.warning("Google sign-in error: %s", google_err)
@@ -729,8 +743,6 @@ def do_logout():
         except KeyError:
             pass
 
-    # BUG-3 FIX: Clear any stale _ga_* query params so re-login isn't
-    # accidentally pre-populated with the previous user's relay data
     try:
         st.query_params.clear()
     except Exception:

@@ -17,6 +17,13 @@ The redirect_uri registered in Google Console must be:
 IMPORTANT: Also keep the base URL registered:
   https://prosper-gzlf.onrender.com
 for fallback direct-tab OAuth.
+
+v6.5 FIX:
+  All st.html() calls replaced with st.components.v1.html().
+  st.html() renders in a sandboxed iframe WITHOUT allow-same-origin,
+  so localStorage.setItem() throws SecurityError and window.close() silently
+  fails — the popup stays open forever and the main window never gets the
+  auth result. st.components.v1.html() has the correct sandbox flags.
 """
 import os
 import json
@@ -25,6 +32,7 @@ import hmac
 import secrets as _secrets
 
 import streamlit as st
+import streamlit.components.v1 as _components
 
 st.set_page_config(
     page_title="Prosper — Signing in...",
@@ -50,7 +58,6 @@ header, footer { display: none !important; }
 # ── Load signing key (same as auth.py) ───────────────────────────────────────
 _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
 if not _COOKIE_KEY:
-    # Dev mode — use a placeholder (won't verify, but won't crash)
     _COOKIE_KEY = "dev-placeholder"
 _OAUTH_SIGNING_KEY = _COOKIE_KEY.encode()
 
@@ -69,6 +76,38 @@ def _make_signed_token(email: str) -> str:
     return f"{email}.{sig}"
 
 
+def _close_popup_html(result_json: str, delay_ms: int = 800) -> str:
+    """Return a full HTML page that writes to localStorage and closes the popup.
+    Uses st.components.v1.html() — NOT st.html() — so localStorage works.
+    """
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><style>body{{margin:0;padding:0;background:transparent;}}</style></head>
+    <body>
+    <script>
+    (function() {{
+        var result = {result_json};
+        try {{
+            localStorage.setItem('prosper_auth_result', JSON.stringify(result));
+        }} catch(e) {{
+            // localStorage blocked (Safari ITP) — relay via postMessage to opener
+            if (window.opener) {{
+                window.opener.postMessage({{ type: 'prosper_auth', payload: result }}, '*');
+            }}
+        }}
+        setTimeout(function() {{
+            try {{ window.close(); }} catch(e) {{}}
+            // If window.close() blocked, redirect to app root
+            setTimeout(function() {{ window.location.href = '/'; }}, 500);
+        }}, {delay_ms});
+    }})();
+    </script>
+    </body>
+    </html>
+    """
+
+
 params = dict(st.query_params)
 code = params.get("code", "")
 state = params.get("state", "")
@@ -80,7 +119,6 @@ base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
 callback_url = base_url.rstrip("/") + "/OAuth_Callback"
 
 if error:
-    # User cancelled or Google error
     st.markdown("""
     <div style='text-align:center;padding:2rem'>
         <div style='font-size:2rem'>❌</div>
@@ -88,12 +126,11 @@ if error:
         <p style='color:#888'>Closing this window...</p>
     </div>
     """, unsafe_allow_html=True)
-    st.html("""
-    <script>
-    try { localStorage.setItem('prosper_auth_result', JSON.stringify({verified: false, error: 'cancelled'})); } catch(e) {}
-    setTimeout(function() { window.close(); }, 800);
-    </script>
-    """)
+    _components.html(
+        _close_popup_html(json.dumps({"verified": False, "error": "cancelled"})),
+        height=0,
+        scrolling=False,
+    )
     st.stop()
 
 elif code and state:
@@ -105,12 +142,11 @@ elif code and state:
             <p style='color:#888'>The request could not be verified. Please try again.</p>
         </div>
         """, unsafe_allow_html=True)
-        st.html("""
-        <script>
-        try { localStorage.setItem('prosper_auth_result', JSON.stringify({verified: false, error: 'hmac_fail'})); } catch(e) {}
-        setTimeout(function() { window.close(); }, 1500);
-        </script>
-        """)
+        _components.html(
+            _close_popup_html(json.dumps({"verified": False, "error": "hmac_fail"}), delay_ms=1500),
+            height=0,
+            scrolling=False,
+        )
         st.stop()
 
     # Exchange code for token
@@ -152,14 +188,13 @@ elif code and state:
                     verified = user_info.get("email_verified") is True
 
                     if email and verified:
-                        # Create a signed token so main window can verify this relay
                         auth_token = _make_signed_token(email)
-                        result_json = json.dumps({
+                        result_payload = {
                             "verified": True,
                             "email": email,
                             "name": name,
                             "token": auth_token,
-                        })
+                        }
                         st.markdown("""
                         <div style='text-align:center;padding:3rem'>
                             <div style='font-size:2.5rem'>✅</div>
@@ -167,25 +202,14 @@ elif code and state:
                             <p style='color:#888'>Closing this window...</p>
                         </div>
                         """, unsafe_allow_html=True)
-                        st.html(f"""
-                        <script>
-                        try {{
-                            localStorage.setItem('prosper_auth_result', {json.dumps(result_json)});
-                        }} catch(e) {{
-                            // localStorage blocked — relay via opener postMessage
-                            if (window.opener) {{
-                                window.opener.postMessage({{
-                                    type: 'prosper_auth',
-                                    payload: {result_json}
-                                }}, window.location.origin);
-                            }}
-                        }}
-                        setTimeout(function() {{ window.close(); }}, 1000);
-                        </script>
-                        """)
+                        # v6.5 FIX: st.components.v1.html() — localStorage works here
+                        _components.html(
+                            _close_popup_html(json.dumps(result_payload), delay_ms=800),
+                            height=0,
+                            scrolling=False,
+                        )
                         st.stop()
 
-        # Exchange failed
         err_detail = token_resp.text[:200] if token_resp.status_code != 200 else "No access token returned"
         st.markdown(f"""
         <div style='text-align:center;padding:2rem'>
@@ -195,24 +219,21 @@ elif code and state:
             <small>{err_detail}</small></p>
         </div>
         """, unsafe_allow_html=True)
-        st.html("""
-        <script>
-        try { localStorage.setItem('prosper_auth_result', JSON.stringify({verified: false, error: 'token_exchange_failed'})); } catch(e) {}
-        setTimeout(function() { window.close(); }, 2500);
-        </script>
-        """)
+        _components.html(
+            _close_popup_html(json.dumps({"verified": False, "error": "token_exchange_failed"}), delay_ms=2500),
+            height=0,
+            scrolling=False,
+        )
 
     except Exception as exc:
         st.error(f"Authentication error: {exc}")
-        st.html("""
-        <script>
-        try { localStorage.setItem('prosper_auth_result', JSON.stringify({verified: false, error: 'exception'})); } catch(e) {}
-        setTimeout(function() { window.close(); }, 2500);
-        </script>
-        """)
+        _components.html(
+            _close_popup_html(json.dumps({"verified": False, "error": "exception"}), delay_ms=2500),
+            height=0,
+            scrolling=False,
+        )
 
 else:
-    # No code or state — direct navigation to this page
     st.markdown("""
     <div style='text-align:center;padding:3rem'>
         <h2>Prosper</h2>
