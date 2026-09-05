@@ -118,8 +118,12 @@ error = params.get("error", "")
 
 g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
 g_csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
-base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-callback_url = base_url.rstrip("/") + "/OAuth_Callback"
+try:
+    from core.auth import google_callback_url
+    callback_url = google_callback_url()
+except Exception:
+    base_url = (os.getenv("GOOGLE_REDIRECT_URI", "") or "https://prosper-gzlf.onrender.com").rstrip("/")
+    callback_url = base_url if base_url.lower().endswith("/oauth_callback") else base_url + "/OAuth_Callback"
 
 if error:
     st.markdown("""

@@ -316,12 +316,17 @@ def _rebuild_yaml_from_db():
     for u in users:
         if not u.get("username"):
             continue
+        _full_name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or u["username"]
         entry = {
             "email": u.get("email", ""),
             "first_name": u.get("first_name", ""),
             "last_name": u.get("last_name", ""),
+            # streamlit-authenticator 0.3.x reads `name`; 0.4.x reads first_name/last_name.
+            # Provide both so the pinned production version (0.3.3) doesn't KeyError on login.
+            "name": _full_name,
             "password": u.get("password_hash") or "",
             "role": u.get("role", "user"),
+            "roles": [u.get("role", "user")],
         }
         config["credentials"]["usernames"][u["username"]] = entry
         # v7.0.1: let people sign in with their EMAIL as well as the derived username
@@ -392,8 +397,10 @@ def _sync_user_to_yaml(username, email, first_name, last_name, password_hash, ro
         "email": email,
         "first_name": first_name,
         "last_name": last_name,
+        "name": f"{first_name or ''} {last_name or ''}".strip() or username,
         "password": password_hash,
         "role": role,
+        "roles": [role],
     }
     _save_yaml_config(config)
     return config
@@ -408,6 +415,22 @@ def _build_google_creds_file():
 
 def _is_google_configured() -> bool:
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def google_callback_url() -> str:
+    """The redirect_uri sent to Google — MUST match an "Authorized redirect URI" in
+    Google Cloud Console exactly.
+
+    GOOGLE_REDIRECT_URI may be given either as the site root
+    (https://prosper-gzlf.onrender.com) or as the full callback URL
+    (https://prosper-gzlf.onrender.com/OAuth_Callback). Both now produce the same
+    result — previously the full form was doubled to …/OAuth_Callback/OAuth_Callback,
+    which Google rejects with `redirect_uri_mismatch`.
+    """
+    base = (os.getenv("GOOGLE_REDIRECT_URI", "") or "https://prosper-gzlf.onrender.com").strip().rstrip("/")
+    if base.lower().endswith("/oauth_callback"):
+        return base
+    return base + "/OAuth_Callback"
 
 
 def _unique_username_from_email(email: str) -> str:
@@ -483,8 +506,7 @@ def _show_google_signin() -> bool:
         return False
 
     g_cid = os.getenv("GOOGLE_CLIENT_ID", "")
-    base_url = os.getenv("GOOGLE_REDIRECT_URI", "https://prosper-gzlf.onrender.com")
-    callback_url = base_url.rstrip("/") + "/OAuth_Callback"
+    callback_url = google_callback_url()
 
     try:
         import urllib.parse
