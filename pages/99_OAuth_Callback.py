@@ -87,12 +87,33 @@ def _make_signed_token(email: str) -> str:
 def _close_popup_html(result_json: str, delay_ms: int = 800) -> str:
     """Return a full HTML page that writes to localStorage and closes the popup.
     Uses st.components.v1.html() — NOT st.html() — so localStorage works.
+
+    Chrome/Firefox/Safari all refuse window.close() on a window that has since
+    navigated cross-origin (through accounts.google.com and back) unless the
+    call happens inside a direct user gesture — a timer-triggered close is
+    silently blocked with no JS-visible error. Previously the fallback for
+    that case redirected the orphaned popup to '/', which reloaded a second
+    full copy of Prosper inside it — confusing ("why do I have two windows").
+    Now the fallback shows a plain "you can close this" message with a button;
+    clicking it IS a user gesture, so window.close() succeeds there far more
+    often than the automatic attempt does.
     """
     return f"""
     <!DOCTYPE html>
     <html>
-    <head><style>body{{margin:0;padding:0;background:transparent;}}</style></head>
+    <head><style>
+    body{{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+    .fallback{{display:none;text-align:center;padding:2rem;}}
+    .fallback button{{margin-top:1rem;padding:10px 20px;border-radius:8px;border:none;
+      background:#1E88E5;color:#fff;font-weight:600;font-size:0.95rem;cursor:pointer;}}
+    </style></head>
     <body>
+    <div class="fallback" id="fallback">
+        <div style="font-size:2rem">✅</div>
+        <h3 style="font-weight:500">You're signed in</h3>
+        <p style="color:#888">This window didn't close automatically — you can close it now.</p>
+        <button onclick="window.close()">Close this window</button>
+    </div>
     <script>
     (function() {{
         var result = {result_json};
@@ -106,8 +127,11 @@ def _close_popup_html(result_json: str, delay_ms: int = 800) -> str:
         }}
         setTimeout(function() {{
             try {{ window.close(); }} catch(e) {{}}
-            // If window.close() blocked, redirect to app root
-            setTimeout(function() {{ window.location.href = '/'; }}, 500);
+            // Still here after the close attempt → it was blocked. Show the
+            // manual-close fallback instead of silently redirecting.
+            setTimeout(function() {{
+                document.getElementById('fallback').style.display = 'block';
+            }}, 400);
         }}, {delay_ms});
     }})();
     </script>

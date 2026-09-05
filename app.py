@@ -282,8 +282,13 @@ pg = st.navigation({
 pg.run()
 
 # ── Floating Chat Widget ───────────────────────────────────────────────────
+# Skip on the full "Ask Prosper" chat page itself — that page already has its
+# own st.chat_input(). Two independent chat widgets on one page, each with
+# their own session-state and st.rerun() calls, is a plausible cause of the
+# navigation feeling "stuck" there (reported: clicking any other sidebar link
+# while on Ask Prosper keeps landing back on it).
 _chat_key = os.getenv("ANTHROPIC_API_KEY", "")
-if _chat_key and _chat_key != "your_anthropic_api_key_here":
+if _chat_key and _chat_key != "your_anthropic_api_key_here" and pg.title != "Ask Prosper":
     st.markdown("""
     <style>
     div[data-testid="stPopover"]:last-of-type {

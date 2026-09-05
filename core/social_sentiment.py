@@ -229,7 +229,7 @@ def get_google_news_sentiment(ticker: str) -> Dict:
 # ── Composite Score ──────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
+def get_composite_sentiment(ticker: str, news_score: float, news_has_data: bool = True) -> Dict:
     """
     Combine all sentiment sources into a weighted composite with dynamic
     weight redistribution.
@@ -272,8 +272,17 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
         except Exception:
             gn_data = {"score": 0, "headlines": 0, "source": "Google News RSS"}
 
+    # BUG FIX: "news" used to be hardcoded has_data=True, unlike every other
+    # source here — a ticker with zero real headlines got a hard 0.0 "neutral"
+    # locked in at its full 25% weight instead of having that weight
+    # redistributed like StockTwits/Reddit/Analyst/Google News correctly do
+    # when THEY have no data. For a portfolio heavy in smaller international
+    # names with thin English-language news coverage, this systematically
+    # dragged composite scores toward neutral even when the OTHER sources that
+    # did have data showed a real lean — a likely cause of "too skewed / lots
+    # of neutral" sentiment readings reported for this portfolio.
     sources = {
-        "news":        {"score": news_score, "default_weight": 0.25, "has_data": True},
+        "news":        {"score": news_score, "default_weight": 0.25, "has_data": news_has_data},
         "stocktwits":  {"score": st_data["score"],  "default_weight": 0.15, "has_data": st_data.get("messages", 0) > 0},
         "reddit":      {"score": rd_data["score"],  "default_weight": 0.10, "has_data": rd_data.get("mentions", 0) > 0},
         "analyst":     {"score": an_data["score"],   "default_weight": 0.25, "has_data": an_data.get("total_recs", 0) > 0},
@@ -314,15 +323,15 @@ def get_composite_sentiment(ticker: str, news_score: float) -> Dict:
 def get_composite_sentiment_batch(tickers_with_news: List[tuple]) -> Dict[str, Dict]:
     """
     Fetch composite sentiment for multiple tickers in parallel.
-    Input: [(ticker, news_score), ...]
+    Input: [(ticker, news_score), ...] or [(ticker, news_score, news_has_data), ...]
     Calls the cached get_composite_sentiment() per ticker so the cache is
     shared between single-ticker and batch calls.
     """
     results = {}
 
     def _fetch(item):
-        ticker, news_score = item
-        return ticker, get_composite_sentiment(ticker, news_score)
+        ticker, news_score, news_has_data = (item + (True,))[:3]
+        return ticker, get_composite_sentiment(ticker, news_score, news_has_data=news_has_data)
 
     with ThreadPoolExecutor(max_workers=min(len(tickers_with_news), 4)) as pool:
         futures = {pool.submit(_fetch, item): item[0] for item in tickers_with_news}

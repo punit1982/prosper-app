@@ -587,16 +587,31 @@ FORMAT (use markdown):
 
 **Action Items:** [2-3 specific suggestions: "Trim X to Y%", "Review Y pre-earnings", "Add to Z on weakness"]
 
-Be sharp, specific, actionable. No generic advice. This investor has {holdings_count} positions worth {base_currency} {net_portfolio:,.0f}."""
+Be sharp, specific, actionable. No generic advice. This investor has {holdings_count} positions worth {base_currency} {net_portfolio:,.0f}.
+
+IMPORTANT: Only ever name a ticker or company that appears in TOP HOLDINGS above. Never mention any other
+stock, ETF, or company — even as a sector comparison or "similar names to watch" — if it is not one of this
+investor's actual holdings listed above."""
 
         from core.settings import extract_text, CLAUDE_DEFAULT_MODEL
         response = call_claude(
             client,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=700,
+            max_tokens=1024,
             preferred_model=CLAUDE_DEFAULT_MODEL,
         )
-        return extract_text(response) or "Briefing came back empty — please try again."
+        text = extract_text(response)
+        if not text:
+            # One bounded retry — an empty completion with no exception raised
+            # is rare but has been reported; a fresh call usually succeeds.
+            response = call_claude(
+                client,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1024,
+                preferred_model=CLAUDE_DEFAULT_MODEL,
+            )
+            text = extract_text(response)
+        return text or "Briefing came back empty after a retry — please try again in a moment."
 
     except Exception as e:
         return f"Could not generate briefing: {str(e)[:100]}"

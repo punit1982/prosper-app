@@ -860,12 +860,21 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             return
 
         # B2: prefer atomic pipeline transaction on Turso
+        # The DELETE is scoped by broker_source, not just ticker: holdings
+        # across multiple accounts (e.g. "IBKR AS" and "IBKR PS") legitimately
+        # hold the same ticker as two separate positions. Without this scope,
+        # re-uploading just ONE account's statement would delete-then-reinsert
+        # by ticker alone — silently wiping out the OTHER account's identical-
+        # ticker holding, since that account's row isn't part of this batch to
+        # be reinserted. COALESCE handles legacy rows saved with a NULL
+        # broker_source (SQL NULL never equality-matches '', even bound to it).
         if hasattr(conn, "execute_in_transaction"):
             stmts = []
             for t in rows:
                 stmts.append((
-                    "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ?",
-                    (pid, uid, t[0]),
+                    "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ? "
+                    "AND COALESCE(broker_source, '') = ?",
+                    (pid, uid, t[0], t[5]),
                 ))
             for t in rows:
                 stmts.append((
@@ -882,8 +891,9 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             except Exception:
                 pass
             conn.executemany(
-                "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ?",
-                [(pid, uid, t[0]) for t in rows],
+                "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ? "
+                "AND COALESCE(broker_source, '') = ?",
+                [(pid, uid, t[0], t[5]) for t in rows],
             )
             conn.executemany(
                 "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, "

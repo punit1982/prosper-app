@@ -505,7 +505,13 @@ def _build_stock_table(sub_df, sym):
                 for t in tickers
             ]
 
-    if show_broker and "broker_source" in sub_df.columns:
+    # Holding the same ticker in two different accounts (e.g. IBKR AS and IBKR
+    # PS both holding the same stock) is legitimate — two distinct positions —
+    # but with no account column they render as an unexplained-looking
+    # duplicate row. Show the Broker column automatically whenever that's
+    # actually happening, regardless of the manual toggle.
+    _has_dupe_tickers = sub_df["ticker"].duplicated(keep=False).any()
+    if (show_broker or _has_dupe_tickers) and "broker_source" in sub_df.columns:
         display["Broker"] = sub_df["broker_source"].fillna("").values
 
     return display.sort_values("Ticker", key=lambda x: x.str.upper()).reset_index(drop=True)
@@ -548,6 +554,10 @@ def _build_fund_table(sub_df, sym):
         display["3Y Avg"] = sub_df["three_yr_return"].apply(fmt_pct_plain).values
     if "five_yr_return" in sub_df.columns:
         display["5Y Avg"] = sub_df["five_yr_return"].apply(fmt_pct_plain).values
+
+    _has_dupe_tickers = sub_df["ticker"].duplicated(keep=False).any()
+    if (show_broker or _has_dupe_tickers) and "broker_source" in sub_df.columns:
+        display["Broker"] = sub_df["broker_source"].fillna("").values
 
     return display.sort_values("Ticker", key=lambda x: x.str.upper()).reset_index(drop=True)
 
@@ -700,6 +710,18 @@ def portfolio_section():
     ext = st.session_state.get("extended_df")
     df = (ext if ext is not None else full_enriched).copy()
 
+    # Unvested stock-plan awards and retirement accounts (401k/DCP) are real
+    # net worth but cannot be sold or rebalanced on demand — split them out so
+    # they don't sit mixed into the regular tradeable stock/fund tables below.
+    # They still count toward total_value/total_cost/net_portfolio_value.
+    if "asset_category" in df.columns:
+        _restricted_mask = df["asset_category"].fillna("").str.contains(
+            "Restricted Stock|Retirement Account", case=False, regex=True)
+    else:
+        _restricted_mask = pd.Series(False, index=df.index)
+    restricted_df = df[_restricted_mask].copy()
+    df = df[~_restricted_mask].copy()
+
     # ── Grand Total Summary Cards ─────────────────────────────────────────────
     total_value      = safe_sum(df.get("market_value"))
     total_cost       = safe_sum(df.get("cost_basis"))
@@ -707,10 +729,23 @@ def portfolio_section():
     total_day_gain   = safe_sum(df.get("day_gain"))
     total_realized   = get_total_realized_pnl()
 
-    # Cash positions
+    # Cash positions — a SEPARATE occurrence of the same bug fixed elsewhere on
+    # this page (Manage Cash Positions expander, below): this is the "Grand
+    # Total" hero card, and it was still summing cash_positions.amount across
+    # currencies as raw numbers (e.g. a -9.15M JPY balance added directly to
+    # -101K CHF) into the single most visible number on the dashboard.
+    from core.currency_normalizer import cash_positions_to_base_currency as _cash_to_base
     cash_positions = get_all_cash_positions()
-    total_cash = float(cash_positions["amount"].sum()) if not cash_positions.empty else 0.0
-    margin_debt = float(cash_positions[cash_positions["is_margin"] == 1]["amount"].sum()) if not cash_positions.empty and "is_margin" in cash_positions.columns else 0.0
+    if not cash_positions.empty:
+        _cash_converted = _cash_to_base(cash_positions, base_currency)
+        total_cash = float(_cash_converted["amount_base"].sum())
+        margin_debt = (
+            float(_cash_converted[_cash_converted["is_margin"] == 1]["amount_base"].sum())
+            if "is_margin" in _cash_converted.columns else 0.0
+        )
+    else:
+        total_cash = 0.0
+        margin_debt = 0.0
     net_portfolio_value = (total_value or 0) + total_cash
 
     # Row 1: Big 3 metrics
@@ -789,6 +824,25 @@ def portfolio_section():
             with tabs[i + 1]:
                 cur_df = df[df["currency"] == cur].copy()
                 _render_currency_section(cur_df, sym, cur, f"tab_{cur}")
+
+    # ── Restricted / Illiquid Holdings ──────────────────────────────────────
+    # Unvested RSUs/PSUs and 401(k)/DCP retirement balances — real net worth,
+    # but not tradeable, so kept out of the tables above and out of Portfolio
+    # Rebalance's suggestions (see pages/16_Portfolio_Rebalance.py).
+    if not restricted_df.empty:
+        st.divider()
+        _restricted_total = safe_sum(restricted_df.get("market_value")) or 0
+        with st.expander(f"🔒 Restricted / Illiquid Holdings — {sym} {_restricted_total:,.0f} (not included in tables above)", expanded=False):
+            st.caption("Unvested stock awards and retirement accounts. Counted in your net worth, but cannot be traded or rebalanced.")
+            _rcols = ["name", "ticker", "quantity", "asset_category", "market_value", "broker_source"]
+            _rcols = [c for c in _rcols if c in restricted_df.columns]
+            _rdisplay = restricted_df[_rcols].rename(columns={
+                "name": "Name", "ticker": "Ticker", "quantity": "Qty",
+                "asset_category": "Type", "market_value": f"Value ({sym})", "broker_source": "Account",
+            })
+            if f"Value ({sym})" in _rdisplay.columns:
+                _rdisplay[f"Value ({sym})"] = _rdisplay[f"Value ({sym})"].apply(fmt_val)
+            st.dataframe(_rdisplay, use_container_width=True, hide_index=True)
 
     # ── Inline Editing ─────────────────────────────
     st.divider()

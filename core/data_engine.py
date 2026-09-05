@@ -22,6 +22,7 @@ Caching strategy:
 import time
 import os
 import json
+import re
 import hashlib
 import pandas as pd
 import streamlit as st
@@ -1316,7 +1317,12 @@ def calculate_headline_sentiment(headlines: List[str]) -> float:
     total_neg = 0
 
     for headline in headlines:
-        words = set(headline.lower().split())
+        # Real headlines are punctuated ("shares fall," "record profits.") —
+        # a naive .split() leaves that punctuation stuck to the word, so it
+        # never matches _POSITIVE_WORDS/_NEGATIVE_WORDS (e.g. "fall," != "fall").
+        # That silently dropped real sentiment words, pushing more headlines
+        # to a 0.0 "no data" result than the actual text warranted.
+        words = set(re.findall(r"[a-z']+", headline.lower()))
         total_pos += len(words & _POSITIVE_WORDS)
         total_neg += len(words & _NEGATIVE_WORDS)
 

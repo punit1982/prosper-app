@@ -45,6 +45,15 @@ def clear_failed_tickers():
     _failed_tickers.clear()
 
 
+def _is_synthetic_ticker(ticker) -> bool:
+    """True for placeholder tickers with no real exchange symbol to price live —
+    "MF:..." (Morningstar-ID-only mutual funds, core/file_parsers.py) and
+    "RESTRICTED:..." (unvested RSU/PSU stock-plan awards, core/screenshot_parser.py).
+    These always rely on last_known_price instead."""
+    t = str(ticker)
+    return t.startswith("MF:") or t.startswith("RESTRICTED:")
+
+
 # ─────────────────────────────────────────
 # LIVE QUOTES  (parallel)
 # ─────────────────────────────────────────
@@ -388,22 +397,54 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
     df["currency"] = df.apply(resolve_currency, axis=1)
 
     # Step 1b: Resolve tickers that are missing exchange suffixes (UAE, Swiss, etc.)
-    # "MF:..." synthetic tickers have no real exchange symbol to resolve — skip
-    # them so the resolver cascade doesn't burn API calls on a guaranteed miss.
+    # "MF:..." and "RESTRICTED:..." are synthetic tickers with no real exchange
+    # symbol to resolve — skip them so the resolver cascade doesn't burn API
+    # calls on a guaranteed miss.
     from core.data_engine import resolve_tickers_batch
     pairs = [(str(row["ticker"]), str(row["currency"])) for _, row in df.iterrows()
-             if pd.notna(row.get("ticker")) and not str(row["ticker"]).startswith("MF:")]
+             if pd.notna(row.get("ticker")) and not _is_synthetic_ticker(row["ticker"])]
     resolved = resolve_tickers_batch(pairs)
     df["ticker_resolved"] = df["ticker"].map(lambda t: resolved.get(t, t))
 
+    # Step 1c: Backfill missing/useless company names. Japanese (.T) and
+    # Singaporean (.SI) exchanges use numeric scrip codes as the ticker itself
+    # (e.g. "4519.T", "S08.SI") — when the source statement had no separate
+    # description column, "name" ends up being that same numeric code, which
+    # tells the user nothing. Fetch the real company name for just those rows.
+    def _name_is_useless(name, ticker) -> bool:
+        n = str(name or "").strip()
+        if not n or n.lower() in ("nan", "none"):
+            return True
+        base_ticker = str(ticker or "").split(".")[0]
+        return n == str(ticker) or n == base_ticker or n.replace(" ", "").isdigit()
+
+    _needs_name = [
+        str(row["ticker_resolved"]) for _, row in df.iterrows()
+        if pd.notna(row.get("ticker_resolved")) and not _is_synthetic_ticker(row["ticker_resolved"])
+        and _name_is_useless(row.get("name"), row.get("ticker"))
+    ]
+    if _needs_name:
+        from core.data_engine import get_ticker_info_batch
+        _name_info = get_ticker_info_batch(_needs_name)
+        _name_map = {
+            t: (info.get("shortName") or info.get("longName"))
+            for t, info in _name_info.items() if info.get("shortName") or info.get("longName")
+        }
+        if _name_map:
+            for idx, row in df.iterrows():
+                better = _name_map.get(str(row["ticker_resolved"]))
+                if better:
+                    df.at[idx, "name"] = better
+
     # Step 2: Batch-fetch live quotes in parallel (use resolved tickers)
     # Uses SQLite cache — instant on second load, only re-fetches stale tickers.
-    # "MF:..." tickers (see core/file_parsers.py parse_trendlyne) are synthetic —
-    # not a real exchange symbol — for funds with no live-tradeable ticker at
-    # all (e.g. Morningstar-ID-only Indian mutual funds). Fetching them would
-    # just burn a cascade of guaranteed-failing API calls on every load; skip
-    # straight to their last_known_price fallback in Step 4 instead.
-    tickers = [t for t in df["ticker_resolved"].dropna().tolist() if not str(t).startswith("MF:")]
+    # "MF:..." (see core/file_parsers.py parse_trendlyne) and "RESTRICTED:..."
+    # (see core/screenshot_parser.py) are synthetic — not a real exchange
+    # symbol — for holdings with no live-tradeable ticker at all (Morningstar-
+    # ID-only Indian mutual funds; unvested RSU/PSU stock-plan awards). Fetching
+    # them would just burn a cascade of guaranteed-failing API calls on every
+    # load; skip straight to their last_known_price fallback in Step 4 instead.
+    tickers = [t for t in df["ticker_resolved"].dropna().tolist() if not _is_synthetic_ticker(t)]
     quotes  = fetch_batch_quotes_with_cache(tickers)
 
     # Step 2b: Override currency if yfinance reports a different trading currency

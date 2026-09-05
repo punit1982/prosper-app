@@ -60,7 +60,9 @@ if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts
 
         def _fetch(ticker):
             news_sent = get_ticker_sentiment(ticker)
-            comp      = get_composite_sentiment(ticker, news_sent["score"])
+            comp      = get_composite_sentiment(
+                ticker, news_sent["score"], news_has_data=news_sent.get("total_headlines", 0) > 0
+            )
             return ticker, news_sent, comp
 
         pool = ThreadPoolExecutor(max_workers=min(len(tickers), 5))

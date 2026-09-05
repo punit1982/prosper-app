@@ -204,6 +204,48 @@ include them as entries with:
 Example: {"ticker": "CASH", "name": "Settled Cash Balance", "quantity": 50000, "avg_cost": 1, "currency": "USD"}
 Example: {"ticker": "MARGIN", "name": "Margin Debit Balance", "quantity": -25000, "avg_cost": 1, "currency": "USD"}
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESTRICTED / UNVESTED STOCK COMPENSATION (Fidelity NetBenefits "Stock Plans",
+401(k), deferred compensation / DCP statements, or any employer equity plan)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+These are NOT regular tradeable brokerage holdings — the person cannot sell,
+transfer, or withdraw them on demand (unvested equity, or a retirement account
+with early-withdrawal restrictions). They must NEVER be merged into a normal
+stock row above; extract each as its own entry with these extra fields:
+
+  asset_category — one of: "Restricted Stock" (RSU / RSA / PSU / performance
+    award, vested or not) or "Retirement Account" (401(k), DCP, pension).
+  last_known_price — the plan's OWN reported total current value for that
+    row (e.g. Fidelity's "Total Value" for that bucket), NOT a per-share
+    price times a share count you computed yourself.
+
+A Fidelity "Stock Plans" section typically breaks into multiple named
+sub-plans on one statement (e.g. "Restricted Stock Awards", "Restricted Stock
+Units - Phantom Units", "Restricted Stock Units - Restricted Units",
+"Performance Award"). Extract ONE row per sub-plan using its own "Total
+[Unvested] Value" summary line for the LATEST period shown — do not attempt
+to add up individual grant-date rows yourself, and do not extract the
+per-grant detail tables (Award Balances / Unit Balances / Grant Transaction
+Details) as separate rows.
+
+  quantity      = the plan's own reported unvested/pending share or unit count
+  avg_cost      = 0 (RSUs/PSUs are granted, not purchased — there is no cost basis)
+  last_known_price = the plan's own reported Total Value for that bucket
+  currency      = the currency the Total Value is stated in
+
+Example — a Fidelity statement showing:
+  "Restricted Stock Units - Restricted Units: Total Unvested Units 7,564,
+  Total Value August 31, 2026 $144,169.84"
+becomes:
+  {"ticker": "RESTRICTED:NIQ:RSU", "name": "NIQ Restricted Stock Units - Restricted Units",
+   "quantity": 7564, "avg_cost": 0, "currency": "USD",
+   "asset_category": "Restricted Stock", "last_known_price": 144169.84}
+
+For 401(k) / DCP statements, if individual fund line items ARE shown (fund
+name + balance), extract each fund as its own row exactly like a normal
+holding but with asset_category = "Retirement Account" added; if only a
+single total account balance is shown, extract one row for that total instead.
+
 If you cannot read the image or find portfolio data, return:
 {"error": "Short description of the problem (e.g. image is blurry, no holdings table found)"}
 

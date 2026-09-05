@@ -91,6 +91,21 @@ try:
         st.warning("Could not enrich holdings. Check your data and try again.")
         st.stop()
 
+    # Unvested stock-plan awards and retirement accounts (401k/DCP) cannot be
+    # sold, transferred, or rebalanced — a "sell X to reduce concentration"
+    # suggestion on them would be nonsense. Exclude from the rebalance universe
+    # entirely (they're still shown, with their own total, on Portfolio Dashboard).
+    if "asset_category" in enriched.columns:
+        _restricted_mask = enriched["asset_category"].fillna("").str.contains(
+            "Restricted Stock|Retirement Account", case=False, regex=True)
+        if _restricted_mask.any():
+            _restricted_value = pd.to_numeric(enriched.loc[_restricted_mask, "market_value"], errors="coerce").sum()
+            st.caption(
+                f"🔒 Excluding {base_currency} {_restricted_value:,.0f} in restricted/illiquid holdings "
+                "(unvested stock awards, retirement accounts) from rebalancing suggestions below."
+            )
+            enriched = enriched[~_restricted_mask].copy()
+
     tickers = enriched["ticker"].tolist()
     with st.spinner("Fetching ticker metadata..."):
         info_map = get_ticker_info_batch(tickers)

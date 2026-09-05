@@ -375,6 +375,15 @@ for col in ["ticker", "name", "quantity", "avg_cost", "currency", "broker_source
     if col not in df.columns:
         df[col] = ""
 df["broker_source"] = df["broker_source"].fillna("").astype(str)
+# Restricted stock / retirement-account rows (see core/screenshot_parser.py) carry
+# asset_category + last_known_price from the AI extraction — these MUST survive
+# into the data_editor grid below, otherwise selecting only the 6 core columns
+# for editing silently drops them before save_holdings() ever sees them.
+_has_restricted_rows = "asset_category" in df.columns and df["asset_category"].fillna("").astype(str).str.len().gt(0).any()
+if _has_restricted_rows:
+    df["asset_category"] = df["asset_category"].fillna("").astype(str)
+    if "last_known_price" not in df.columns:
+        df["last_known_price"] = None
 
 # Highlight missing fields
 missing_currency = df["currency"].isna() | (df["currency"].astype(str).isin(["", "nan"]))
@@ -391,18 +400,28 @@ if missing_currency.any() or missing_avg_cost.any() or missing_qty.any():
         issues.append(f"**Quantity** missing for {missing_qty.sum()} row(s)")
     st.warning("Missing data: " + " · ".join(issues))
 
+_editor_cols = ["ticker", "name", "quantity", "avg_cost", "currency", "broker_source"]
+_editor_col_config = {
+    "ticker": st.column_config.TextColumn("Ticker", help="e.g. AAPL, RELIANCE.NS, SREN.SW"),
+    "name": st.column_config.TextColumn("Company Name"),
+    "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+    "avg_cost": st.column_config.NumberColumn("Avg Cost", min_value=0, format="%.4f"),
+    "currency": st.column_config.SelectboxColumn("Currency", options=SUPPORTED_CURRENCIES, default="USD"),
+    "broker_source": st.column_config.TextColumn("Account / Broker", help="Detected from the file; edit if needed"),
+}
+if _has_restricted_rows:
+    _editor_cols += ["asset_category", "last_known_price"]
+    _editor_col_config["asset_category"] = st.column_config.TextColumn(
+        "Category", help="Unvested equity / retirement holdings are never tradeable — flagged automatically, not editable here.", disabled=True)
+    _editor_col_config["last_known_price"] = st.column_config.NumberColumn(
+        "Reported Value", help="The value your statement itself reported for this position — used since no live market price applies.",
+        format="%.2f", disabled=True)
+
 edited_df = st.data_editor(
-    df[["ticker", "name", "quantity", "avg_cost", "currency", "broker_source"]],
+    df[_editor_cols],
     num_rows="dynamic",
     use_container_width=True,
-    column_config={
-        "ticker": st.column_config.TextColumn("Ticker", help="e.g. AAPL, RELIANCE.NS, SREN.SW"),
-        "name": st.column_config.TextColumn("Company Name"),
-        "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-        "avg_cost": st.column_config.NumberColumn("Avg Cost", min_value=0, format="%.4f"),
-        "currency": st.column_config.SelectboxColumn("Currency", options=SUPPORTED_CURRENCIES, default="USD"),
-        "broker_source": st.column_config.TextColumn("Account / Broker", help="Detected from the file; edit if needed"),
-    },
+    column_config=_editor_col_config,
 )
 
 st.divider()
