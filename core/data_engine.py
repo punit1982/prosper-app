@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 
 from core.parallel import gather
+from core.ui_errors import safe_message
 
 # ─────────────────────────────────────────
 # CACHE TTLs (seconds)
@@ -965,7 +966,7 @@ Be concise and professional. No disclaimers."""
         )
         return extract_text(response) or "Summary unavailable: empty response."
     except Exception as e:
-        return f"Summary unavailable: {str(e)[:100]}"
+        return safe_message("this summary", e)
 
 
 from core.ai_cache import ai_cache_decorator
@@ -1895,7 +1896,7 @@ def _summarize_analyst_uncached(ticker: str, analyst_data: str) -> str:
         )
         return extract_text(response) or "Summary unavailable: empty response."
     except Exception as e:
-        return f"Summary unavailable: {str(e)[:100]}"
+        return safe_message("this summary", e)
 
 
 @ai_cache_decorator(ttl_days=7, namespace="analyst_activity")

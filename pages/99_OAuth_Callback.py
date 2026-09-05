@@ -291,7 +291,9 @@ elif code and state:
         )
 
     except Exception as exc:
-        st.error(f"Authentication error: {exc}")
+        import logging
+        logging.getLogger("prosper.auth").exception("OAuth callback failed")
+        st.error("Sign-in couldn't be completed. Please close this window and try again.")
         _components.html(
             _close_popup_html(json.dumps({"verified": False, "error": "exception"}), delay_ms=2500, success=False),
             height=180,

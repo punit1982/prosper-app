@@ -8,6 +8,7 @@ import streamlit as st
 import pandas as pd
 from core.database import get_all_holdings, get_all_prosper_analyses
 from core.settings import SETTINGS, get_api_key, enriched_cache_key
+from core.ui_errors import fetch_failed
 
 st.header("Ask Prosper")
 st.caption("Chat with your portfolio — ask about holdings, performance, allocations, or any stock.")
@@ -119,7 +120,7 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
             ))
             st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
         except Exception as e:
-            st.error(f"Chat error: {e}")
+            fetch_failed("the assistant's reply", e)
 
 # Clear chat button
 if st.session_state.get("chat_messages"):

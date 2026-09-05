@@ -131,6 +131,7 @@ from core.database import (
     get_total_realized_pnl,
 )
 from core.database import get_all_portfolios, create_portfolio, get_active_portfolio_id
+from core.ui_errors import unexpected, fetch_failed
 from core.database import get_or_create_user_portfolios
 
 init_db()
@@ -199,7 +200,7 @@ if not _portfolios.empty:
                     st.success(f"Created: {_new_name.strip()}")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Could not create: {e}")
+                    unexpected("the new portfolio", e)
 
 # ── Currency Filter ─────────────────────────────────────────────────────────
 _holdings = get_all_holdings()
@@ -257,6 +258,7 @@ pg = st.navigation({
         st.Page("pages/20_Earnings_Calendar.py", title="Earnings Calendar", icon="📅"),
     ],
     "Research & AI": [
+        st.Page("pages/13_Research_Hub.py", title="Research Hub", icon="🔭"),
         st.Page("pages/18_Equity_Deep_Dive.py", title="Equity Deep Dive", icon="🔬"),
         st.Page("pages/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
         st.Page("pages/8_Sentiment.py", title="Sentiment", icon="💬"),
@@ -372,7 +374,7 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here" and pg.title != "Ask
                     st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]
                 st.rerun()
             except Exception as e:
-                st.error(f"Error: {str(e)[:80]}")
+                fetch_failed("the assistant's reply", e)
 
         if st.session_state.get("mini_chat"):
             if st.button("Clear", key="_mini_clear"):

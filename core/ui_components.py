@@ -36,6 +36,77 @@ def fmt_age(secs: float) -> str:
     return f"{s // 86400}d ago"
 
 
+_RESPONSIVE_TABLE_CSS = """
+<style>
+.ptable-wrap{overflow-x:auto;margin:0 0 0.5rem;}
+.ptable{width:100%;border-collapse:collapse;font-size:0.86rem;
+  font-variant-numeric:tabular-nums;}
+.ptable thead th{text-align:left;padding:8px 10px;border-bottom:2px solid var(--line,#d8dee6);
+  font-size:0.72rem;letter-spacing:0.03em;text-transform:uppercase;color:var(--text-color,#31333f);
+  opacity:0.65;white-space:nowrap;}
+.ptable tbody td{padding:8px 10px;border-bottom:1px solid var(--line,#e6e6e6);white-space:nowrap;}
+.ptable tbody td.ptable-title{font-weight:600;}
+@media (max-width:767px){
+  .ptable-wrap{overflow-x:visible;}
+  .ptable, .ptable tbody, .ptable tr, .ptable td{display:block;width:100%;}
+  .ptable thead{position:absolute;left:-9999px;}
+  .ptable tr{border:1px solid var(--line,#d8dee6);border-radius:8px;margin-bottom:10px;
+    padding:6px 4px;background:var(--secondary-background-color,#f6f6f6);}
+  .ptable tbody td{border:none;border-bottom:1px dashed var(--line,#e0e0e0);
+    display:flex;justify-content:space-between;gap:12px;white-space:normal;padding:7px 10px;}
+  .ptable tbody td:last-child{border-bottom:none;}
+  .ptable tbody td.ptable-title{font-size:1rem;background:transparent;
+    border-bottom:1px solid var(--line,#d0d0d0);margin-bottom:2px;}
+  .ptable tbody td::before{content:attr(data-label);font-weight:600;opacity:0.6;
+    flex:0 0 auto;text-align:left;}
+  .ptable tbody td.ptable-title::before{content:none;}
+}
+</style>
+"""
+
+
+def render_responsive_table(df, *, title_col: str | None = None) -> None:
+    """
+    Render a small dataframe as a table that becomes a stack of cards on
+    phones (< 768px) instead of a sideways-scrolling wall — see the UI/UX
+    audit finding *"Wide tables have one mobile strategy: scroll sideways"*.
+
+    ``df`` should already hold display-ready strings (this does no
+    formatting). ``title_col`` (default: the first column) is promoted to
+    the card header on mobile and gets no "label:" prefix.
+
+    Desktop loses interactive column-sort vs. ``st.dataframe`` — an
+    acceptable trade for the 5–15 row comparison tables this is used on.
+    """
+    import html as _html
+    import streamlit as st
+
+    cols = list(df.columns)
+    if not cols:
+        return
+    tcol = title_col if title_col in cols else cols[0]
+
+    head = "".join(f"<th>{_html.escape(str(c))}</th>" for c in cols)
+    body_rows = []
+    for _, row in df.iterrows():
+        cells = []
+        for c in cols:
+            val = _html.escape("" if row[c] is None else str(row[c]))
+            if c == tcol:
+                cells.append(f"<td class='ptable-title' data-label=''>{val}</td>")
+            else:
+                cells.append(f"<td data-label=\"{_html.escape(str(c))}\">{val}</td>")
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    st.markdown(
+        _RESPONSIVE_TABLE_CSS
+        + f"<div class='ptable-wrap'><table class='ptable'>"
+        + f"<thead><tr>{head}</tr></thead>"
+        + f"<tbody>{''.join(body_rows)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def status_chip(label: str, level: str = "neutral") -> str:
     """
     Return inline HTML for a small status chip: a colored dot + label.

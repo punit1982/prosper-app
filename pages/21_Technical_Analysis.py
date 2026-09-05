@@ -37,12 +37,17 @@ with col_ticker:
     # Default to first portfolio ticker with data, or AAPL if no portfolio
     default_idx = 0
     display_tickers = portfolio_tickers if portfolio_tickers else ["AAPL"]
-    # If portfolio available, prefer common/liquid stocks over niche ones
-    preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
-    for i, pref in enumerate(preferred):
-        if pref in display_tickers:
-            default_idx = display_tickers.index(pref)
-            break
+    # If the user picked a stock on the Research Hub, honour that first.
+    _rt = st.session_state.get("research_ticker")
+    if _rt and _rt in display_tickers:
+        default_idx = display_tickers.index(_rt)
+    else:
+        # Otherwise prefer common/liquid stocks over niche ones
+        preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
+        for i, pref in enumerate(preferred):
+            if pref in display_tickers:
+                default_idx = display_tickers.index(pref)
+                break
 
     ticker = st.selectbox(
         "Select Ticker",

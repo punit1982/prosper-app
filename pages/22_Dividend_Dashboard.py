@@ -15,7 +15,7 @@ from core.database import get_all_holdings
 from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
-from core.ui_components import status_chip
+from core.ui_components import status_chip, render_responsive_table
 
 st.markdown(
     "<h2 style='margin-bottom:0'>💰 Dividend Dashboard</h2>"
@@ -194,11 +194,11 @@ with tab_income:
         display["Yield on Cost"] = display["yield_on_cost"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
         display["Monthly"] = income_df["annual_income"].apply(lambda x: f"{base_currency} {x/12:,.0f}" if x > 0 else "—")
 
-        st.dataframe(
+        render_responsive_table(
             display[["ticker", "name", "Div/Share", "Annual Income", "Monthly", "Yield", "Yield on Cost", "sector"]].rename(
                 columns={"ticker": "Ticker", "name": "Company", "sector": "Sector"}
             ),
-            use_container_width=True, hide_index=True,
+            title_col="Ticker",
         )
 
         # Income by sector pie
@@ -241,11 +241,11 @@ with tab_yield:
         display_y["Payout Ratio"] = display_y["payout_ratio"].apply(
             lambda x: f"{x*100:.0f}%" if pd.notna(x) else "—")
 
-        st.dataframe(
+        render_responsive_table(
             display_y[["ticker", "name", "Current Yield", "Yield on Cost", "5Y Avg Yield", "Payout Ratio"]].rename(
                 columns={"ticker": "Ticker", "name": "Company"}
             ),
-            use_container_width=True, hide_index=True,
+            title_col="Ticker",
         )
 
         # Yield scatter: current yield vs payout ratio

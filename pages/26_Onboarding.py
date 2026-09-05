@@ -7,6 +7,7 @@ Onboarding Wizard — Guide new users through Prosper setup
 import streamlit as st
 import pandas as pd
 from core.settings import load_user_settings, save_user_settings
+from core.ui_errors import unexpected
 
 # ── Session State Initialization ──────────────────────────────────────────────
 if "onboarding_step" not in st.session_state:
@@ -164,7 +165,7 @@ elif current_step == 3:
                             else:
                                 st.warning("No holdings found in the file. Try a clearer image or different file.")
                     except Exception as e:
-                        st.error(f"Error parsing file: {e}")
+                        unexpected("this file", e)
 
     # ── Option 2: IBKR Sync ─────────────────────────────────────────────────
     elif import_method == "Sync from Interactive Brokers (IBKR)":

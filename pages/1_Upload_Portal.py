@@ -10,6 +10,7 @@ import pandas as pd
 from PIL import Image
 from core.screenshot_parser import parse_brokerage_image
 from core.database import save_holdings, get_all_holdings, save_cash_position
+from core.ui_errors import unexpected
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -146,7 +147,7 @@ with st.expander("Backup & Restore" + (f" ({len(_existing)} holdings)" if not _e
                     st.success(f"Restored {len(restore_df)} holdings!")
                     st.rerun()
             except Exception as e:
-                st.error(f"Invalid CSV: {e}")
+                unexpected("that backup file", e)
 
 # ─────────────────────────────────────────
 # SAVE SUCCESS STATE
@@ -262,16 +263,16 @@ if not st.session_state.parsed_holdings:
                         preview = pd.read_csv(file, nrows=5)
                         st.dataframe(preview, use_container_width=True)
                         file.seek(0)
-                    except Exception as e:
-                        st.warning(f"Could not preview: {e}")
+                    except Exception:
+                        st.caption("Preview unavailable — the file will still be parsed.")
                 elif ext in ("xlsx", "xls"):
                     st.caption(f"**{file.name}** (Excel)")
                     try:
                         preview = pd.read_excel(file, nrows=5)
                         st.dataframe(preview, use_container_width=True)
                         file.seek(0)
-                    except Exception as e:
-                        st.warning(f"Could not preview: {e}")
+                    except Exception:
+                        st.caption("Preview unavailable — the file will still be parsed.")
                 elif ext == "pdf":
                     st.caption(f"**{file.name}** (PDF)")
         st.info("Click **Parse Files** above to extract holdings.")

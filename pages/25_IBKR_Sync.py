@@ -17,6 +17,7 @@ import pandas as pd
 from datetime import datetime
 from core.settings import get_api_key, load_user_settings, save_user_settings
 from core.database import get_all_portfolios, get_active_portfolio_id, save_holdings
+from core.ui_errors import unexpected
 
 _log = logging.getLogger("prosper.ibkr_sync")
 
@@ -309,7 +310,7 @@ if sync_method == "📋 CSV Upload (Easiest)":
 
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Import failed: {str(e)}")
+                    unexpected("the IBKR import", e)
         else:
             st.warning("Could not parse positions from CSV. Make sure it's an IBKR Activity Statement.")
 
@@ -548,7 +549,7 @@ else:  # "🔗 Flex Query API (Automatic)"
                                 st.markdown(f"- {err}")
 
             except Exception as e:
-                st.error(f"Sync error: {str(e)}")
+                unexpected("the IBKR sync", e)
                 try:
                     save_sync_info({
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),

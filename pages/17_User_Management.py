@@ -10,6 +10,8 @@ import os
 import pandas as pd
 import streamlit as st
 
+from core.ui_errors import fetch_failed, unexpected
+
 st.header("User Management")
 
 # ── Check auth ──────────────────────────────────────────────────────────────
@@ -26,7 +28,9 @@ try:
         _db_update_user, _db_delete_user, _rebuild_yaml_from_db,
     )
 except ImportError as e:
-    st.error(f"Missing dependency: {e}. Run `pip install streamlit-authenticator bcrypt`.")
+    import logging
+    logging.getLogger("prosper.ui").error("User Management import failed: %s", e)
+    st.error("Authentication packages aren't installed. Contact the administrator.")
     st.stop()
 
 # ── Identify current user ──────────────────────────────────────────────────
@@ -175,7 +179,7 @@ try:
                         st.success(f"✅ Portfolio **{pf_name.strip()}** created!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed: {e}")
+                        unexpected("the new portfolio", e)
 
     # Rename / Delete
     if not my_portfolios.empty:
@@ -208,7 +212,7 @@ try:
                             st.rerun()
 
 except Exception as e:
-    st.warning(f"Could not load portfolios: {e}")
+    fetch_failed("your portfolios", e)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

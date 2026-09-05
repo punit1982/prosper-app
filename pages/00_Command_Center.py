@@ -26,6 +26,7 @@ from core.settings import SETTINGS, get_api_key, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import fmt_large
 from core.ui_components import fmt_age
+from core.ui_errors import safe_message
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -631,7 +632,7 @@ investor's actual holdings listed above."""
         return text or "Briefing came back empty after a retry — please try again in a moment."
 
     except Exception as e:
-        return f"Could not generate briefing: {str(e)[:100]}"
+        return safe_message("the briefing", e)
 
 
 # Auto-show: check session → DB → offer generate button

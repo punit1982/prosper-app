@@ -23,6 +23,7 @@ from core.data_engine import (
 )
 from core.grow_engine import run_grow, GROW_TIERS
 from core.settings import SETTINGS, enriched_cache_key
+from core.ui_errors import fetch_failed
 
 st.header("Equity Deep Dive")
 st.caption("Comprehensive 360° view of any stock — fundamentals, analyst consensus, sentiment, ownership, and the GROW two-verdict analysis.")
@@ -376,7 +377,7 @@ with tab_chart:
                 _payout_f = _sf(_payout)
                 st.metric("Payout Ratio", f"{_payout_f*100:.0f}%" if _payout_f is not None else "---")
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)
 
 with tab_fundamentals:
     try:
@@ -539,7 +540,7 @@ with tab_fundamentals:
 
         # ═══════════════════════════════════════════════════════════════════
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)
 
 with tab_analyst:
     try:
@@ -701,7 +702,7 @@ with tab_analyst:
 
         # ═══════════════════════════════════════════════════════════════════
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)
 
 with tab_ownership:
     try:
@@ -866,7 +867,7 @@ with tab_ownership:
 
         # ═══════════════════════════════════════════════════════════════════
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)
 
 with tab_technical:
     try:
@@ -944,7 +945,7 @@ with tab_technical:
             st.info("Not enough price history for technical analysis (need at least 50 data points).")
         st.caption("For detailed technical analysis with MACD, Bollinger Bands, and more patterns, visit the Technical Analysis page.")
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)
 
 with tab_ai:
     try:
@@ -1063,4 +1064,4 @@ with tab_ai:
                     )
                     st.rerun()
     except Exception as e:
-        st.error(f"Error loading this section: {e}")
+        fetch_failed("this section", e)

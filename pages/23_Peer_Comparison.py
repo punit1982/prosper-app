@@ -14,6 +14,7 @@ from core.database import get_all_holdings
 from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
+from core.ui_components import render_responsive_table
 
 st.markdown(
     "<h2 style='margin-bottom:0'>🔍 Peer Comparison</h2>"
@@ -130,11 +131,15 @@ col_sel1, col_sel2 = st.columns([1, 2])
 with col_sel1:
     # Default to first preferred ticker that's in portfolio, else first portfolio ticker
     default_idx = 0
-    preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
-    for i, pref in enumerate(preferred):
-        if pref in tickers:
-            default_idx = tickers.index(pref)
-            break
+    _rt = st.session_state.get("research_ticker")
+    if _rt and _rt in tickers:
+        default_idx = tickers.index(_rt)
+    else:
+        preferred = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "ADBE", "META", "TSLA"]
+        for i, pref in enumerate(preferred):
+            if pref in tickers:
+                default_idx = tickers.index(pref)
+                break
 
     selected_ticker = st.selectbox(
         "Select a holding to compare",
@@ -310,7 +315,7 @@ with tab_table:
         "% from High": display_df["% from 52W High"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) and x is not None else "—"),
     })
 
-    st.dataframe(fmt_df, use_container_width=True, hide_index=True)
+    render_responsive_table(fmt_df, title_col="Ticker")
 
 # ── TAB 2: Valuation ──
 with tab_valuation:

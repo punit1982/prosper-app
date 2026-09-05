@@ -119,6 +119,7 @@ current_alloc = analyze_current_allocation(_alloc_df, info_map)
 cash_positions = get_all_cash_positions()
 from core.currency_normalizer import total_cash_in_base_currency
 from core.ui_components import status_chip
+from core.ui_errors import unexpected
 total_cash = total_cash_in_base_currency(cash_positions, base_currency)
 cash_pct = (total_cash / (total_mv + total_cash) * 100) if (total_mv + total_cash) > 0 else 0
 
@@ -963,7 +964,7 @@ with tab_advanced:
                     else:
                         st.warning("Need at least 2 tickers with price history.")
                 except Exception as e:
-                    st.error(f"Failed: {e}")
+                    unexpected("the correlation matrix", e)
 
         corr_data = st.session_state.get("_fortress_corr")
         if corr_data and corr_data.get("correlation_matrix"):
