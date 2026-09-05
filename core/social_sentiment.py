@@ -190,16 +190,28 @@ def get_analyst_sentiment(ticker: str) -> Dict:
 
 # ── Google News RSS ──────────────────────────────────────────────────────────
 
-def get_google_news_sentiment(ticker: str) -> Dict:
+def get_google_news_sentiment(ticker: str, company_name: str = "") -> Dict:
     """
     Fetch Google News RSS headlines for a ticker and calculate sentiment.
+
+    company_name, when given, replaces the bare ticker in the search query
+    (a 2-4 letter symbol like "TCS" is genuinely ambiguous — "Tata
+    Consultancy Services" is not) and the regional edition is picked from the
+    ticker's exchange suffix instead of always forcing the US edition, which
+    was quietly starving this portfolio's non-US holdings of relevant hits.
     """
+    from urllib.parse import quote as _urlquote
+    from core.data_engine import _NEWS_REGION
+
     base_ticker = ticker.split(".")[0] if "." in ticker else ticker
     if ":" in base_ticker:
         base_ticker = base_ticker.split(":")[0]
+    suffix = ticker.split(".")[-1].upper() if "." in ticker else ""
+    gl, ceid = _NEWS_REGION.get(suffix, ("US", "US:en"))
+    query = _urlquote(f'"{company_name}"') if company_name else _urlquote(f"{base_ticker} stock")
 
     try:
-        url = f"https://news.google.com/rss/search?q={base_ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-{gl}&gl={gl}&ceid={ceid}"
         resp = requests.get(url, timeout=8)
         if resp.status_code != 200:
             return {"score": 0, "headlines": 0, "source": "Google News RSS"}
@@ -229,7 +241,7 @@ def get_google_news_sentiment(ticker: str) -> Dict:
 # ── Composite Score ──────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_composite_sentiment(ticker: str, news_score: float, news_has_data: bool = True) -> Dict:
+def get_composite_sentiment(ticker: str, news_score: float, news_has_data: bool = True, company_name: str = "") -> Dict:
     """
     Combine all sentiment sources into a weighted composite with dynamic
     weight redistribution.
@@ -253,7 +265,7 @@ def get_composite_sentiment(ticker: str, news_score: float, news_has_data: bool 
         f_st = pool.submit(get_stocktwits_sentiment, ticker)
         f_rd = pool.submit(get_reddit_sentiment, ticker)
         f_an = pool.submit(get_analyst_sentiment, ticker)
-        f_gn = pool.submit(get_google_news_sentiment, ticker)
+        f_gn = pool.submit(get_google_news_sentiment, ticker, company_name)
 
         try:
             st_data = f_st.result(timeout=12)
@@ -323,15 +335,18 @@ def get_composite_sentiment(ticker: str, news_score: float, news_has_data: bool 
 def get_composite_sentiment_batch(tickers_with_news: List[tuple]) -> Dict[str, Dict]:
     """
     Fetch composite sentiment for multiple tickers in parallel.
-    Input: [(ticker, news_score), ...] or [(ticker, news_score, news_has_data), ...]
+    Input: [(ticker, news_score), ...] or
+           [(ticker, news_score, news_has_data, company_name), ...]
     Calls the cached get_composite_sentiment() per ticker so the cache is
     shared between single-ticker and batch calls.
     """
     results = {}
 
     def _fetch(item):
-        ticker, news_score, news_has_data = (item + (True,))[:3]
-        return ticker, get_composite_sentiment(ticker, news_score, news_has_data=news_has_data)
+        ticker, news_score, news_has_data, company_name = (item + (True, ""))[:4]
+        return ticker, get_composite_sentiment(
+            ticker, news_score, news_has_data=news_has_data, company_name=company_name
+        )
 
     with ThreadPoolExecutor(max_workers=min(len(tickers_with_news), 4)) as pool:
         futures = {pool.submit(_fetch, item): item[0] for item in tickers_with_news}

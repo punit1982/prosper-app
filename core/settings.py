@@ -275,11 +275,23 @@ def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=
     Extra keyword arguments (tools, temperature, …) are passed straight through.
     Returns the API response object (use extract_text() to read it).
     Raises Exception if ALL models fail.
+
+    Confirmed live (2026-09-05): claude-opus-5 has extended thinking on by
+    default and it is NOT free — on a real prompt it spent 560 of 1024
+    max_tokens on thinking, hit stop_reason="max_tokens", and left the text
+    block empty. Every caller here that doesn't explicitly pass `thinking`
+    (chat, mini-chat, CIO briefing, screenshot parsing) can silently fall
+    back from Sonnet to Opus on a transient error and hit exactly this — a
+    successful, non-empty API response whose visible text is empty. GROW's
+    engine already opts in to thinking deliberately per tier (see
+    core/grow_engine.py) by passing `thinking` itself; setdefault here only
+    fills the gap for callers that never think about it at all.
     """
     preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
     models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
 
     _extra = dict(kwargs)
+    _extra.setdefault("thinking", {"type": "disabled"})
     if system:
         _extra["system"] = system
 
@@ -323,6 +335,10 @@ def call_claude_stream(client, messages, max_tokens=1024, preferred_model=None, 
     models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
 
     _extra = dict(kwargs)
+    # See call_claude()'s docstring — claude-opus-5 defaults to extended
+    # thinking on, which can consume most of max_tokens and leave little/no
+    # room for visible text if this call ever falls back to it.
+    _extra.setdefault("thinking", {"type": "disabled"})
     if system:
         _extra["system"] = system
 

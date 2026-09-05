@@ -84,34 +84,45 @@ def _make_signed_token(email: str) -> str:
     return f"{email}.{sig}"
 
 
-def _close_popup_html(result_json: str, delay_ms: int = 800) -> str:
+def _close_popup_html(result_json: str, delay_ms: int = 800, success: bool = True) -> str:
     """Return a full HTML page that writes to localStorage and closes the popup.
     Uses st.components.v1.html() — NOT st.html() — so localStorage works.
 
     Chrome/Firefox/Safari all refuse window.close() on a window that has since
     navigated cross-origin (through accounts.google.com and back) unless the
     call happens inside a direct user gesture — a timer-triggered close is
-    silently blocked with no JS-visible error. Previously the fallback for
-    that case redirected the orphaned popup to '/', which reloaded a second
-    full copy of Prosper inside it — confusing ("why do I have two windows").
-    Now the fallback shows a plain "you can close this" message with a button;
-    clicking it IS a user gesture, so window.close() succeeds there far more
-    often than the automatic attempt does.
+    silently blocked with no JS-visible error. This is the COMMON case for
+    this popup flow, not a rare edge case, so the fallback below isn't a
+    corner case to shrug off.
+
+    Bug this fixes: the previous fallback rendered inside an
+    st.components.v1.html(..., height=0) iframe — a literal zero-height box —
+    so the manual "close this window" button existed in the DOM but could
+    never actually be seen, leaving the popup stuck open with the static
+    Streamlit-rendered "Closing this window..." text above it, forever. The
+    caller now passes a real height; this function only controls what
+    appears inside it once the close attempt fails.
     """
+    if success:
+        fallback_icon, fallback_title, fallback_body = "✅", "You're signed in", \
+            "This window didn't close automatically — you can close it now."
+    else:
+        fallback_icon, fallback_title, fallback_body = "⚠️", "You can close this window", \
+            "This window didn't close automatically."
     return f"""
     <!DOCTYPE html>
     <html>
     <head><style>
     body{{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-    .fallback{{display:none;text-align:center;padding:2rem;}}
+    .fallback{{display:none;text-align:center;padding:1.5rem;}}
     .fallback button{{margin-top:1rem;padding:10px 20px;border-radius:8px;border:none;
       background:#1E88E5;color:#fff;font-weight:600;font-size:0.95rem;cursor:pointer;}}
     </style></head>
     <body>
     <div class="fallback" id="fallback">
-        <div style="font-size:2rem">✅</div>
-        <h3 style="font-weight:500">You're signed in</h3>
-        <p style="color:#888">This window didn't close automatically — you can close it now.</p>
+        <div style="font-size:2rem">{fallback_icon}</div>
+        <h3 style="font-weight:500">{fallback_title}</h3>
+        <p style="color:#888">{fallback_body}</p>
         <button onclick="window.close()">Close this window</button>
     </div>
     <script>
@@ -163,8 +174,8 @@ if error:
     </div>
     """, unsafe_allow_html=True)
     _components.html(
-        _close_popup_html(json.dumps({"verified": False, "error": "cancelled"})),
-        height=0,
+        _close_popup_html(json.dumps({"verified": False, "error": "cancelled"}), success=False),
+        height=180,
         scrolling=False,
     )
     st.stop()
@@ -179,8 +190,8 @@ elif code and state:
         </div>
         """, unsafe_allow_html=True)
         _components.html(
-            _close_popup_html(json.dumps({"verified": False, "error": "hmac_fail"}), delay_ms=1500),
-            height=0,
+            _close_popup_html(json.dumps({"verified": False, "error": "hmac_fail"}), delay_ms=1500, success=False),
+            height=180,
             scrolling=False,
         )
         st.stop()
@@ -245,8 +256,8 @@ elif code and state:
                         """, unsafe_allow_html=True)
                         # v6.5 FIX: st.components.v1.html() — localStorage works here
                         _components.html(
-                            _close_popup_html(json.dumps(result_payload), delay_ms=800),
-                            height=0,
+                            _close_popup_html(json.dumps(result_payload), delay_ms=800, success=True),
+                            height=180,
                             scrolling=False,
                         )
                         st.stop()
@@ -274,16 +285,16 @@ elif code and state:
         </div>
         """, unsafe_allow_html=True)
         _components.html(
-            _close_popup_html(json.dumps({"verified": False, "error": "token_exchange_failed"}), delay_ms=2500),
-            height=0,
+            _close_popup_html(json.dumps({"verified": False, "error": "token_exchange_failed"}), delay_ms=2500, success=False),
+            height=180,
             scrolling=False,
         )
 
     except Exception as exc:
         st.error(f"Authentication error: {exc}")
         _components.html(
-            _close_popup_html(json.dumps({"verified": False, "error": "exception"}), delay_ms=2500),
-            height=0,
+            _close_popup_html(json.dumps({"verified": False, "error": "exception"}), delay_ms=2500, success=False),
+            height=180,
             scrolling=False,
         )
 

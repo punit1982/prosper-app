@@ -38,14 +38,17 @@ if cache_key in st.session_state:
     t_col    = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
     has_price = pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)), errors="coerce").notna()
     tickers   = sorted(enriched.loc[has_price, t_col].dropna().tolist(), key=str.upper)
+    # Keyed by the SAME column tickers[] draws from (ticker_resolved when
+    # present) — keying by the original "ticker" column here would silently
+    # miss every row whose resolved ticker differs from the stored one.
+    names = dict(zip(enriched[t_col], enriched["name"]))
 else:
     tickers = sorted(holdings["ticker"].dropna().tolist(), key=str.upper)
+    names = dict(zip(holdings["ticker"], holdings["name"]))
 
 if not tickers:
     st.info("No tickers with live prices. Load prices from **Portfolio Dashboard** first.")
     st.stop()
-
-names = dict(zip(holdings["ticker"], holdings["name"]))
 
 # ── Sentiment cache (30-min TTL in session_state) ─────────────────────────────
 sent_key = f"sentiment_data_{hash(tuple(sorted(tickers)))}"
@@ -59,9 +62,15 @@ if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts
         composites = {}
 
         def _fetch(ticker):
-            news_sent = get_ticker_sentiment(ticker)
+            # A bare ticker ("TCS") is genuinely ambiguous for a news search;
+            # the company name ("Tata Consultancy Services") is not — this
+            # was the single biggest lever on relevant coverage for this
+            # portfolio's non-US names, and get_ticker_sentiment's
+            # company_name parameter existed but was never actually passed.
+            news_sent = get_ticker_sentiment(ticker, names.get(ticker, ""))
             comp      = get_composite_sentiment(
-                ticker, news_sent["score"], news_has_data=news_sent.get("total_headlines", 0) > 0
+                ticker, news_sent["score"], news_has_data=news_sent.get("total_headlines", 0) > 0,
+                company_name=names.get(ticker, ""),
             )
             return ticker, news_sent, comp
 

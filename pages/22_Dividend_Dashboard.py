@@ -15,6 +15,7 @@ from core.database import get_all_holdings
 from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
+from core.ui_components import status_chip
 
 st.markdown(
     "<h2 style='margin-bottom:0'>💰 Dividend Dashboard</h2>"
@@ -288,28 +289,31 @@ with tab_calendar:
         upcoming = ex_dates[ex_dates["days_until"] >= -7].head(20)
         if not upcoming.empty:
             st.markdown("### Upcoming Ex-Dividend Dates")
+            # UX audit finding #1: status here used to be an emoji + a
+            # separate word (🔴 + "Imminent"), a different vocabulary from
+            # every other page's own status emoji. One shared chip component
+            # now carries both the color and the label together.
             for _, row in upcoming.iterrows():
                 days = row["days_until"]
                 if days < 0:
-                    icon = "⬛"
-                    tag = "Past"
+                    chip = status_chip("Past", "neutral")
                 elif days <= 3:
-                    icon = "🔴"
-                    tag = "Imminent"
+                    chip = status_chip(f"{days}d — Imminent", "critical")
                 elif days <= 14:
-                    icon = "🟡"
-                    tag = "Soon"
+                    chip = status_chip(f"{days}d — Soon", "warn")
                 else:
-                    icon = "🟢"
-                    tag = ""
+                    chip = status_chip(f"{days}d", "good")
 
                 income_per = (row["quantity"] * row["dividend_rate"] * row.get("fx_rate", 1.0) / 4
                               if pd.notna(row["dividend_rate"]) else 0)
+                income_str = f"· Est income: {base_currency} {income_per:,.0f}" if income_per > 0 else ""
                 st.markdown(
-                    f"{icon} **{row['ticker']}** — {row['ex_dt'].strftime('%b %d, %Y')} "
-                    f"({days} days) "
-                    f"{'· Est income: ' + base_currency + ' ' + f'{income_per:,.0f}' if income_per > 0 else ''} "
-                    f"{'· ' + tag if tag else ''}"
+                    f"<div style='display:flex;align-items:center;gap:10px;padding:6px 0;"
+                    f"border-bottom:1px solid rgba(128,128,128,0.15);font-size:0.92rem'>"
+                    f"{chip}<b>{row['ticker']}</b>"
+                    f"<span style='color:#888'>{row['ex_dt'].strftime('%b %d, %Y')} {income_str}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
         else:
             st.info("No upcoming ex-dividend dates found.")

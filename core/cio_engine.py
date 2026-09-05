@@ -143,16 +143,31 @@ def _fetch_one_quote(sym: str) -> tuple:
             pass
 
     # Source 1: yfinance
+    # Hard per-call timeout — same reasoning as core/data_engine.py
+    # _yf_fetch_info: a slow/blocked yfinance call can occupy its worker slot
+    # far longer than the batch's own outer timeout accounts for, since that
+    # outer timeout only bounds how long the CALLER waits for already-done
+    # futures, not how long a still-running call keeps its slot. fast_info
+    # currently appears to still work reliably, but .info (a different Yahoo
+    # endpoint) started silently failing slowly across the board — bounding
+    # this call too prevents that same failure mode from ever reintroducing a
+    # multi-minute page hang here.
     try:
-        tk = yf.Ticker(sym)
-        fi = tk.fast_info
-        price = fi.last_price
+        from core.parallel import run_with_timeout
+
+        def _fetch_fast_info():
+            tk = yf.Ticker(sym)
+            fi = tk.fast_info
+            return fi.last_price, fi.previous_close, getattr(fi, "currency", None)
+
+        _fi_result = run_with_timeout(_fetch_fast_info, timeout=6, default=None)
+        price, prev_close, yf_ccy = _fi_result if _fi_result else (None, None, None)
         if price is not None and _price_sanity_check(sym, price, "yfinance"):
-            prev  = fi.previous_close
+            prev  = prev_close
             change     = round(price - prev, 6) if prev else None
             change_pct = round((change / prev) * 100, 4) if (prev and change is not None) else None
             # Include trading currency so enrichment can override suffix-based guess
-            yf_currency = getattr(fi, "currency", None) or ""
+            yf_currency = yf_ccy or ""
             result = {
                 "symbol":            sym,
                 "price":             price,

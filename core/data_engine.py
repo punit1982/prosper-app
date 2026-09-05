@@ -357,12 +357,26 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
 # ─────────────────────────────────────────
 @st.cache_data(ttl=INFO_TTL, show_spinner=False, max_entries=60)
 def _yf_fetch_info(ticker: str) -> Dict:
-    """Raw yfinance info fetch — cached by Streamlit across all pages/reruns."""
-    try:
+    """Raw yfinance info fetch — cached by Streamlit across all pages/reruns.
+
+    Hard per-call timeout: yfinance's .info currently fails for nearly every
+    ticker in production (Yahoo's quoteSummary endpoint rejecting the
+    request — see get_ticker_info_batch), and each failure isn't a fast 404 —
+    it can take several seconds (internal retry/backoff inside yfinance/
+    curl_cffi). gather()'s own outer timeout does NOT bound this: it only
+    caps how long the CALLER waits for already-completed futures, not how
+    long a still-running call occupies its worker slot. With only a handful
+    of workers, ~150 slow-failing tickers serialized like that is exactly
+    what produced multi-minute page loads. Capping each call here bounds the
+    real worker-slot time directly.
+    """
+    from core.parallel import run_with_timeout
+
+    def _fetch():
         import yfinance as yf
         return yf.Ticker(ticker).info or {}
-    except Exception:
-        return {}
+
+    return run_with_timeout(_fetch, timeout=6, default={}) or {}
 
 
 def get_ticker_info(ticker: str) -> Dict:
@@ -412,11 +426,18 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
     stale = [t for t in tickers if t not in cached]
 
     if stale:
-        total_timeout = max(60, len(stale) * 5)
+        # Each get_ticker_info() call is now hard-capped at ~6s inside
+        # _yf_fetch_info regardless of how long yfinance/Yahoo actually takes
+        # to fail, so wall-clock scales with (stale tickers / workers), not
+        # with a flat 5s-per-ticker guess that could add up to many minutes
+        # for a large portfolio when — as is currently the case — almost
+        # every single call fails.
+        _workers = 10
+        total_timeout = max(30, (len(stale) // _workers + 2) * 8)
         done, _ = gather(
             get_ticker_info,
             [(t, (t,)) for t in stale],
-            max_workers=4,
+            max_workers=_workers,
             timeout=total_timeout,
         )
         fresh = {t: (done.get(t) or {}) for t in stale if t in done}
@@ -624,11 +645,31 @@ def _fetch_news_rss(ticker: str) -> List[Dict]:
         return []
 
 
-def get_ticker_news(ticker: str) -> List[Dict]:
+# Google News regional edition by ticker suffix — a bare ticker searched
+# against the US edition is often ambiguous (e.g. "TCS" also matches
+# unrelated US orgs) and misses regional coverage. gl/ceid bias results
+# toward the market that actually covers this name; hl stays English.
+_NEWS_REGION = {
+    "NS": ("IN", "IN:en"), "BO": ("IN", "IN:en"),
+    "AE": ("AE", "AE:en"), "AD": ("AE", "AE:en"),
+    "SI": ("SG", "SG:en"),
+    "HK": ("HK", "HK:en"),
+    "SW": ("CH", "CH:en"),
+    "L":  ("GB", "GB:en"),
+}
+
+
+def get_ticker_news(ticker: str, company_name: str = "") -> List[Dict]:
     """
     Fetch news for one ticker via RSS (5s real HTTP timeout — never hangs).
     Falls back to Finnhub if configured.
     Cached 15 min in session_state.
+
+    company_name, when given, is used for the Google News query instead of
+    the bare ticker — a bare symbol like "TCS" is genuinely ambiguous (also
+    matches unrelated US orgs) in a way "Tata Consultancy Services" isn't,
+    and this was the single biggest lever on relevant coverage for
+    non-US names in this portfolio.
     """
     cached = _cache_get(f"news_{ticker}", NEWS_TTL)
     if cached is not None:
@@ -638,9 +679,18 @@ def get_ticker_news(ticker: str) -> List[Dict]:
 
     # Google News RSS — diverse sources (Reuters, Bloomberg, CNBC, etc.)
     try:
-        clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+        from urllib.parse import quote as _urlquote
+        suffix = ticker.split(".")[-1].upper() if "." in ticker else ""
+        gl, ceid = _NEWS_REGION.get(suffix, ("US", "US:en"))
+        if company_name:
+            # Quoted exact-name match — far fewer irrelevant hits than a bare
+            # 2-4 letter ticker symbol.
+            query = _urlquote(f'"{company_name}"')
+        else:
+            clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+            query = _urlquote(f"{clean_ticker} stock")
         google_items = _fetch_rss_feed(
-            f"https://news.google.com/rss/search?q={clean_ticker}+stock&hl=en-US&gl=US&ceid=US:en",
+            f"https://news.google.com/rss/search?q={query}&hl=en-{gl}&gl={gl}&ceid={ceid}",
             "Google News", max_items=8,
         )
         all_news.extend(google_items)
@@ -1373,7 +1423,10 @@ def get_ticker_sentiment(ticker: str, company_name: str = "") -> Dict:
               top_positive, top_negative, relevant_count, relevance_breakdown}
     Headlines in top_positive/top_negative are dicts: {title, date, stale, relevance}
     """
-    news = get_ticker_news(ticker)
+    # company_name existed in this signature but was never actually passed
+    # through — every caller's effort to supply it was silently dropped, and
+    # every ticker's news search ran on the bare, often-ambiguous symbol.
+    news = get_ticker_news(ticker, company_name)
     if not news:
         return {"score": 0.0, "label": "No Data", "total_headlines": 0,
                 "positive_count": 0, "negative_count": 0,

@@ -298,14 +298,20 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here" and pg.title != "Ask
         z-index: 9999 !important;
     }
     div[data-testid="stPopover"]:last-of-type button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        /* UX audit finding: this was the one hand-styled visual moment in
+           the whole app, and it used a generic purple-to-indigo AI-product
+           gradient (#667eea -> #764ba2) instead of Prosper's own color
+           language. Replaced with the same blue already used for the
+           "Recovery" FORTRESS regime (core/fortress.py REGIME_COLORS) —
+           the app's own accent, not a borrowed one. */
+        background: linear-gradient(135deg, #0984e3 0%, #0a6bb3 100%) !important;
         color: white !important;
         border: none !important;
         border-radius: 50px !important;
         padding: 12px 20px !important;
         font-weight: 600 !important;
         font-size: 0.9rem !important;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+        box-shadow: 0 4px 15px rgba(9, 132, 227, 0.4) !important;
     }
     </style>
     """, unsafe_allow_html=True)
