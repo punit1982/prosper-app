@@ -66,7 +66,13 @@ for n, nm in cn:
     ok(f"criterion {n} {nm.strip()[:26]:<26s} has retrieval support", anchors[n].lower() in ALL.lower())
 ok("margin-room band table complete", "20 points or more" in T and "12 up to 20" in T)
 ok("bands do not overlap at zero", "A room of exactly zero scores 1, not 3" in T)
-ok("peak detector present", "at or above the best margin" in T)
+ok("peak detector present", "0 or below" in T and "peer median" in T)
+ok("peak detector routes to both branches",
+   "more than 2 points *below* the peer median" in T and "Switch to the defence branch below" in T)
+ok("the defence band is 2 points, and justified",
+   "Why a 2-point band and not a hard zero" in T)
+ok("no cliff at the peer median",
+   "A hard zero creates a cliff" in T)
 ok("mid-ramp exception is capped and provisional", "capped at 7 and marked PROVISIONAL" in T)
 ok("past expansion is not a mechanism", "three consecutive years of margin expansion is not a mechanism" in T)
 ok("no placeholder scoring", "A criterion is never given a default of 5" in T)
@@ -244,6 +250,89 @@ ok("all four calibration reads are dated",
    all(d in T for d in ("04-Sep-2026", "04-Mar-2027", "04-Sep-2027", "04-Sep-2029")))
 # rules 20-22 must exist and be numbered contiguously off 19
 ok("rules 20-22 present and numbered", all(f"\n{n}. **" in T for n in (19, 20, 21, 22)))
+
+print("\n[10d] CONSERVATISM — the eight defects the first live batch exposed")
+for lab, pat in [("own-history anchor has a void test",   "The void test on the own-history limb"),
+                 ("void is printed when it fires",         "OWN-HISTORY ANCHOR VOID"),
+                 ("continuity voids the anchor",           "The continuity test has fired"),
+                 ("current above own-best voids the anchor","current margin already exceeds the own best full year in ten"),
+                 ("being best-in-class no longer scores 1","Switch to the defence branch below. Do not score 1"),
+                 ("the defence branch exists",             "The defence branch — when there is no room because there is nowhere better to be"),
+                 ("the defence branch is capped at 8",     "capped at 8, never 9 or 10"),
+                 ("defence branch is printed",             "ROOM: DEFENCE BRANCH"),
+                 ("NO FORWARD ENGINE threshold is unambiguous", "There is no other reading"),
+                 ("NFE blocked on a void anchor",          "may not fire on a criterion-5 score carrying `OWN-HISTORY ANCHOR VOID`"),
+                 ("NFE blocked on the defence branch",     "may not fire on a criterion-5 score carrying `ROOM: DEFENCE BRANCH`"),
+                 ("a blocked cap is printed",              "NO FORWARD ENGINE — BLOCKED"),
+                 ("the entry arithmetic is a total return","cash returned over n"),
+                 ("cash returned is a separate line",      "cash returned: nil"),
+                 ("buybacks are not double counted",       "Buybacks — never here"),
+                 ("joint conservatism has four limbs",     "four limbs, each tested and printed, and it fires on two"),
+                 ("void limbs are struck from the denominator", "struck from both the numerator and the denominator"),
+                 ("limb d tests the matched comparable",   "Is the terminal multiple below the matched comparable's multiple?"),
+                 ("multiple deviations are signed and reasoned", "printed as a signed number with its reason"),
+                 ("one-way batch deviations are flagged",  "a batch whose deviations all point the same way is flagged"),
+                 ("the tie-break no longer defaults to the higher bar", "not the more punitive one"),
+                 ("defaulting to the higher premium is banned", "Defaulting to the higher required return is not permitted"),
+                 ("a genuine tie takes the midpoint",      "take the midpoint of the two premiums"),
+                 ("a two-rung runner-up gap goes in the call line", "that gap goes in the call line, not the appendix"),
+                 ("uniform batch confidence is flagged",   "A grade that never varies is not a grade")]:
+    ok(lab, pat in T)
+# the defence branch must not be reachable below the peer median
+ok("the defence branch requires the peer median",
+   "at or above the peer median less 2 points" in T)
+# a company below the peer median at its own ceiling still scores 1
+ok("a genuinely capped-out laggard still scores 1",
+   "it is at its own ceiling and that ceiling is worse than the industry's" in T)
+
+print("\n[10e] PRACTICAL — the hurdle, the ladder and the reality line")
+for lab, pat in [("the premium's job is scoped",        "compensates only for risk that is not already inside the cash flows"),
+                 ("double counting is named",            "Charging it a second time in the discount rate is double counting"),
+                 ("the compression is recorded",         "compressed on 05-Sep-2026"),
+                 ("the new range is stated",             "9.9% to 16.4%"),
+                 ("the ordering is preserved",           "The ordering is unchanged"),
+                 ("a venture hurdle is not a listed hurdle", "A required return of 23.9% is a venture-capital hurdle"),
+                 ("the ladder has five rungs",           "Five prices, each the level at which something changes"),
+                 ("the acceptable rung exists",          "Acceptable below"),
+                 ("the acceptable rung excludes the premium", "archetype premium excluded"),
+                 ("the acceptable rung is explained",    "is this worth owning at all, against just buying the index?"),
+                 ("the reality line is mandatory",       "mandatory whenever *buy below* sits more than 25% under the current price"),
+                 ("the gap is decomposed",               "from the required return compounded over n years"),
+                 ("the hurdle component is named constant", "close to constant and it is not an opinion about the company"),
+                 ("buy-below is a break-even not a target", "It is a break-even, not a target."),
+                 ("misuse is named explicitly",          "most common way to misuse this framework"),
+                 ("reality line reading 1",              "THE DISAGREEMENT IS ABOUT THE BUSINESS."),
+                 ("reality line reading 2",              "ROUGHLY FAIRLY VALUED — THE GAP IS THE HURDLE.")]:
+    ok(lab, pat in T)
+# premiums must be inside the listed-equity range and still monotone with the old ordering
+import re as _re
+prem = [float(x) for x in _re.findall(r'\|\s*\+([0-9.]+)\s*\|\s*[0-9.]+%\s*\|', ANNEX.get("E",""))]
+ok("every archetype premium is inside 1.0-7.5", prem and min(prem) >= 1.0 and max(prem) <= 7.5,
+   f"range {min(prem)}-{max(prem)} over {len(prem)} rows" if prem else "no premiums parsed")
+req = [float(x) for x in _re.findall(r'\|\s*\+[0-9.]+\s*\|\s*([0-9.]+)%\s*\|', ANNEX.get("E",""))]
+ok("no required return exceeds the listed-equity ceiling of 16.5%", req and max(req) <= 16.5,
+   f"max {max(req)}%" if req else "")
+ok("every required return equals base plus its premium",
+   all(abs((8.93 + p) - r) < 0.06 for p, r in zip(prem, req)), f"{len(prem)} rows checked")
+
+print("\n[10f] THE GROWTH PATH AND THE DISTRIBUTION")
+for lab, pat in [("cohort matched on end market",       "Cohort membership is matched on the END MARKET, not on the sector label"),
+                 ("sector label is explicitly not enough", "Revenue scale and an industry name are not sufficient"),
+                 ("excluded members are printed",       "the exclusion is printed with its reason"),
+                 ("a thin correct cohort beats a wide wrong one", "a thin correctly-matched cohort beats a full mis-matched one"),
+                 ("growth is checked against the cited end market", "Against the end market you cited"),
+                 ("slower than the end market is named as share loss", "the memo is forecasting share loss"),
+                 ("backlog floor test exists",          "Against contracted backlog"),
+                 ("backlog silence is banned",          "Silence is not permitted"),
+                 ("indicative books do not bind",       "stated as indicative rather than contractual"),
+                 ("consensus is compared but not used as an anchor", "Consensus is not an input and does not set the path"),
+                 ("a terminal below an earlier consensus must be defended", "say what it knows that the sell side does not"),
+                 ("the distribution may not be discarded", "The distribution is computed. It may not then be discarded."),
+                 ("expected value is printed beside the central case", "prints the CAGR and verdict each one produces"),
+                 ("missing probabilities are a defect", "That is a defect, not a style choice."),
+                 ("the central case stays the verdict of record", "The central case remains the verdict of record"),
+                 ("the EV rule was tested both ways",   "by being informative in both directions")]:
+    ok(lab, pat in T)
 
 print("\n[11] CONTRADICTIONS")
 ok("the suspended rules are named in writing", "Suspensions made in this version" in T)

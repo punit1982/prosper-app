@@ -1,6 +1,8 @@
 # GROW v5.1 — CORE
 **Signed 04-Sep-2026 · revision 1, 05-Sep-2026 · supersedes v5.0 · the only document read on a standard run**
 
+> **Revision 2, 05-Sep-2026 — what the first live batch changed.** Eight companies were run and **not one scored above 64 on Durability**, including Nestlé at 55. That is not a judgement about Nestlé; it is a defect in the scale. The cause was a single rule: **margin room measured distance-from-potential and scored a company 1 out of 10 for having already arrived.** It fired twice — on a mature leader earning its industry's margin, and on a small company whose "own best full year in ten" anchor was drawn from a decade of losses and sat *below* the margin it was earning that quarter. On the second, the resulting `NO FORWARD ENGINE` cap turned a BUY into a HOLD, and the memo recorded that the rule was "conservative to the point of being wrong on this specific name" before applying it anyway. Revision 2 adds **the own-history void test, the defence branch, two exemptions on `NO FORWARD ENGINE`, dividends in the Entry arithmetic, a joint-conservatism check that can actually fire, signed multiple deviations, and a tie-break that no longer defaults to the harsher premium.** Re-running the eight moved **one verdict and three Durability scores**; the four SELLs on distressed solar and storage survived every change, which is the point.
+>
 > **Revision 1 — what the calibration baseline changed, and what it did not.** The 04-Sep baseline could not measure accuracy: median elapsed time was six days against a three-to-five-year horizon. **It changed no weight, no threshold and no rule of judgement**, because six days of price movement is evidence about nothing. What it did find is that **one of the three accuracy commitments was testable immediately, and it failed** — thirteen of the first fifty-three verdicts were issued with no score, and sixty-five more existed only as an aggregate count. Both are permanently outside calibration. Revision 1 therefore adds **rules 20, 21 and 22** — a verdict must be decomposed, a rating list must itemise, and there is one scale — and closes four carried items that needed a decision rather than data: the criteria 5/7 disjointness, the dormancy clock, the archetype-premium falsification test, and the calibration schedule. **Everything else that was open remains open, and §12.3 says when each is answerable.**
 
 > **Read this file every run. Read an annex only when its trigger fires.**
@@ -60,7 +62,7 @@ Nineteen. Break one and the run is defective.
 13. **Position-blind by default.** No holding, cost basis or weight is read unless `position` is passed, and then only after both verdicts are fixed. **Enforcement is by check, not by claim** — the file is searched for holding, cost-basis and weight language before it is issued, and the certification line is written after the search passes, never before.
 14. **Never invent a rule mid-run.** Log it for the review.
 15. **A retrievable fact may never be estimated.** Share count, cash, debt balances, facility sizes, filing dates and any figure printed on the face of a filing come from the filing — never from a data aggregator, and **never by back-solving from market capitalisation or from a per-share figure.** Where the filing has not been opened, the memo says so and **the affected number may not be used to set a price.**
-16. **No named comparable, no multiple.** Every terminal or exit multiple names a real company, its multiple, its growth rate and the date measured, **matched on growth within ±5 points of the subject's modelled final-year growth and on business layer.** Where no company trades at a comparable growth rate, **that is the finding**: name the closest, state the growth gap in points, state the adjustment. **Where no comparable can be named at all, the memo says so in the call line, the valuation is built on cash flow rather than on a multiple, and confidence drops one level.**
+16. **No named comparable, no multiple.** Every terminal or exit multiple names a real company, its multiple, its growth rate and the date measured, **matched on growth within ±5 points of the subject's modelled final-year growth and on business layer.** Where no company trades at a comparable growth rate, **that is the finding**: name the closest, state the growth gap in points, state the adjustment. **Where no comparable can be named at all, the memo says so in the call line, the valuation is built on cash flow rather than on a multiple, and confidence drops one level.** **Any deviation from the matched comparable's multiple is printed as a signed number with its reason** — `exit 15× vs comparable 16.03×, −1.03 turns, reason: <x>` — **and a batch whose deviations all point the same way is flagged in the batch summary with the count.** An adjustment applied three-quarters of the time in one direction is a view, and a view is stated rather than absorbed into a number.
 17. **Stated is not sourced.** Every input to the destination value is classified A, B or C under §6.1 before it is used. **A forecast input that was invented rather than derived is the single most expensive error this project has recorded** — a six-name batch was rebuilt after a destination revenue figure was assigned from nothing, below published consensus, and the run did not know.
 18. **The Entry verdict never drives a sale.** A name that has become expensive is a name you stop buying. Sales come from the Durability verdict breaking, or from a break trigger firing — **never from the price having risen, and never from elapsed time.** Measured: a thirty-six-month time stop destroyed six of seven winners; one sat at 1.11× before returning 16.8×.
 19. **Every rule in this document carries its provenance.** A rule with no recorded origin cannot be defended at a review and is a candidate for suspension. See §12.
@@ -105,10 +107,23 @@ Then find `<TICKER> LEDGER.md` and any prior memo. Ledger → update. Prior memo
 
 ```
 Margin room = Achievable operating margin − Current operating margin   (points)
-Achievable  = the LOWEST of: the company's own best full year in ten
+Achievable  = the LOWEST of: the company's own best full year in ten   [see the void test]
                              the peer median at comparable size
                              management's published plan with a stated mechanism
 ```
+
+**The void test on the own-history limb — run it before the lowest-of.** The own-history anchor assumes the company that earned that margin is the company being scored. **Where it is not, the limb is void and achievable is the lower of the peer median and the plan.** The limb is void where any of these is true:
+
+| Void when | Because |
+|---|---|
+| **The continuity test has fired** (§3 step 1) | The pre-transition entity's margins describe a different business |
+| **The current margin already exceeds the own best full year in ten** | An anchor below where the company is standing is not a ceiling, it is a stale reading |
+| **The company's first profitable year falls inside the last three** | A decade of losses cannot set a ceiling on a business that has just started earning |
+| **A disposal, acquisition or segment exit above 25% of revenue inside the ten years** | The mix that produced the old peak no longer exists |
+
+**When the limb is voided the memo prints `OWN-HISTORY ANCHOR VOID` with the reason**, and the score carries that mark forward — see the exemption in §8.4.
+
+*This is written from a live failure. Intellicheck was anchored on the 4.8% it earned in 2025 — the first profitable year in the company's history, drawn from a decade of losses — while the business was running at a 10.2% operating margin in the quarter just reported. Achievable came out below actual, room went to zero, criterion 5 scored 2, and the resulting `NO FORWARD ENGINE` cap turned a BUY into a HOLD. The memo recorded that the rule was "conservative to the point of being wrong on this specific name" and applied it anyway.*
 
 **For measurement bases other than M1, the term "margin" is replaced by that basis's own economic measure — see Annex B. For proof stages S0–S2 the anchors do not exist and Annex A governs.**
 
@@ -125,7 +140,25 @@ Then the **mechanism test**. A gap scores above 5 only where the mechanism is **
 | **6 up to 12**, mechanism named and dated | **7** |
 | Any gap, **mechanism not named** | **5** |
 | **Above 0 and below 6**, mechanism named | **3** |
-| **0 or below — the company is at or above the best margin it or its peers have earned** | **1** |
+| **0 or below, and the company is more than 2 points *below* the peer median** — it is at its own ceiling and that ceiling is worse than the industry's | **1** |
+| **Room of 2 points or less, and the current margin is at or above the peer median less 2 points** | **Switch to the defence branch below. Do not score 1 or 3** |
+
+### The defence branch — when there is no room because there is nowhere better to be
+
+**A company earning as much as the best of its industry has run out of headroom by winning, not by failing.** Scoring that 1 out of 10 on a criterion worth 12 to 22 points marks a business down for the thing that makes it worth owning. **Where margin room is 2 points or less and the current margin sits at or above the peer median less 2 points, criterion 5 stops asking "how much better can this get" and asks "how long does this last".**
+
+**Why a 2-point band and not a hard zero.** Cross-company margin comparison is not accurate to a decimal — research capitalisation, lease treatment, restructuring classification and segment definition each move a reported margin by more than a point. **A hard zero creates a cliff: 0.2 points of headroom would score 3 and 0.1 points the other way would score 7, on a difference no accounting standard can resolve.** *Nestlé sat 0.23 points below its peer median and scored 3 on that basis. The 2-point band is the measurement noise, not an allowance.*
+
+| The margin is held by | Score |
+|---|---|
+| A **named, disclosed structural source** — pricing power evidenced by rises that stuck, a mix the competition cannot copy, a cost position at the bottom of the curve, scale on capacity already paid for — **and the margin has held for three years or more** | **8** |
+| A named structural source, **held for less than three years**, or **one point of the evidence missing** | **7** |
+| The margin is at or above the peer median but **the source is not named** — it is observed, not explained | **6** |
+| The margin is at or above the peer median and **is visibly eroding** — two consecutive years of compression, or a named structural threat with a date | **4** |
+
+**The defence branch is capped at 8, never 9 or 10.** A top score on this criterion still requires real headroom with a named mechanism; holding an excellent position is worth a great deal, but it is not the same asset as an excellent position with room left to run.
+
+**The memo prints `ROOM: DEFENCE BRANCH` with the peer median, the current margin and the source being defended.** *Written from Nestlé: achievable 15.71% against a current 15.48%, headroom of 0.23 points, criterion 5 scored 3, and one of the most durable consumer franchises in existence came out at 55 on a durability scale. It was marked down for being a business that has already arrived.*
 
 **The bands do not overlap. A room of exactly zero scores 1, not 3.**
 
@@ -166,6 +199,18 @@ Then the **conversion test**: incremental margin = Δ operating income ÷ Δ rev
 
 **The growth path is anchored on a named cohort.** Revenue growth to the valuation date is anchored on a named cohort: companies that crossed this company's current revenue scale and are now five or more years past the crossing. **Print every member, its crossing date, its revenue and growth today, and the cohort median, mean and dispersion.** **If the base case decays slower than the cohort median that is permitted, but it must be justified in writing and the memo must state what the median would have produced.** Generosity is allowed; hidden generosity is not.
 
+**Cohort membership is matched on the END MARKET, not on the sector label.** A member must sell into the same demand driver — the same buyer, deciding on the same budget, for the same reason. **Revenue scale and an industry name are not sufficient and never were.** Where a candidate crossed the scale but sells into a different demand driver, it is excluded and **the exclusion is printed with its reason.** Where fewer than three members survive the end-market test, say so and widen on scale rather than on end market; **a thin correctly-matched cohort beats a full mis-matched one.**
+
+*Written from a live run. A utility-scale solar supplier was forced into a −14% revenue year in its base case by a four-member cohort of "US clean-energy hardware suppliers that crossed $600m of revenue" — two of whom were residential solar companies whose revenue collapse was a residential-demand and consumer-financing event with no bearing on utility procurement. The cohort was matched on scale and on a sector word. The forced down year was the difference between a negative and a roughly flat expected return.*
+
+**Three checks on the growth path, each printed.**
+
+| # | Check | Rule |
+|---|---|---|
+| **1** | **Against the end market you cited** | Compute the base-case revenue CAGR and the CAGR of the end market **as cited in this memo with its named source**. **Where the base grows more slowly, the memo is forecasting share loss** — print the implied share change in points and justify it with evidence. *A base case quietly below its own cited end market is a share-loss thesis that nobody argued for* |
+| **2** | **Against contracted backlog** | Where disclosed contracted backlog, awarded orders or remaining performance obligations **exceed the modelled terminal-year revenue**, the path is not credible as it stands. **Either raise it, or state with evidence why the book will not convert** — a cancellation record, a counterparty failure, a disclosed conversion rate below what the path assumes. **Silence is not permitted.** Where the book is stated as indicative rather than contractual, say so and the test does not bind |
+| **3** | **Against published consensus** | Print the base-case terminal-year revenue beside the furthest-out published consensus estimate and its date. **Consensus is not an input and does not set the path** — it is anti-predictive often enough that this framework refuses it as an anchor. **But a terminal year that sits below consensus for a year two or more earlier is a specific, large claim**, and a memo making it must say what it knows that the sell side does not |
+
 **Management's own guidance is an input only while it has been worth something.** **Where the company has missed a full-year guide by more than 25%, or cut one mid-year by more than 25%, inside the last four quarters, forward guidance is not an input to the central case.** The central case is built on delivered run-rate; the company's number is printed as the Bull case and labelled as management's; and **criterion 8 is capped at 4 for the four quarters that follow.**
 
 **And a guide is only comparable to a guide of the same thing.** **Where the definition of a guided figure changes, restate the record onto the new definition, or mark the comparison broken and say so.**
@@ -180,7 +225,20 @@ Then the **conversion test**: incremental margin = Δ operating income ÷ Δ rev
 
 **Check the arithmetic of growth before using it: growth = reinvestment rate × return on invested capital.** A growth rate the company's own reinvestment and returns cannot produce is arithmetically incompatible, and the memo says so rather than modelling it.
 
-**8 · The joint-conservatism check — three limbs, each tested and printed.** (a) Is base growth below trailing realised? (b) Is the terminal margin below the current actual? (c) Is the terminal multiple below the company's own listed-history low? **If all three fire, the base case is stacking down-bets and must be re-derived.** If two fire, print the flagged limb's sensitivity and state whether the verdict changes when that limb returns to the observed value. **The converse also applies: if the base case contains two or more optimistic inputs, compute and print the variant holding them at conservative values.**
+**8 · The joint-conservatism check — four limbs, each tested and printed, and it fires on two.**
+
+| Limb | Test |
+|---|---|
+| **(a)** | Is base growth below trailing realised? |
+| **(b)** | Is the terminal margin below the current actual? |
+| **(c)** | Is the terminal multiple below the company's own listed-history low? |
+| **(d)** | **Is the terminal multiple below the matched comparable's multiple?** |
+
+**A limb whose input was not retrieved is VOID and is struck from both the numerator and the denominator.** **The check fires when two or more of the computable limbs fire.** When it fires, the base case is stacking down-bets and must be re-derived, with the re-derivation printed. When exactly one fires, print that limb's sensitivity and state whether the verdict changes when the input returns to its observed value.
+
+**The converse also applies:** if the base case contains two or more optimistic inputs, compute and print the variant holding them at conservative values.
+
+*This replaces a three-of-three test that could not fire. Across the first live batch limb (c) fired **zero times out of eight** — it was Void on two names because the listed-history range was never retrieved, did not fire on three, and was not run on three. A brake containing a limb that never engages is not a brake. Limb (d) is added because on the same eight names **the exit multiple was set below the nearest named comparable six times and above it never**, an always-downward adjustment that no rule required and nothing measured.*
 
 Then the range: 40,000 draws, exit multiple lognormal with sigma from the comp set's coefficient of variation — floor 0.12, or 0.20 with fewer than four matched comps, cap 0.60. Produce expected return, the odds of clearing the required return, the odds of losing money, and the 10th and 90th percentiles.
 
@@ -203,6 +261,16 @@ Required return = risk-free rate + equity risk premium + archetype premium
 | **Base cost of equity** | **8.93%** | |
 
 Restated on the first business day of each quarter, or on a 50bp move in the ten-year. **This is maintenance, not amendment.** Print the build, never a bare number.
+
+## 4.1 · What the archetype premium is for — and what it is not for
+
+**The premium compensates only for risk that is not already inside the cash flows.** Everything else about a wide outcome — the chance the product fails, the category never forms, the policy is repealed, the balance sheet runs out — **is already priced in the four cases, in the Break case carrying a real probability weight, in the survival cap and in the dispersion used for the odds.** Charging it a second time in the discount rate is double counting, and double counting compounds: it shrinks the destination *and* divides it by a bigger number.
+
+**The premiums were compressed on 05-Sep-2026 from a range of +1.5 to +15.0 to a range of +1.0 to +7.5**, so required returns now run **9.9% to 16.4%** rather than 10.4% to 23.9%. The ordering is unchanged — every archetype sits in the same place relative to every other. Only the spread narrowed.
+
+**Why the old top of the ladder could not be defended.** A required return of 23.9% is a venture-capital hurdle. Venture hurdles are set that high because the positions are illiquid, most go to zero, and a few must carry the fund. **A listed equity you can sell on any trading day does not carry that hurdle**, and no published estimate puts a listed sector's cost of capital near it — sector WACC benchmarks for 2026 run roughly **5% to 16%**. A framework demanding 24% a year before it will say BUY is not being careful; it is refusing to invest.
+
+*What this fixed, measured on the first live batch: the divisor. At 19.93% over 4.32 years the framework divided its own destination value by **2.19×** before it would call anything a buy. At 14.50% that divisor is 1.79×. The verdicts barely moved — four SELLs stayed SELL because their destinations sit below the current price, which no hurdle change repairs — but every entry price on the ladder rose by roughly a fifth.*
 
 **Standing caution, printed in every memo.** The archetype premiums have no derivation. The archetype choice has been observed to move an answer more than a full quarter of company news. **Every memo prints what the Entry verdict would be under the runner-up archetype.** This is the framework's deepest unresolved problem and it is mitigated, not fixed.
 
@@ -254,8 +322,9 @@ Restated on the first business day of each quarter, or on a 50bp move in the ten
 
 **The tie-break, in this order and no other.**
 1. **Resolve on the fact: where does the gross profit actually sit?** That identifies which business this is, and it is an observation rather than a policy.
-2. **If the fact does not resolve it, take the archetype with the higher required return.** A lower required return discounts less and produces a higher entry price; taking the lower one flatters the call. *This rule shipped stated backwards once and moved one name's level from $419 to $479 — two sell rungs on a name trading at $895.*
-3. **Print the runner-up and the Entry verdict it would have produced, always.**
+2. **If the fact does not resolve it, weigh the evidence for each and take the one it supports — not the more punitive one.** Write the sentence that decides it: which archetype's *defining test* the company actually passes, in its own disclosed numbers. **Defaulting to the higher required return is not permitted as a substitute for that sentence.** The premiums have no derivation (§5.2 standing caution), and resolving every genuine ambiguity with the least defensible input in the framework converts an unfounded number into a verdict.
+3. **Where the evidence genuinely does not separate them — and this must be argued, not asserted — take the midpoint of the two premiums**, print both endpoint verdicts, and state that the verdict rests on a premium the framework cannot derive. *A lower required return discounts less and produces a higher entry price, so this rule must never be applied loosely; that is why limb 2 requires the sentence. This rule also shipped stated backwards once and moved one name's level from $419 to $479 — two sell rungs on a name trading at $895.*
+4. **Print the runner-up and the Entry verdict it would have produced, always.** **Where the runner-up's verdict differs by two rungs or more, that gap goes in the call line, not the appendix.** *National CineMedia was resolved to the higher bar and printed BUY; its runner-up printed STRONG BUY. A two-rung swing decided by an underived premium belongs where the reader will see it.*
 
 **And the forward limb: the trailing test proposes, guidance disposes.** Every assignment test above reads backwards. **Where company guidance for the next reported period contradicts the trailing direction on that archetype's own defining term, the archetype is reassigned and the contradiction is printed.** *A company was routed to Margin Inflection on a trailing margin moving +11.1pp a year, on the same day it guided that margin flat.* **This limb can flatter; where it moves a verdict up, that is recorded and reviewed.**
 
@@ -473,11 +542,37 @@ Durability = Σ (criterion × weight) ÷ available weight × 100, then × the in
 ## 8.1 · The computation
 
 ```
-CAGR_spot = (central-case value at the valuation date ÷ today's price)^(1/n) − 1
+CAGR_spot = ((central-case value at the valuation date + cash returned over n) ÷ today's price)^(1/n) − 1
 EXCESS    = CAGR_spot − required return
 ```
 
 `n` is the computed horizon from §5.6. The central case is **the third of the four — what I actually expect, not an average.**
+
+### The distribution is computed. It may not then be discarded.
+
+**Every memo prints the probability-weighted value beside the central case**, using the probabilities already assigned to the four cases, and **prints the CAGR and verdict each one produces.** A memo that assigns probabilities to four outcomes and then reports a verdict from one of them has thrown away its own work.
+
+| If | Then |
+|---|---|
+| The two verdicts agree | Print both, one line, move on |
+| **They differ by one rung or more** | **The call line carries both**, and the memo states in one sentence which it is acting on and why |
+| The four cases carry **no probabilities at all** | **That is a defect, not a style choice.** Probabilities are assigned or the memo says why they cannot be |
+
+**The central case remains the verdict of record**, because a probability-weighted value is dragged by whatever the bull case was allowed to claim, and the discipline of "what I actually expect" is worth keeping. **But the gap between the two is information about the shape of the outcome, and on a right-skewed name it is the most important number on the page.**
+
+*Tested on four live names before this rule was written, because the obvious objection to it is that it exists to manufacture buys. It does not. Expected value came out **87% above** the central case on one name and **81% above** on another — and **22% below** on a third, where half the probability mass sat in the break and bear cases. **Not one of the three changed verdict.** The rule earns its place by being informative in both directions, not by being generous.*
+
+**Cash returned is part of the return, and leaving it out is an arithmetic error, not caution.** The required return is built as risk-free + equity risk premium + archetype premium — **a total return.** Comparing it against price appreciation alone charges every dividend payer its entire yield as a penalty, every year, and points in one direction only. *On a 3% yielder against an 11.43% bar that is a quarter of the whole hurdle — routinely a full verdict notch.*
+
+| Include | Basis |
+|---|---|
+| **Ordinary dividends declared**, held at the current declared rate across `n` unless management has published a policy or a progressive commitment, in which case use that | Committed cash, and disclosed |
+| **Special dividends** only where already declared | Not extrapolated |
+| **Buybacks — never here.** They reach the answer through the share count in the destination build | Counting them twice is the error this line prevents |
+
+**The cash line is printed separately, never folded silently into the destination**: `destination $X + cash $Y over n = $Z`. Where the company pays nothing, the memo prints `cash returned: nil` so the reader knows it was considered. **Where the verdict changes depending on whether cash is counted, say so in the call line.**
+
+*Written from Nestlé, where the memo added CHF 17.00 of dividends to the destination and noted "the framework does not say to". The analyst was right and the framework was silent. Without that patch the return was −0.1% a year and the verdict was SELL on one of the most durable franchises in the coverage.*
 
 | EXCESS | Verdict |
 |---|---|
@@ -491,16 +586,38 @@ EXCESS    = CAGR_spot − required return
 
 ## 8.2 · The price ladder — printed on every memo
 
-Four prices, each the level at which the verdict changes. Solve the CAGR equation for price.
+**Five prices, each the level at which something changes.** Solve the CAGR equation for price.
 
-| Line | Solve for | Printed as |
+| Line | Solve for | Printed as | What it means to the reader |
+|---|---|---|---|
+| **Strong buy below** | CAGR_spot = required + 8 | `$X` | Paid well above the bar for the risk taken |
+| **Buy below** | CAGR_spot = required | `$Y` | The full archetype hurdle is met |
+| **Acceptable below** | **CAGR_spot = the base cost of equity (§4), archetype premium excluded** | `$A` | **A normal equity return. Not exciting, not a mistake** |
+| **Fairly priced** | CAGR_spot = 0 to base | `$A to $Z` | Positive, but less than owning the market |
+| **Reduce above** | CAGR_spot < 0 | `above $Z` | Expected to lose money from here |
+
+**The acceptable rung is the practical one and it is why this ladder has five rungs rather than four.** *Buy below* asks a company to deliver its full risk-adjusted hurdle from the entry price, compounded across the whole horizon — a real test, and often a price 30% to 50% under the market. *Acceptable below* asks the far more common question a person actually faces: **is this worth owning at all, against just buying the index?** A name sitting between the two rungs is not a refusal. It is a normal investment that will not clear a demanding bar.
+
+### The reality line — mandatory whenever *buy below* sits more than 25% under the current price
+
+**A buy price 40% under the market reads as an instruction to wait for a crash. It is not one, and the memo must say which of two very different things it is.** Split the gap into its two causes and print both:
+
+```
+buy below $Y is NN% under the market
+   from the destination sitting below the price   ...  XX%
+   from the required return compounded over n years  ...  YY%
+```
+
+**The second component is close to constant and it is not an opinion about the company.** Discounting any destination back four to five years at a 10–15% hurdle costs **roughly 40%**, for every name, always. **A "buy below" price will therefore almost always look like a crash price**, because it is the price at which a multi-year required return is delivered in full from a single entry on one day. **It is a break-even, not a target.** Reading it as a price to wait for is the most common way to misuse this framework.
+
+Then print the reading, in these words:
+
+| When | Print | What the reader should do |
 |---|---|---|
-| **Strong buy below** | CAGR_spot = required + 8 | `$X` |
-| **Buy below** | CAGR_spot = required | `$Y` |
-| **Fairly priced** | CAGR_spot = 0 | `$Y to $Z` |
-| **Reduce above** | CAGR_spot < 0 | `above $Z` |
+| **The destination component is the larger of the two** | **`THE DISAGREEMENT IS ABOUT THE BUSINESS.`** | Argue with the destination, not the entry. The framework thinks this is worth materially less than it costs, and no entry price fixes a thesis |
+| **The hurdle component is the larger, and the destination sits within 20% of the price** | **`ROUGHLY FAIRLY VALUED — THE GAP IS THE HURDLE.`** | The business is priced about right and simply cannot compound fast enough from here. **State the acceptable price and the return at today's price**, so the reader can judge it against their alternatives rather than against a bar they may not share |
 
-**Print all four in every memo, even when three of them are far from the current price.** They are the answer to "at what price does this change", and they are why the Entry verdict is a range rather than a word.
+**Print all five rungs in every memo, and the reality line whenever it triggers.** *Written from a live batch where a company whose destination sat within 3% of its own share price printed "buy below" at a 40% discount. It was arithmetically correct, it was read as a crash target, and nothing on the page said which of the two things it was.*
 
 ## 8.3 · The stability test — the word, not just the level
 
@@ -514,10 +631,19 @@ Four prices, each the level at which the verdict changes. Solve the CAGR equatio
 
 | Cap | Test | Effect |
 |---|---|---|
-| **NO FORWARD ENGINE** | Criteria 5 and 7 together score below 9 of their combined available weight ÷ 2. **D3 and H2 exempt** | **Caps at HOLD.** Cannot print BUY or STRONG BUY |
+| **NO FORWARD ENGINE** | **Criteria 5 and 7 together score below 9 out of 20** — the sum of the two raw 0–10 scores, not weighted, not halved. **D3 and H2 exempt, and see the two exemptions below** | **Caps at HOLD.** Cannot print BUY or STRONG BUY |
 | **PAPER PROFITS** | The earnings-quality check in §3 step 6 fails on either limb | **One rung down** — STRONG BUY→BUY, BUY→HOLD, HOLD→HOLD |
 
-**Both are printed whenever they bind, and whenever they would bind at the +25% multiple.**
+**The threshold is stated in raw score points because it was read two ways on live runs** — one memo recorded that "on the alternative reading of §8.4 this would fire" and could not settle it. **Nine out of twenty, raw. There is no other reading.**
+
+**Two exemptions on NO FORWARD ENGINE, and they exist because this cap misfired on its first live batch.**
+
+1. **It may not fire on a criterion-5 score carrying `OWN-HISTORY ANCHOR VOID`.** A score suppressed by an anchor the framework has itself declared invalid cannot then be used to veto a verdict.
+2. **It may not fire on a criterion-5 score carrying `ROOM: DEFENCE BRANCH`.** A company with no headroom because it already earns the best margin in its industry has not lost its forward engine — it has finished building one. Where the cap is blocked by either exemption, **the memo prints `NO FORWARD ENGINE — BLOCKED, criterion 5 <reason>` and states what the verdict would have been had it fired.**
+
+*Both exemptions are written from the same run. Intellicheck's criterion 5 scored 2 on a void anchor; 5 + 7 came to 5; the cap fired and converted +5.24 points of excess return — a BUY on the arithmetic — into a HOLD. It was the only capped verdict in the batch, and the input that caused it was wrong.*
+
+**Both caps are printed whenever they bind, and whenever they would bind at the +25% multiple.**
 
 ## 8.5 · The ceilings, which override everything
 
@@ -567,6 +693,8 @@ ENTRY:       central case → CAGR at spot → excess vs required → band
 | *"I'm confident"* | The odds of clearing the required return sit 0.25 or more from a coin flip, **and** the gap between the good and bad outcomes is 22 points of annual return or less, **and** nothing the company publishes is missing |
 | *"reasonably confident"* | The odds sit at least 0.12 from a coin flip |
 | *"this is a close call and I could be wrong"* | Anything else · three or more retrieval items the company publishes were not obtained · **the verdict is unstable across the ±25% band** · **more than two rows of the driving-inputs table are Class C** · **a mandatory-trigger document has gone un-opened in three consecutive runs** · **the provisional mid-ramp rule was applied** |
+
+**A grade that never varies is not a grade.** **Where every name in a batch lands on the same confidence phrase, the batch summary prints the reason for each one side by side and names the common cause.** *The first live batch printed "this is a close call and I could be wrong" on eight of eight — and on three of them the trigger was the same missing document, the debt maturity schedule, which is always available. That is a retrieval failure being paid for in confidence three times over, and a grade with no variance tells the reader nothing.* **Where the common cause is a retrieval item rather than a genuine feature of the businesses, it is fixed by retrieving it — not absorbed into the grade.**
 
 ## 8.9 · What accuracy means here, and the three things measured
 
@@ -762,7 +890,7 @@ The verifier tests the failure modes that reading cannot catch, because a thing 
 - **SEPARATED** — new in v5.1. **No price term appears in any Durability input, and no Durability term appears in the Entry arithmetic.** The two verdicts are proved independent by construction.
 - Plus: all ten profiles sum to 100 · every archetype reachable and fully specified · **the Entry resolver exhaustively over its full input grid** · no dangling references, dead vocabulary or duplicated rules.
 
-**On size.** The core is about 14,000 words. **Annexes are loaded only when their trigger fires**, so a standard mature company costs the core alone, and a pre-revenue company costs the core plus Annex A. This is how the framework grew in coverage while falling in cost per run.
+**On size.** The core is about 17,600 words. **Annexes are loaded only when their trigger fires**, so a standard mature company costs the core alone, and a pre-revenue company costs the core plus Annex A. This is how the framework grew in coverage while falling in cost per run.
 
 **A change to this framework is not finished until the verifier passes.** If it fails, the framework is wrong — not the verifier — unless the failing assertion is itself demonstrably mis-specified, in which case fix the assertion and say so.
 

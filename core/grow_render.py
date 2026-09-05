@@ -91,11 +91,25 @@ def verdict_block_html(analysis: dict, ccy: str = "") -> str:
     conf = analysis.get("confidence") or ""
     sb, bb, fh, ra = (analysis.get("strong_buy_below"), analysis.get("buy_below"),
                       analysis.get("fair_high"), analysis.get("reduce_above"))
+    ab = analysis.get("acceptable_below")
     dur_txt = f"{float(dur):.0f}" if dur is not None else "—"
-    ladder = (
-        f"Strong buy below <b>{_money(sb, ccy)}</b> · Buy below <b>{_money(bb, ccy)}</b> · "
-        f"Fairly priced <b>{_money(bb, ccy)}–{_money(fh or ra, ccy)}</b> · Reduce above <b>{_money(ra or fh, ccy)}</b>"
-    )
+    # §8.2 Revision 2: five rungs, not four. "Fairly priced" now spans
+    # acceptable_below -> fair_high (not buy_below -> fair_high) — acceptable_below
+    # is the newer, less demanding hurdle (the archetype premium excluded), so it
+    # sits between buy_below and fair_high. Older saved analyses (pre-Revision 2)
+    # have no acceptable_below; fall back to the old four-rung reading for those
+    # rather than showing a broken/missing rung.
+    if ab is not None:
+        ladder = (
+            f"Strong buy below <b>{_money(sb, ccy)}</b> · Buy below <b>{_money(bb, ccy)}</b> · "
+            f"Acceptable below <b>{_money(ab, ccy)}</b> · "
+            f"Fairly priced <b>{_money(ab, ccy)}–{_money(fh or ra, ccy)}</b> · Reduce above <b>{_money(ra or fh, ccy)}</b>"
+        )
+    else:
+        ladder = (
+            f"Strong buy below <b>{_money(sb, ccy)}</b> · Buy below <b>{_money(bb, ccy)}</b> · "
+            f"Fairly priced <b>{_money(bb, ccy)}–{_money(fh or ra, ccy)}</b> · Reduce above <b>{_money(ra or fh, ccy)}</b>"
+        )
     ret_line = ""
     if cagr is not None and req is not None:
         ret_line = (f"Today {_money(price, ccy)}. Expected return about <b>{float(cagr)*100:.1f}% a year</b>, "

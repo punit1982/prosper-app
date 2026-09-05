@@ -227,6 +227,10 @@ def init_db():
         ("buy_below", "REAL"), ("strong_buy_below", "REAL"), ("reduce_above", "REAL"),
         ("fair_high", "REAL"), ("cagr_spot", "REAL"), ("required_return", "REAL"),
         ("confidence", "TEXT"), ("price_at_run", "REAL"), ("memo_md", "TEXT"),
+        # §8.1/§8.2 Revision 2 (05-Sep-2026): the five-rung ladder and the two
+        # new inputs it needs. grow_render.py reads these as flat columns, not
+        # from the full_response JSON blob, so they must be persisted here too.
+        ("acceptable_below", "REAL"), ("cash_returned", "REAL"), ("base_cost_of_equity", "REAL"),
     ]
 
     # ── Performance indexes on frequently queried columns ──
@@ -1860,9 +1864,9 @@ def save_prosper_analysis(ticker: str, data: dict):
                 key_risks, key_catalysts, full_response, cost_estimate, updated_at,
                 framework, durability, entry_verdict, buy_below, strong_buy_below,
                 reduce_above, fair_high, cagr_spot, required_return, confidence,
-                price_at_run, memo_md)
+                price_at_run, memo_md, acceptable_below, cash_returned, base_cost_of_equity)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ticker,
                 run_date,
@@ -1896,6 +1900,9 @@ def save_prosper_analysis(ticker: str, data: dict):
                 data.get("confidence"),
                 _num_or_none(data.get("price_at_run")),
                 data.get("memo_md"),
+                _num_or_none(data.get("acceptable_below")),
+                _num_or_none(data.get("cash_returned")),
+                _num_or_none(data.get("base_cost_of_equity")),
             ),
         )
         # Append-only calibration log for GROW runs

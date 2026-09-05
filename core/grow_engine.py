@@ -164,9 +164,10 @@ _JSON_CONTRACT = """
   "entry": {
     "verdict": "BUY",
     "price": 123.45, "price_date": "2026-09-05", "price_source": "...", "price_stale": false,
-    "required_return": 0.114, "cagr_spot": 0.152, "excess_pts": 3.8,
+    "required_return": 0.114, "base_cost_of_equity": 0.084, "cash_returned": 12.50,
+    "cagr_spot": 0.152, "excess_pts": 3.8,
     "central_value": 210.0,
-    "ladder": {"strong_buy_below": 100.0, "buy_below": 135.0, "fair_high": 210.0, "reduce_above": 210.0},
+    "ladder": {"strong_buy_below": 100.0, "buy_below": 135.0, "acceptable_below": 150.0, "fair_high": 222.5, "reduce_above": 222.5},
     "stability": {"minus25": "HOLD", "central": "BUY", "plus25": "STRONG BUY", "unstable": true},
     "caps": [], "ceilings": [],
     "odds_clear_required": 0.58, "odds_lose_money": 0.22, "p10_return": -0.021, "p90_return": 0.334
@@ -204,6 +205,13 @@ OPERATING RULES FOR THIS ENVIRONMENT
 6. Always produce both verdicts (rule 1). The only permitted Entry words are STRONG BUY, BUY, HOLD, SELL, STRONG SELL (rule 22).
 7. Where a PRIOR RUN is supplied, treat this as an update under §11: carry unchanged inputs, and fill `change_table` for every input that moved. If Durability moved, the table must not be empty.
 8. Currency: all prices in the listing currency shown in the DATA SNAPSHOT.
+9. §8.1/§8.2 (Revision 2): `entry.cash_returned` is the cumulative dividends/
+   cash the §8.1 table tells you to include over the horizon (0 / nil if the
+   company pays nothing — never omit the field). `entry.base_cost_of_equity`
+   is required_return with the archetype premium (§4) subtracted back out —
+   this app's own arithmetic uses it to solve the "Acceptable below" rung
+   (§8.2) and cannot derive it from required_return alone. Both are
+   mandatory numeric fields even when zero.
 
 OUTPUT — TWO PARTS, IN THIS ORDER
 PART 1 — the memo in plain English, in the §10.2 order, as markdown. {memo_rule}
@@ -542,11 +550,22 @@ def _apply_caps(verdict: str, caps: List[str], ceilings: List[str], integrity_le
 
 
 def resolve_entry(price, central, bull_price, horizon_years, required_return,
+                  base_cost_of_equity=None, cash_returned=0.0,
                   caps=None, ceilings=None, integrity_level="0") -> Optional[dict]:
     """Compute the Entry verdict, price ladder and ±25% stability from the model's inputs.
 
     Returns None if the inputs are not usable (no price / central value / horizon / bar).
-    Stability approximates the ±25% terminal-multiple stress as ±25% on the central value.
+    Stability approximates the ±25% terminal-multiple stress as ±25% on the central value
+    (cash_returned is a disclosed policy commitment, not a valuation-multiple stress input,
+    so it is held fixed through the ±25% stress rather than scaled with it).
+
+    §8.1/§8.2 (Revision 2, 05-Sep-2026): CAGR_spot and every ladder rung are now
+    solved against (central_value + cash_returned), not central_value alone —
+    "cash returned is part of the return, and leaving it out is an arithmetic
+    error, not caution." base_cost_of_equity (required_return with the
+    archetype premium subtracted back out, §4.1) is what "acceptable_below"
+    solves against; it's omitted from the ladder when not supplied rather
+    than guessed, since guessing it would silently misstate a real price line.
     """
     p, c, n, r = _f(price), _f(central), _f(horizon_years), _f(required_return)
     if not p or not c or p <= 0 or c <= 0 or not r or r <= 0:
@@ -554,26 +573,33 @@ def resolve_entry(price, central, bull_price, horizon_years, required_return,
     n = n if (n and n > 0) else 5.0
     n = max(0.5, n)
     b = _f(bull_price)
-    cagr = (c / p) ** (1.0 / n) - 1.0
+    cash = _f(cash_returned) or 0.0
+    destination = c + cash
+    cagr = (destination / p) ** (1.0 / n) - 1.0
     bull_loses = (b is not None and b > 0 and b < p)
     raw = _verdict_from_numbers(cagr, r, bull_loses)
     verdict, bound = _apply_caps(raw, caps, ceilings, integrity_level)
     ladder = {
-        "strong_buy_below": round(c / (1 + r + 0.08) ** n, 2),
-        "buy_below": round(c / (1 + r) ** n, 2),
-        "fair_high": round(c, 2),
-        "reduce_above": round(c, 2),
+        "strong_buy_below": round(destination / (1 + r + 0.08) ** n, 2),
+        "buy_below": round(destination / (1 + r) ** n, 2),
+        "fair_high": round(destination, 2),
+        "reduce_above": round(destination, 2),
     }
+    base_r = _f(base_cost_of_equity)
+    if base_r is not None and base_r > 0:
+        ladder["acceptable_below"] = round(destination / (1 + base_r) ** n, 2)
     words = {}
     for key, mult in (("minus25", 0.75), ("central", 1.0), ("plus25", 1.25)):
-        cg = (c * mult / p) ** (1.0 / n) - 1.0
+        dest_mult = c * mult + cash
+        cg = (dest_mult / p) ** (1.0 / n) - 1.0
         v, _ = _apply_caps(_verdict_from_numbers(cg, r, bull_loses and mult <= 1.0), caps, ceilings, integrity_level)
         words[key] = v
     words["unstable"] = len({words["minus25"], words["central"], words["plus25"]}) > 1
     return {
         "verdict": verdict, "raw_verdict": raw, "bound": bound,
         "cagr_spot": round(cagr, 4), "excess_pts": round((cagr - r) * 100, 1),
-        "required_return": r, "horizon_years": n, "central_value": c, "price": p,
+        "required_return": r, "base_cost_of_equity": base_r, "cash_returned": round(cash, 2),
+        "horizon_years": n, "central_value": c, "destination_value": round(destination, 2), "price": p,
         "ladder": ladder, "stability": words,
     }
 
@@ -702,10 +728,13 @@ def run_grow(
     price = _f(ent.get("price")) or _f((price_quote or {}).get("price")) or _f((info or {}).get("currentPrice"))
     buy_below = _f(ladder.get("buy_below"))
     strong_buy_below = _f(ladder.get("strong_buy_below"))
+    acceptable_below = _f(ladder.get("acceptable_below"))
     fair_high = _f(ladder.get("fair_high"))
     reduce_above = _f(ladder.get("reduce_above")) or fair_high
     cagr = _f(ent.get("cagr_spot"))
     req = _f(ent.get("required_return"))
+    base_cost_of_equity = _f(ent.get("base_cost_of_equity"))
+    cash_returned = _f(ent.get("cash_returned")) or 0.0
     excess = _f(ent.get("excess_pts"))
     if excess is None and cagr is not None and req is not None:
         excess = round((cagr - req) * 100, 1)
@@ -714,12 +743,14 @@ def run_grow(
     arithmetic_note = None
 
     # §8 is arithmetic: recompute verdict + ladder + stability from the model's own
-    # inputs (central case, horizon, required return). The model's figures stay in
-    # grow_json for the record; any disagreement is written into the uncertainties.
+    # inputs (central case, horizon, required return, cash returned, base cost of
+    # equity). The model's figures stay in grow_json for the record; any
+    # disagreement is written into the uncertainties.
     central = _f(ent.get("central_value")) or _f((cases.get("base") or {}).get("price"))
     bull_price = _f((cases.get("bull") or {}).get("price"))
     resolved = resolve_entry(
         price, central, bull_price, cls.get("horizon_years"), req,
+        base_cost_of_equity=base_cost_of_equity, cash_returned=cash_returned,
         caps=ent.get("caps"), ceilings=ent.get("ceilings"), integrity_level=dur.get("integrity_level"),
     )
     if resolved:
@@ -734,8 +765,11 @@ def run_grow(
         excess = resolved["excess_pts"]
         strong_buy_below = resolved["ladder"]["strong_buy_below"]
         buy_below = resolved["ladder"]["buy_below"]
+        acceptable_below = resolved["ladder"].get("acceptable_below")
         fair_high = resolved["ladder"]["fair_high"]
         reduce_above = resolved["ladder"]["reduce_above"]
+        base_cost_of_equity = resolved.get("base_cost_of_equity")
+        cash_returned = resolved.get("cash_returned") or 0.0
         stability = resolved["stability"]
         if resolved["bound"]:
             arithmetic_note = (arithmetic_note + " " if arithmetic_note else "") + "Bound by: " + "; ".join(resolved["bound"]) + "."
@@ -767,6 +801,9 @@ def run_grow(
         "entry_verdict": verdict,
         "buy_below": buy_below,
         "strong_buy_below": strong_buy_below,
+        "acceptable_below": acceptable_below,
+        "cash_returned": cash_returned,
+        "base_cost_of_equity": base_cost_of_equity,
         "fair_high": fair_high,
         "reduce_above": reduce_above,
         "cagr_spot": cagr,
