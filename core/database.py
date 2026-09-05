@@ -1369,10 +1369,13 @@ def save_news_cache(cache_key: str, news: List) -> None:
 FX_CACHE_TTL = 3600   # 1 hour — FX rates change slowly
 
 
-def get_fx_rate_cache(pairs: List[str]) -> Dict[str, float]:
+def get_fx_rate_cache(pairs: List[str], max_age: Optional[float] = None) -> Dict[str, float]:
     """
     Read FX rates from price_cache using special 'FX_<from>_<to>' key format.
     pairs: list of strings like 'AED_USD'
+    max_age: seconds — rows older than this are ignored. Defaults to
+        FX_CACHE_TTL. Pass float('inf') to accept a stale rate of ANY age
+        (last-resort fallback so a failed live fetch never collapses to 1.0).
     Returns: {'AED_USD': 0.272, ...}
     """
     if not pairs:
@@ -1386,7 +1389,7 @@ def get_fx_rate_cache(pairs: List[str]) -> Dict[str, float]:
             keys,
         ).fetchall()
         conn.close()
-        cutoff = time.time() - FX_CACHE_TTL
+        cutoff = time.time() - (FX_CACHE_TTL if max_age is None else max_age)
         result = {}
         for r in rows:
             if r["price"] is not None and (r["fetched_at"] or 0) > cutoff:

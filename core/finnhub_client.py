@@ -110,6 +110,59 @@ def recommendation_trends(symbol: str) -> List[Dict]:
         return []
 
 
+# ─── Fundamentals ───────────────────────────────────────────────────────────
+
+def basic_financials(symbol: str) -> Dict:
+    """Fetch Finnhub 'basic financials' (metric=all) and reshape the pieces
+    Prosper uses into yfinance `.info` key names. Returns {} on any failure or
+    if Finnhub has no coverage for the symbol (common for non-US). Used as the
+    last fundamentals fallback after yfinance and FMP."""
+    client = get_client()
+    if not client:
+        return {}
+    _rate_limit()
+    try:
+        raw = client.company_basic_financials(symbol, "all") or {}
+    except Exception:
+        return {}
+    m = raw.get("metric") or {}
+    if not m:
+        return {}
+
+    def _f(*names, scale=1.0):
+        for n in names:
+            v = m.get(n)
+            if v is not None:
+                try:
+                    return float(v) * scale
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    # Finnhub reports ratios as percentages (roeTTM = 137.18) and D/E as a
+    # bare ratio (1.5). yfinance's .info convention — which every downstream
+    # caller assumes — is: ROE / margins / yield / growth as FRACTIONS
+    # (0.15), and debtToEquity as ratio×100 (150). Convert here so a Finnhub
+    # fallback value renders identically to a yfinance one.
+    info = {
+        "trailingPE":       _f("peTTM", "peBasicExclExtraTTM", "peInclExtraTTM"),
+        "forwardPE":        _f("forwardPE"),
+        "priceToBook":      _f("pbAnnual", "pbQuarterly"),
+        "returnOnEquity":   _f("roeTTM", "roeRfy", scale=0.01),
+        "profitMargins":    _f("netProfitMarginTTM", "netProfitMarginAnnual", scale=0.01),
+        "debtToEquity":     _f("totalDebt/totalEquityAnnual", "totalDebt/totalEquityQuarterly", scale=100.0),
+        "dividendYield":    _f("dividendYieldIndicatedAnnual", "currentDividendYieldTTM", scale=0.01),
+        "revenueGrowth":    _f("revenueGrowthTTMYoy", "revenueGrowth5Y", scale=0.01),
+        "trailingEps":      _f("epsTTM", "epsBasicExclExtraItemsTTM"),
+        "beta":             _f("beta"),
+        "fiftyTwoWeekHigh": _f("52WeekHigh"),
+        "fiftyTwoWeekLow":  _f("52WeekLow"),
+        "_source":          "finnhub",
+    }
+    info = {k: v for k, v in info.items() if v is not None}
+    return info if len([k for k in info if k != "_source"]) >= 2 else {}
+
+
 # ─── Insider ─────────────────────────────────────────────────────────────────
 
 def insider_transactions(symbol: str) -> Dict:

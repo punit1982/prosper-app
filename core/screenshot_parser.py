@@ -276,8 +276,11 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
 
     # D5: the canonical model ladder lives in settings — Sonnet first because it
     # handles 95%+ of screenshots at a fraction of Opus cost, Opus as fallback.
-    from core.settings import CLAUDE_MODEL_PRIORITY, extract_text
-    _MODELS_TO_TRY = list(CLAUDE_MODEL_PRIORITY)
+    from core.settings import CLAUDE_AUTO_FALLBACK, extract_text
+    # Sonnet → Haiku only. Opus is deliberately out of the automatic ladder
+    # (extended thinking on by default = several times the cost per call, and
+    # vision parsing doesn't need it) — see core/settings.CLAUDE_AUTO_FALLBACK.
+    _MODELS_TO_TRY = list(CLAUDE_AUTO_FALLBACK)
 
     # PDFs must be sent as a `document` block, not an `image` block — the API
     # rejects application/pdf inside an image source (this is why every PDF

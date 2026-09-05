@@ -245,6 +245,44 @@ CLAUDE_MODEL_PRIORITY = [
     CLAUDE_FAST_MODEL,
 ]
 
+# AUTOMATIC fallback ladder — used when a call 404s (retired model id / tier).
+# Deliberately EXCLUDES Opus: per the reliability audit, an unattended Sonnet
+# outage was silently switching every call (chat, briefings, screenshot
+# parsing) to Opus, which has extended thinking on and costs several times as
+# much per call. A caller that genuinely wants Opus still passes
+# preferred_model="claude-opus-5" explicitly (GROW's full tier does) — that
+# always wins as the first model tried.
+CLAUDE_AUTO_FALLBACK = [CLAUDE_DEFAULT_MODEL, CLAUDE_FAST_MODEL]
+
+# HTTP errors that are worth a short backoff-and-retry rather than surfacing
+# straight to the user (rate limit / overloaded / gateway).
+_CLAUDE_RETRY_STATUS = (429, 500, 502, 503, 529)
+_CLAUDE_MAX_RETRIES = 2
+_CLAUDE_DEFAULT_TIMEOUT = 120  # seconds; callers override (GROW passes more)
+
+
+def _claude_models_to_try(preferred_model: str) -> list:
+    ladder = [preferred_model] + [m for m in CLAUDE_AUTO_FALLBACK if m != preferred_model]
+    # de-dup while preserving order
+    seen, out = set(), []
+    for m in ladder:
+        if m not in seen:
+            seen.add(m); out.append(m)
+    return out
+
+
+def _claude_is_retryable(e) -> bool:
+    status = getattr(e, "status_code", None)
+    if status in _CLAUDE_RETRY_STATUS:
+        return True
+    s = str(e).lower()
+    return any(t in s for t in ("overloaded", "rate limit", "rate_limit", "timeout", "timed out", "529", "503"))
+
+
+def _claude_is_404(e) -> bool:
+    status = getattr(e, "status_code", None)
+    return status == 404 or "404" in str(e) or "not_found" in str(e)
+
 
 def extract_text(response) -> str:
     """Return the concatenated text of a Claude response.
@@ -287,35 +325,41 @@ def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=
     core/grow_engine.py) by passing `thinking` itself; setdefault here only
     fills the gap for callers that never think about it at all.
     """
+    import time as _t
+
     preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
-    models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
+    models_to_try = _claude_models_to_try(preferred_model)
 
     _extra = dict(kwargs)
     _extra.setdefault("thinking", {"type": "disabled"})
+    _extra.setdefault("timeout", _CLAUDE_DEFAULT_TIMEOUT)
     if system:
         _extra["system"] = system
 
     last_error = None
     for model in models_to_try:
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=messages,
-                **_extra,
-            )
-            return response
-        except Exception as e:
-            err_str = str(e)
-            status = getattr(e, "status_code", None)
-            if status == 404 or "404" in err_str or "not_found" in err_str:
+        for attempt in range(_CLAUDE_MAX_RETRIES + 1):
+            try:
+                return client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    **_extra,
+                )
+            except Exception as e:
                 last_error = e
-                continue  # try next model
-            raise  # non-404 errors should propagate immediately
+                if _claude_is_404(e):
+                    break  # model id bad — next model, don't retry this one
+                if _claude_is_retryable(e):
+                    if attempt < _CLAUDE_MAX_RETRIES:
+                        _t.sleep(1.5 * (2 ** attempt))   # 1.5s, 3s
+                        continue
+                    break  # retries exhausted — fall through to the next model
+                raise  # not retryable — surface it immediately
 
     raise Exception(
-        f"No Claude model accessible with your API key. "
-        f"Verify billing at console.anthropic.com. Last error: {last_error}"
+        f"Claude API unavailable after retries and model fallback. "
+        f"Last error: {last_error}"
     )
 
 
@@ -331,40 +375,51 @@ def call_claude_stream(client, messages, max_tokens=1024, preferred_model=None, 
     Usage: for text in call_claude_stream(...): st.write(text)  — or pass the
     generator straight to st.write_stream().
     """
+    import time as _t
+
     preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
-    models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
+    models_to_try = _claude_models_to_try(preferred_model)
 
     _extra = dict(kwargs)
     # See call_claude()'s docstring — claude-opus-5 defaults to extended
     # thinking on, which can consume most of max_tokens and leave little/no
     # room for visible text if this call ever falls back to it.
     _extra.setdefault("thinking", {"type": "disabled"})
+    _extra.setdefault("timeout", _CLAUDE_DEFAULT_TIMEOUT)
     if system:
         _extra["system"] = system
 
     last_error = None
     for model in models_to_try:
-        try:
-            with client.messages.stream(
-                model=model,
-                max_tokens=max_tokens,
-                messages=messages,
-                **_extra,
-            ) as stream:
-                for text in stream.text_stream:
-                    yield text
-            return
-        except Exception as e:
-            err_str = str(e)
-            status = getattr(e, "status_code", None)
-            if status == 404 or "404" in err_str or "not_found" in err_str:
+        for attempt in range(_CLAUDE_MAX_RETRIES + 1):
+            _started = False
+            try:
+                with client.messages.stream(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    **_extra,
+                ) as stream:
+                    for text in stream.text_stream:
+                        _started = True
+                        yield text
+                return
+            except Exception as e:
                 last_error = e
-                continue  # try next model
-            raise
+                if _started:
+                    raise  # already yielded tokens — can't safely restart
+                if _claude_is_404(e):
+                    break
+                if _claude_is_retryable(e):
+                    if attempt < _CLAUDE_MAX_RETRIES:
+                        _t.sleep(1.5 * (2 ** attempt))
+                        continue
+                    break
+                raise
 
     raise Exception(
-        f"No Claude model accessible with your API key. "
-        f"Verify billing at console.anthropic.com. Last error: {last_error}"
+        f"Claude API unavailable after retries and model fallback. "
+        f"Last error: {last_error}"
     )
 
 

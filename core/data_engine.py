@@ -373,27 +373,60 @@ def _yf_fetch_info(ticker: str) -> Dict:
     """
     from core.parallel import run_with_timeout
 
-    # UAE (.AE/.AD) tickers: yfinance's .info returns NOTHING for these —
-    # confirmed via production logs as a real "Quote not found" 404, not a
-    # thin-coverage gap — and no free tier of Twelve Data/FMP/Finnhub covers
-    # UAE fundamentals either (all three gate it behind a paid plan; verified
-    # live). Mubasher's own stock page has Market Cap/P-E/P-B/EPS in plain
-    # HTML for free — try that FIRST for these tickers instead of burning a
-    # guaranteed-to-fail yfinance call.
-    if ticker.upper().endswith((".AE", ".AD")):
-        try:
-            from core.adx_client import get_fundamentals as _adx_fundamentals
+    # UAE tickers: yfinance's .info returns NOTHING for these (confirmed via
+    # production logs as a real "Quote not found" 404). Mubasher's own stock
+    # page has Market Cap/P-E/P-B/EPS in plain HTML for free — try that FIRST
+    # instead of burning a guaranteed-to-fail yfinance call. Detection covers
+    # every form Prosper might store a UAE ticker in (ADCB / ADCB.AE /
+    # ADCB.AD / ADCB:DFM / a known ADX slug) — see core/adx_client.
+    try:
+        from core.adx_client import is_uae_symbol as _is_uae, get_fundamentals as _adx_fundamentals
+        if _is_uae(ticker):
             adx_info = _adx_fundamentals(ticker)
             if adx_info:
                 return adx_info
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     def _fetch():
         import yfinance as yf
         return yf.Ticker(ticker).info or {}
 
-    return run_with_timeout(_fetch, timeout=6, default={}) or {}
+    info = run_with_timeout(_fetch, timeout=6, default={}) or {}
+    # yfinance's .info is judged "usable" only if it carries at least a couple
+    # of the real fundamental fields (it often returns a stub of just symbol +
+    # exchange). Otherwise fall through to FMP (US only) then Finnhub.
+    _real = ("marketCap", "trailingPE", "priceToBook", "returnOnEquity",
+             "profitMargins", "trailingEps", "totalRevenue")
+    if sum(1 for k in _real if info.get(k) is not None) >= 2:
+        return info
+
+    # FMP and Finnhub only cover US listings on the current keys — don't waste
+    # a slow round-trip on a suffixed foreign ticker that will 100% miss.
+    _t = ticker.upper()
+    _looks_us = "." not in _t and ":" not in _t
+    if _looks_us:
+        for _fn in (_fmp_fundamentals, _finnhub_fundamentals):
+            try:
+                alt = _fn(ticker)
+                if alt:
+                    return {**info, **alt}   # keep any descriptive fields yfinance returned
+            except Exception:
+                continue
+
+    return info
+
+
+def _fmp_fundamentals(ticker: str) -> Dict:
+    from core.fmp_client import get_fundamentals as _g
+    return _g(ticker) or {}
+
+
+def _finnhub_fundamentals(ticker: str) -> Dict:
+    from core.finnhub_client import basic_financials as _bf
+    # Finnhub wants the bare US symbol
+    sym = ticker.split(":")[0].split(".")[0] if "." in ticker or ":" in ticker else ticker
+    return _bf(sym) or {}
 
 
 def get_ticker_info(ticker: str) -> Dict:

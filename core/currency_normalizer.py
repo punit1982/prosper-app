@@ -46,6 +46,59 @@ TICKER_CURRENCY_MAP = {
 # In-memory FX rate cache — avoids redundant calls within a session
 _fx_cache: Dict[str, float] = {}
 
+import logging as _logging
+_fx_log = _logging.getLogger("prosper.fx")
+
+# ── Hard currency pegs ──────────────────────────────────────────────────────
+# The UAE dirham has been pegged to the US dollar at exactly 3.6725 since 1997
+# (1 USD = 3.6725 AED  ⇔  1 AED = 0.27229...  USD). It does not float, so it
+# should never be fetched live and can never be the reason a rate is missing.
+# Rates below are USD -> X.
+_PEGGED_USD_RATES: Dict[str, float] = {
+    "AED": 3.6725,   # UAE dirham — CBUAE peg
+    "SAR": 3.7500,   # Saudi riyal — SAMA peg
+    "HKD": 7.8000,   # HK dollar — HKMA band midpoint (soft peg, close enough for a fallback)
+}
+
+# ── Static fallback table (USD -> X), refreshed manually ────────────────────
+# Last hand-updated 2026-09-05. Only ever used when BOTH the live fetch and
+# every cached value have failed — a rough rate here is still far better than
+# silently valuing a foreign holding 1:1 with USD. Keep the peg table above
+# authoritative for the currencies it covers.
+_STATIC_USD_RATES: Dict[str, float] = {
+    "AED": 3.6725, "SAR": 3.7500, "HKD": 7.8000,
+    "INR": 94.5, "EUR": 0.861, "GBP": 0.740, "JPY": 156.0, "CHF": 0.810,
+    "SGD": 1.267, "CAD": 1.383, "AUD": 1.52, "CNY": 7.13, "KRW": 1385.0,
+    "TWD": 30.5, "BRL": 5.45, "ZAR": 17.6, "ILS": 3.35,
+}
+
+
+def _rate_from_usd_table(table: Dict[str, float], frm: str, to: str):
+    """Derive a cross rate frm->to from a USD-based table. Returns None if
+    either leg is missing."""
+    f = 1.0 if frm == "USD" else table.get(frm)
+    t = 1.0 if to == "USD" else table.get(to)
+    if f and t:
+        return t / f
+    return None
+
+
+def _fetch_rate_open_er_api(base: str):
+    """Free, keyless FX source (open.er-api.com, ~160 currencies incl. AED/INR/
+    SGD). Returns {code: rate} for USD... actually for `base`. 8s timeout."""
+    try:
+        import requests
+        from core.parallel import run_with_timeout
+
+        def _go():
+            r = requests.get(f"https://open.er-api.com/v6/latest/{base}", timeout=6)
+            j = r.json()
+            return j.get("rates") if j.get("result") == "success" else None
+
+        return run_with_timeout(_go, timeout=8, default=None)
+    except Exception:
+        return None
+
 # Maps common incorrect/non-standard currency codes → correct ISO codes
 # Claude sometimes returns exchange names (DFM, NSE) instead of proper currencies
 CURRENCY_CORRECTIONS = {
@@ -109,11 +162,17 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
 
     cache_key = f"{from_currency}_{to_currency}"
 
+    # Layer 0: hard pegs — resolve without any network call at all.
+    pegged = _rate_from_usd_table(_PEGGED_USD_RATES, from_currency, to_currency)
+    if pegged is not None:
+        _fx_cache[cache_key] = pegged
+        return pegged
+
     # Layer 1: in-memory
     if cache_key in _fx_cache:
         return _fx_cache[cache_key]
 
-    # Layer 2: SQLite (survives restarts)
+    # Layer 2: SQLite (survives restarts) — fresh rows only (1h TTL)
     try:
         from core.database import get_fx_rate_cache
         sqlite_rates = get_fx_rate_cache([cache_key])
@@ -137,19 +196,59 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
         rate = run_with_timeout(_fetch_rate, timeout=8, default=None)
 
         if rate and float(rate) > 0:
-            _fx_cache[cache_key] = float(rate)
-            try:
-                from core.database import save_fx_rate_cache
-                save_fx_rate_cache({cache_key: float(rate)})
-            except Exception:
-                pass
-            return float(rate)
+            return _remember_rate(cache_key, float(rate))
     except Exception:
         pass
 
-    # Safe fallback
+    # Layer 4: independent live source (open.er-api.com — free, no key, no Yahoo)
+    try:
+        rates = _fetch_rate_open_er_api(from_currency)
+        if rates and to_currency in rates and float(rates[to_currency]) > 0:
+            return _remember_rate(cache_key, float(rates[to_currency]))
+        # try the USD-based table and cross-derive
+        usd_rates = _fetch_rate_open_er_api("USD")
+        if usd_rates:
+            crossed = _rate_from_usd_table(usd_rates, from_currency, to_currency)
+            if crossed:
+                return _remember_rate(cache_key, float(crossed))
+    except Exception:
+        pass
+
+    # Layer 5: STALE cached rate of any age — a day-old rate beats 1.0 by miles
+    try:
+        from core.database import get_fx_rate_cache
+        stale = get_fx_rate_cache([cache_key], max_age=float("inf"))
+        if cache_key in stale and float(stale[cache_key]) > 0:
+            _fx_log.warning("FX %s: live sources failed, using stale cached rate", cache_key)
+            _fx_cache[cache_key] = float(stale[cache_key])
+            return float(stale[cache_key])
+    except Exception:
+        pass
+
+    # Layer 6: static hand-maintained approximate table
+    static = _rate_from_usd_table(_STATIC_USD_RATES, from_currency, to_currency)
+    if static is not None:
+        _fx_log.warning("FX %s: all live+cache sources failed, using static approx rate %.4f",
+                        cache_key, static)
+        _fx_cache[cache_key] = static
+        return static
+
+    # Layer 7: genuinely unknown currency and every source failed. 1.0 would
+    # misstate the holding; log loudly so it surfaces rather than hides.
+    _fx_log.error("FX %s: NO rate available from any source — returning 1.0 (holding value will be wrong)", cache_key)
     _fx_cache[cache_key] = 1.0
     return 1.0
+
+
+def _remember_rate(cache_key: str, rate: float) -> float:
+    """Store a freshly fetched rate in both cache layers and return it."""
+    _fx_cache[cache_key] = rate
+    try:
+        from core.database import save_fx_rate_cache
+        save_fx_rate_cache({cache_key: rate})
+    except Exception:
+        pass
+    return rate
 
 
 def clear_fx_cache():

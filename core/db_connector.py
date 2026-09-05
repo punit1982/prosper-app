@@ -14,7 +14,38 @@ No native dependencies required — only `requests` (already in requirements).
 import os
 import sqlite3
 import json
+import logging
+import time as _time
 import requests
+
+_log = logging.getLogger("prosper.db")
+
+# ── Shared HTTP session for the Turso pipeline API ──────────────────────────
+# Per the reliability audit: every query previously opened a fresh TCP+TLS
+# connection and had no retry, so one blip between Render (Singapore) and
+# Turso raised straight to the page. A pooled Session with a urllib3 Retry
+# gives keep-alive + automatic backoff on connection errors and 5xx.
+def _build_turso_session() -> requests.Session:
+    s = requests.Session()
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        retry = Retry(
+            total=3, connect=3, read=2, status=2,
+            backoff_factor=0.6,                      # 0s, 0.6s, 1.2s, 2.4s
+            status_forcelist=(500, 502, 503, 504, 522, 524),
+            allowed_methods=frozenset(["POST", "GET"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+    except Exception:
+        pass
+    return s
+
+
+_TURSO_SESSION = _build_turso_session()
 
 # Store local DB in home directory
 DB_DIR = os.path.expanduser("~/prosper_data")
@@ -153,11 +184,11 @@ class TursoConnection:
         for version in ("v2", "v3"):
             url = f"{self._base_url}/{version}/pipeline"
             try:
-                resp = requests.post(
+                resp = _TURSO_SESSION.post(
                     url,
                     headers=self._headers,
                     json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
-                    timeout=10,
+                    timeout=(5, 10),
                 )
                 if resp.status_code == 200:
                     return url
@@ -211,25 +242,38 @@ class TursoConnection:
 
         payload = {"requests": requests_list}
 
-        try:
-            resp = requests.post(
-                self._pipeline_url,
-                headers=self._headers,
-                json=payload,
-                timeout=30,
-            )
-            if resp.status_code >= 400:
-                body = resp.text[:500]
-                raise Exception(
-                    f"Turso HTTP {resp.status_code}: {body} "
-                    f"(URL: {self._pipeline_url})"
+        # The pooled session already retries connection errors and 5xx with
+        # backoff (see _build_turso_session). This outer loop adds a couple of
+        # retries for the cases urllib3 can't see — a request that reached
+        # Turso but came back as a 4xx/opaque body, or a transient JSON/parse
+        # failure — before giving up.
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = _TURSO_SESSION.post(
+                    self._pipeline_url,
+                    headers=self._headers,
+                    json=payload,
+                    timeout=(5, 30),   # (connect, read)
                 )
-            return resp.json()
-        except requests.exceptions.RequestException as e:
-            raise Exception(
-                f"Turso HTTP error: {e} "
-                f"(URL: {self._pipeline_url})"
-            )
+                if resp.status_code >= 400:
+                    body = resp.text[:500]
+                    last_err = Exception(
+                        f"Turso HTTP {resp.status_code}: {body} (URL: {self._pipeline_url})"
+                    )
+                    # 4xx won't fix itself on retry; 5xx already retried by the adapter
+                    raise last_err
+                return resp.json()
+            except requests.exceptions.RequestException as e:
+                last_err = e
+                if attempt < 2:
+                    _log.warning("Turso request failed (attempt %d/3): %s — retrying", attempt + 1, e)
+                    _time.sleep(0.5 * (attempt + 1))
+                    continue
+            except Exception as e:
+                last_err = e
+                break
+        raise Exception(f"Turso HTTP error after retries: {last_err} (URL: {self._pipeline_url})")
 
     def _parse_result(self, result_obj):
         """Parse a single result from pipeline response into TursoCursor."""
@@ -411,11 +455,11 @@ def get_db_info() -> dict:
         for ver in ("v3", "v2"):
             test_url = f"{_turso_url.rstrip('/')}/{ver}/pipeline"
             try:
-                test_resp = requests.post(
+                test_resp = _TURSO_SESSION.post(
                     test_url,
                     headers={"Authorization": f"Bearer {_turso_token}", "Content-Type": "application/json"},
                     json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}]},
-                    timeout=10,
+                    timeout=(5, 10),
                 )
                 info["pipeline_url"] = test_url
                 info["status"] = f"HTTP {test_resp.status_code} ({ver})"

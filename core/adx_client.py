@@ -214,6 +214,45 @@ _STAT_LABEL_MAP = {
 _FUNDAMENTALS_CACHE_TTL = 6 * 3600  # 6 hours — these don't move intraday
 _fundamentals_cache: Dict[str, Tuple[dict, float]] = {}
 
+# Mubasher's slug is not always the bare ticker. Map the normalised symbol
+# (uppercase, no exchange suffix) -> the exact slug in the Mubasher URL.
+_MUBASHER_SLUG_OVERRIDES: Dict[str, str] = {
+    "PUREHEALT":  "PUREHEALTH",
+    "ADNOCDRILL": "ADNOCDRILL",
+    "ADNOCDRIL":  "ADNOCDRILL",
+    "EMIRATESN":  "EMIRATESNBD",
+    "EMIRATESNBD": "EMIRATESNBD",
+    "EMAARDEV":   "EMAARDEV",
+    "EMAAR":      "EMAAR",
+    "TECOM":      "TECOM",
+    "ALDAR":      "ALDAR",
+    "ADCB":       "ADCB",
+    "BURJEEL":    "BURJEEL",
+}
+
+
+def _normalise_uae_symbol(ticker: str) -> str:
+    """Strip every UAE exchange marker Prosper might store a ticker with —
+    '.AE' / '.AD' / '.DU' suffixes and Twelve Data ':DFM' / ':ADX' forms —
+    and upper-case, so downstream slug lookup has one clean key."""
+    t = (ticker or "").upper().strip()
+    for suf in (".AE", ".AD", ".DU"):
+        if t.endswith(suf):
+            t = t[: -len(suf)]
+    if ":" in t:
+        t = t.split(":", 1)[0]
+    return t
+
+
+def is_uae_symbol(ticker: str) -> bool:
+    """True for anything that looks like a UAE listing in any of the forms
+    Prosper stores (suffix, Twelve Data colon form, or a known slug)."""
+    t = (ticker or "").upper()
+    if t.endswith((".AE", ".AD", ".DU")) or ":DFM" in t or ":ADX" in t:
+        return True
+    norm = _normalise_uae_symbol(t)
+    return norm in _MUBASHER_SLUG_OVERRIDES or (norm + ".AE") in ADX_CHART_IDS
+
 
 def get_fundamentals(ticker: str) -> Optional[Dict]:
     """
@@ -230,11 +269,12 @@ def get_fundamentals(ticker: str) -> Optional[Dict]:
     if cached and (now - cached[1]) < _FUNDAMENTALS_CACHE_TTL:
         return cached[0]
 
-    # Prefer the manually-curated slug in ADX_CHART_IDS (some tickers are
-    # stored abbreviated, e.g. "PUREHEALT.AE" vs. Mubasher's actual
-    # "PUREHEALTH" slug) — fall back to a naive derivation otherwise.
-    _known = ADX_CHART_IDS.get(ticker)
-    slug = _known[0] if _known else ticker.upper().replace(".AE", "").replace(".AD", "")
+    # Normalise whatever form the ticker was stored in (ADCB / ADCB.AE /
+    # ADCB.AD / ADCB:DFM) down to one key, then map to Mubasher's slug:
+    # explicit override → curated slug in ADX_CHART_IDS → the bare symbol.
+    norm = _normalise_uae_symbol(ticker)
+    _known = ADX_CHART_IDS.get(ticker) or ADX_CHART_IDS.get(norm + ".AE")
+    slug = _MUBASHER_SLUG_OVERRIDES.get(norm) or (_known[0] if _known else norm)
     for market in _UAE_MUBASHER_MARKETS:
         url = f"https://english.mubasher.info/markets/{market}/stocks/{slug}"
         try:
