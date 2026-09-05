@@ -170,6 +170,44 @@ only in GROW — add to chat/briefing. (13) GROW framework 5-min cache TTL net-n
 runs. Plus: **no scheduled jobs** — a nightly cron to pre-warm `ticker_info_cache` + enriched
 snapshot + `fx_rate_cache` would kill the slow-morning load.
 
+- **v7.11 / v7.12 (reliability audit fixes — all implemented)**:
+  - **FX** (`core/currency_normalizer.py`): AED/SAR/HKD hard pegs (AED 3.6725) resolve with zero network
+    calls. New fallback chain when yfinance FX fails: `open.er-api.com` (free, keyless) → stale DB cache
+    of ANY age (`get_fx_rate_cache(..., max_age=float('inf'))`) → `_STATIC_USD_RATES` hand table →
+    (impossible last resort) 1.0 logged as ERROR. The silent-1.0 misvaluation bug is closed.
+  - **Fundamentals fallback**: `_yf_fetch_info` treats yfinance `.info` as usable only if ≥2 real
+    fields present; else (US only — `.`/`:`-free symbol) tries `core/fmp_client.py` (`/stable`
+    key-metrics-ttm + ratios, US-only on this key) then `core/finnhub_client.basic_financials`
+    (`/stock/metric`, normalised to yfinance's fraction / ×100 unit conventions). Non-US suffixed
+    tickers skip both (no coverage) — India (`.NS`/`.BO`) still has no fundamentals fallback beyond
+    yfinance; accepted.
+  - **UAE routing FIXED** (this was the "UAE scrips have no financials" complaint — the *source* was
+    always fine, the *routing* keyed on a literal `.AE`/`.AD` suffix): `core/adx_client.is_uae_symbol()`
+    + `_normalise_uae_symbol()` + `_MUBASHER_SLUG_OVERRIDES` now recognise every stored form
+    (`ADCB` / `ADCB.AE` / `ADCB.AD` / `ADCB:DFM` / a known ADX slug) and map slugs
+    (`EMIRATESN`→`EMIRATESNBD`, `PUREHEALT`→`PUREHEALTH`, …). Verified live: Mubasher returns
+    marketCap/PE/PB/EPS/BVPS for ADCB, ALDAR, ADNOCLS, PUREHEALT, SPACE42, BURJEEL, EMAAR, EMAARDEV,
+    TECOM, EMIRATESNBD.
+  - **Turso** (`core/db_connector.py`): module-level pooled `requests.Session` + `urllib3 Retry`
+    (keep-alive, backoff on connection errors / 5xx) replaces per-query `requests.post`;
+    `_send_pipeline` adds a 3× retry loop.
+  - **Claude** (`core/settings.py`): `call_claude` / `call_claude_stream` retry 429/500/502/503/529
+    (1.5s→3s backoff) + explicit `timeout`; new `CLAUDE_AUTO_FALLBACK = [sonnet, haiku]` — **Opus is
+    OUT of the automatic 404 ladder** (still first when a caller passes `preferred_model="claude-opus-5"`,
+    e.g. GROW full). `screenshot_parser` uses the same sonnet→haiku ladder. GROW engine unaffected
+    (calls the client directly with its own `timeout=900`).
+  - **Config/security**: `render.yaml` region → singapore, added `TWELVE_DATA_API_KEY` +
+    `SERPER_API_KEY`; OAuth callback no longer falls back to a public `"dev-placeholder"` cookie key
+    in prod (`st.stop()` instead); `requirements.txt` pins `anthropic==0.125.0`, `yfinance==1.7.0`.
+  - **Perf/cost**: 7+ digit numeric scrip codes (`17041163.NS`) skip yfinance entirely; Ask Prosper
+    chat system prompt is a `cache_control` block (`core.settings.cached_system`); `get_ticker_info_batch`
+    10→6 workers.
+  - **Automation**: `scripts/prewarm.py` warms Turso fundamentals/price/FX caches; schedule via the
+    workflow in `docs/prewarm-github-action.yml` (add to `.github/workflows/` manually + set repo
+    secrets — the push token used in these sessions lacks `workflow` scope).
+  - **NOT done, deliberately**: GROW framework 1-hour cache TTL (audit #13 — marginal, needs a beta
+    header, risk not worth it); folding the remaining research pages into the hub (UX Step 6 tail).
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
