@@ -53,7 +53,7 @@ _analyses = get_all_prosper_analyses()
 _analysis_context = ""
 if not _analyses.empty:
     _an = _analyses[["ticker", "rating", "score", "archetype_name", "thesis"]].head(20)
-    _analysis_context = f"\n\nProsper AI analyses (recent):\n{_an.to_string(index=False)}"
+    _analysis_context = f"\n\nGROW analyses (rating = Entry verdict, score = Durability 0-100; thesis carries the buy-below price):\n{_an.to_string(index=False)}"
 
 
 # ── System prompt ──

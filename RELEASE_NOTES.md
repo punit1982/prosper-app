@@ -1,5 +1,42 @@
 # Prosper Release Notes
 
+## v7.0 — GROW v5.1 becomes the analysis engine (September 5, 2026)
+
+The PROSPER v3.0 scoring prompt is retired. Every analysis now runs the **GROW v5.1**
+framework (`grow/GROW v5 1 CORE 04Sep2026.md` + annexes A/B/C/E, shipped in the repo and
+checked by `grow/grow_verify.py`).
+
+### What changes for you
+- **Two answers instead of one rating.** *Durability 0–100* — is this worth owning (contains
+  no price) — and an *Entry verdict* — STRONG BUY · BUY · HOLD · SELL · STRONG SELL — with the
+  four-level price ladder (strong-buy-below / buy-below / fairly-priced / reduce-above).
+- **Entry is arithmetic, not opinion.** The app recomputes the verdict, the ladder and the
+  ±25% stability test in Python from the model's central case, horizon and required return
+  (§8.1–8.4). If the model's own words disagree with its numbers, the arithmetic wins and the
+  disagreement is printed under "What I'm not sure about".
+- **Three run types.** *Screen* (provider data only, ~$0.10, ~1 min, provisional) ·
+  *Standard GROW* (Sonnet 5 retrieves filings via web search, ~$0.60, 2–5 min) ·
+  *Full GROW* (Opus 5, deeper retrieval, appendix, ~$2.50).
+- **Position-blind** (rule 13): your holdings are never sent to the engine.
+- **Continuity** (§11): a re-run is an update — the prior result is passed back and a change
+  table is produced.
+- **Calibration log** (§12.3): every verdict is appended to `grow_verdict_log` with the price
+  it was issued at, so the 12-month read can actually be done.
+- **Rule 22:** old PROSPER verdicts are superseded, never mapped — they show as "unrated,
+  re-run with GROW".
+
+### Where
+- **GROW Engine** page (was "Prosper AI") — batch runs and the rule-21 rating list.
+- **Equity Deep Dive** — full memo view for one name, with re-run.
+- **Dashboard** — optional columns *Durability · GROW Entry · Buy below*.
+
+### Under the hood
+`core/grow_engine.py` (runner + resolver), `core/grow_render.py` (views), new DB columns on
+`prosper_analysis`, new table `grow_verdict_log`. Framework text is sent as a cached system
+block, so a batch pays for it once. Web tools: `web_search_20260209` / `web_fetch_20260209`.
+
+---
+
 ## v6.7 — Stability & Reliability Audit (September 5, 2026)
 
 Full code audit of all 21k lines. Every fix below was reproduced first, then verified

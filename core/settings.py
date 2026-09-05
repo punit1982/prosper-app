@@ -268,17 +268,18 @@ def extract_text(response) -> str:
         return ""
 
 
-def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=None):
+def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=None, **kwargs):
     """
     Call Claude API with automatic model fallback.
     Tries multiple model IDs until one works — handles retired IDs / API tiers.
+    Extra keyword arguments (tools, temperature, …) are passed straight through.
     Returns the API response object (use extract_text() to read it).
     Raises Exception if ALL models fail.
     """
     preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
     models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
 
-    _extra = {}
+    _extra = dict(kwargs)
     if system:
         _extra["system"] = system
 

@@ -191,6 +191,32 @@ def init_db():
             response_text TEXT NOT NULL,
             ttl_days INTEGER DEFAULT 7,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        # GROW §12.3 — append-only calibration log: every verdict with the price it was issued at
+        """CREATE TABLE IF NOT EXISTS grow_verdict_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            run_date TEXT NOT NULL,
+            framework TEXT,
+            tier TEXT,
+            durability REAL,
+            entry_verdict TEXT,
+            price_at_run REAL,
+            buy_below REAL,
+            strong_buy_below REAL,
+            reduce_above REAL,
+            cagr_spot REAL,
+            required_return REAL,
+            confidence TEXT,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    ]
+
+    # GROW v5.1 columns on prosper_analysis (added by migration below)
+    _GROW_ANALYSIS_COLUMNS = [
+        ("framework", "TEXT"), ("durability", "REAL"), ("entry_verdict", "TEXT"),
+        ("buy_below", "REAL"), ("strong_buy_below", "REAL"), ("reduce_above", "REAL"),
+        ("fair_high", "REAL"), ("cagr_spot", "REAL"), ("required_return", "REAL"),
+        ("confidence", "TEXT"), ("price_at_run", "REAL"), ("memo_md", "TEXT"),
     ]
 
     # ── Performance indexes on frequently queried columns ──
@@ -257,6 +283,13 @@ def init_db():
         ):
             try:
                 conn2.execute(f"ALTER TABLE {_table} ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
+                conn2.commit()
+            except Exception:
+                pass  # Column already exists
+        # GROW v5.1 engine columns
+        for _col, _type in _GROW_ANALYSIS_COLUMNS:
+            try:
+                conn2.execute(f"ALTER TABLE prosper_analysis ADD COLUMN {_col} {_type}")
                 conn2.commit()
             except Exception:
                 pass  # Column already exists
@@ -1596,45 +1629,118 @@ def get_nav_snapshot_exists_today(base_currency: str = "USD") -> bool:
 # PROSPER AI ANALYSIS  (Phase 4 — CIO-grade equity analysis)
 # ─────────────────────────────────────────
 
+def _num_or_none(v):
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def save_prosper_analysis(ticker: str, data: dict):
-    """Save or update a Prosper AI analysis result for a ticker."""
+    """Save or update the latest analysis for a ticker (one row per ticker).
+
+    Works for both legacy PROSPER results and GROW v5.1 results — GROW rows also
+    fill the `framework`, `durability`, `entry_verdict`, price-ladder, `confidence`
+    and `memo_md` columns, and append a row to grow_verdict_log (§12.3).
+    """
+    ticker = ticker.strip().upper()
+    run_date = data.get("analysis_date", datetime.now().strftime("%Y-%m-%d"))
     conn = _get_connection()
-    conn.execute(
-        """INSERT OR REPLACE INTO prosper_analysis
-           (ticker, analysis_date, model_used, rating, score, archetype,
-            archetype_name, fair_value_base, fair_value_bear, fair_value_bull,
-            upside_pct, conviction, thesis, env_net, score_breakdown,
-            key_risks, key_catalysts, full_response, cost_estimate, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            ticker.strip().upper(),
-            data.get("analysis_date", datetime.now().strftime("%Y-%m-%d")),
-            data.get("model_used", "sonnet"),
-            data.get("rating"),
-            data.get("score"),
-            data.get("archetype"),
-            data.get("archetype_name"),
-            data.get("fair_value_base"),
-            data.get("fair_value_bear"),
-            data.get("fair_value_bull"),
-            data.get("upside_pct"),
-            data.get("conviction"),
-            data.get("thesis"),
-            data.get("env_net"),
-            json.dumps(data.get("score_breakdown")) if data.get("score_breakdown") else None,
-            json.dumps(data.get("key_risks")) if data.get("key_risks") else None,
-            json.dumps(data.get("key_catalysts")) if data.get("key_catalysts") else None,
-            json.dumps(data.get("full_response")) if data.get("full_response") else None,
-            data.get("cost_estimate"),
-            datetime.now().isoformat(),
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO prosper_analysis
+               (ticker, analysis_date, model_used, rating, score, archetype,
+                archetype_name, fair_value_base, fair_value_bear, fair_value_bull,
+                upside_pct, conviction, thesis, env_net, score_breakdown,
+                key_risks, key_catalysts, full_response, cost_estimate, updated_at,
+                framework, durability, entry_verdict, buy_below, strong_buy_below,
+                reduce_above, fair_high, cagr_spot, required_return, confidence,
+                price_at_run, memo_md)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                ticker,
+                run_date,
+                data.get("model_used", "sonnet"),
+                data.get("rating"),
+                _num_or_none(data.get("score")),
+                data.get("archetype"),
+                data.get("archetype_name"),
+                _num_or_none(data.get("fair_value_base")),
+                _num_or_none(data.get("fair_value_bear")),
+                _num_or_none(data.get("fair_value_bull")),
+                _num_or_none(data.get("upside_pct")),
+                data.get("conviction"),
+                data.get("thesis"),
+                data.get("env_net"),
+                json.dumps(data.get("score_breakdown"), default=str) if data.get("score_breakdown") else None,
+                json.dumps(data.get("key_risks"), default=str) if data.get("key_risks") else None,
+                json.dumps(data.get("key_catalysts"), default=str) if data.get("key_catalysts") else None,
+                json.dumps(data.get("full_response"), default=str) if data.get("full_response") else None,
+                _num_or_none(data.get("cost_estimate")),
+                datetime.now().isoformat(),
+                data.get("framework"),
+                _num_or_none(data.get("durability")),
+                data.get("entry_verdict"),
+                _num_or_none(data.get("buy_below")),
+                _num_or_none(data.get("strong_buy_below")),
+                _num_or_none(data.get("reduce_above")),
+                _num_or_none(data.get("fair_high")),
+                _num_or_none(data.get("cagr_spot")),
+                _num_or_none(data.get("required_return")),
+                data.get("confidence"),
+                _num_or_none(data.get("price_at_run")),
+                data.get("memo_md"),
+            ),
+        )
+        # Append-only calibration log for GROW runs
+        if data.get("framework"):
+            try:
+                conn.execute(
+                    """INSERT INTO grow_verdict_log
+                       (ticker, run_date, framework, tier, durability, entry_verdict, price_at_run,
+                        buy_below, strong_buy_below, reduce_above, cagr_spot, required_return,
+                        confidence, user_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        ticker, run_date, data.get("framework"), data.get("model_used"),
+                        _num_or_none(data.get("durability")), data.get("entry_verdict"),
+                        _num_or_none(data.get("price_at_run")), _num_or_none(data.get("buy_below")),
+                        _num_or_none(data.get("strong_buy_below")), _num_or_none(data.get("reduce_above")),
+                        _num_or_none(data.get("cagr_spot")), _num_or_none(data.get("required_return")),
+                        data.get("confidence"), _current_user_id(),
+                    ),
+                )
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
     try:
         st.session_state.pop(_ANALYSES_CACHE_KEY, None)
     except Exception:
         pass
+
+
+def get_grow_verdict_log(ticker: str = None, limit: int = 500) -> pd.DataFrame:
+    """Return the append-only GROW verdict log (newest first), optionally for one ticker."""
+    conn = _get_connection()
+    try:
+        if ticker:
+            df = _read_sql(
+                "SELECT * FROM grow_verdict_log WHERE ticker = ? ORDER BY id DESC LIMIT ?",
+                conn, params=(ticker.strip().upper(), limit),
+            )
+        else:
+            df = _read_sql("SELECT * FROM grow_verdict_log ORDER BY id DESC LIMIT ?", conn, params=(limit,))
+    except Exception:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
 
 
 def get_prosper_analysis(ticker: str) -> Optional[Dict]:
@@ -1668,13 +1774,25 @@ def get_all_prosper_analyses() -> pd.DataFrame:
         pass
 
     conn = _get_connection()
-    df = _read_sql(
-        "SELECT ticker, analysis_date, rating, score, archetype_name, "
-        "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
-        "FROM prosper_analysis ORDER BY score DESC",
-        conn,
-    )
-    conn.close()
+    try:
+        df = _read_sql(
+            "SELECT ticker, analysis_date, rating, score, archetype, archetype_name, "
+            "fair_value_base, upside_pct, conviction, thesis, env_net, model_used, "
+            "framework, durability, entry_verdict, buy_below, strong_buy_below, "
+            "reduce_above, cagr_spot, required_return, confidence, price_at_run "
+            "FROM prosper_analysis ORDER BY score DESC",
+            conn,
+        )
+    except Exception:
+        # Pre-migration schema (GROW columns not yet added)
+        df = _read_sql(
+            "SELECT ticker, analysis_date, rating, score, archetype_name, "
+            "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
+            "FROM prosper_analysis ORDER BY score DESC",
+            conn,
+        )
+    finally:
+        conn.close()
 
     try:
         st.session_state[_ANALYSES_CACHE_KEY] = df.copy()

@@ -41,7 +41,7 @@ with st.sidebar:
     show_unrealized = st.checkbox("Unrealized P&L",   value=SETTINGS.get("pref_dash_show_unrealized", True))
     show_extended   = st.checkbox("Extended Metrics (52W, FWD PE, Target)", value=SETTINGS.get("pref_dash_show_extended", False))
     show_growth     = st.checkbox("Growth & Financials", value=SETTINGS.get("pref_dash_show_growth", False))
-    show_prosper     = st.checkbox("Prosper AI Ratings", value=SETTINGS.get("pref_dash_show_prosper", False))
+    show_prosper     = st.checkbox("GROW verdicts (Durability · Entry · Buy below)", value=SETTINGS.get("pref_dash_show_prosper", False))
     show_broker     = st.checkbox("Broker", value=SETTINGS.get("pref_dash_show_broker", False))
 
     # Auto-persist preferences when changed
@@ -478,18 +478,22 @@ def _build_stock_table(sub_df, sym):
             display["ROE"] = sub_df["roe"].apply(fmt_pct_plain).values
 
     if show_prosper:
+        # GROW rule 20: a verdict never travels without its Durability score and buy-below price.
+        # Legacy PROSPER rows (no framework tag) are superseded (rule 22) and shown blank.
         from core.database import get_all_prosper_analyses
         prosper_df = get_all_prosper_analyses()
         if not prosper_df.empty:
-            prosper_map = prosper_df.set_index("ticker").to_dict("index")
+            if "framework" in prosper_df.columns:
+                prosper_df = prosper_df[prosper_df["framework"].fillna("").str.startswith("GROW")]
+            prosper_map = prosper_df.set_index("ticker").to_dict("index") if not prosper_df.empty else {}
             tickers = sub_df["ticker"].values
-            display["AI Rating"] = [prosper_map.get(t, {}).get("rating", "") for t in tickers]
-            display["AI Score"] = [
-                f"{prosper_map[t]['score']:.0f}" if t in prosper_map and pd.notna(prosper_map[t].get("score")) else ""
+            display["Durability"] = [
+                f"{prosper_map[t]['durability']:.0f}" if t in prosper_map and pd.notna(prosper_map[t].get("durability")) else ""
                 for t in tickers
             ]
-            display["AI Upside"] = [
-                f"{prosper_map[t]['upside_pct']:+.1f}%" if t in prosper_map and pd.notna(prosper_map[t].get("upside_pct")) else ""
+            display["GROW Entry"] = [prosper_map.get(t, {}).get("entry_verdict") or "" for t in tickers]
+            display["Buy below"] = [
+                f"{prosper_map[t]['buy_below']:,.2f}" if t in prosper_map and pd.notna(prosper_map[t].get("buy_below")) else ""
                 for t in tickers
             ]
 
@@ -582,9 +586,10 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 
         # Color coding
         signed_cols = [c for c in stock_display.columns
-                       if any(kw in c for kw in ["Day P&L", "Day %", "P&L (", "Return %", "Upside %", "AI Upside"])]
+                       if any(kw in c for kw in ["Day P&L", "Day %", "P&L (", "Return %", "Upside %"])]
         rating_cols = [c for c in stock_display.columns if c == "Rating"]
-        ai_rating_cols = [c for c in stock_display.columns if c == "AI Rating"]
+        ai_rating_cols = [c for c in stock_display.columns if c == "GROW Entry"]
+        durability_cols = [c for c in stock_display.columns if c == "Durability"]
 
         styled = stock_display.style
         if signed_cols:
@@ -602,6 +607,9 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
                     return "color: #f39c12; font-weight: 600"
                 return ""
             styled = styled.map(_ai_rating_color, subset=ai_rating_cols)
+        if durability_cols:
+            from core.grow_render import durability_color as _dcol
+            styled = styled.map(lambda v: f"color: {_dcol(v)}; font-weight: 600" if str(v).strip() else "", subset=durability_cols)
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
         st.caption(f"**{label}**")
