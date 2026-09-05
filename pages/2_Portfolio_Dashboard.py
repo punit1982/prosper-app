@@ -748,7 +748,13 @@ def portfolio_section():
         margin_debt = 0.0
     net_portfolio_value = (total_value or 0) + total_cash
 
-    # Row 1: Big 3 metrics
+    # Grouped by time horizon, not just visual position — a point-in-time
+    # balance, a today-only delta, and a since-purchase figure look identical
+    # as a flat st.metric() row (UI/UX audit finding: "the hero numbers don't
+    # say when they're from"). The "as of" freshness caption already printed
+    # above this section (📡 Prices: ...) is what answers that for the whole
+    # group, so it isn't repeated per-cluster here.
+    st.caption("NET WORTH")
     c1, c2, c3 = st.columns(3)
     with c1:
         if total_value is not None:
@@ -758,30 +764,6 @@ def portfolio_section():
         else:
             st.metric("Total Portfolio Value", f"{len(df)} holdings")
     with c2:
-        if total_day_gain is not None:
-            base = (total_value - total_day_gain) if total_value else None
-            pct  = (total_day_gain / base * 100) if base else 0
-            st.metric("Today's Gain / Loss", f"{sym} {fmt_large(abs(total_day_gain))}",
-                      delta=f"{total_day_gain:+,.0f} ({pct:+.2f}%)")
-        else:
-            st.metric("Today's Gain / Loss", "—")
-    with c3:
-        if total_unrealized is not None and total_cost:
-            pct = total_unrealized / total_cost * 100
-            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(total_unrealized))}",
-                      delta=f"{total_unrealized:+,.0f} ({pct:+.1f}%)")
-        else:
-            st.metric("Unrealized P&L", "—")
-    # Row 2: Secondary metrics
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        if total_realized != 0:
-            st.metric("Realized P&L", f"{sym} {fmt_large(abs(total_realized))}",
-                      delta=f"{total_realized:+,.0f}",
-                      help="Net realized gains/losses from sell transactions.")
-        else:
-            st.metric("Realized P&L", "—", help="Add sell transactions in Transaction Log to see realized P&L.")
-    with c5:
         if total_cash != 0:
             cash_label = f"{sym} {total_cash:,.0f}"
             margin_help = f"Margin debt: {sym} {margin_debt:,.0f}" if margin_debt < 0 else ""
@@ -792,9 +774,34 @@ def portfolio_section():
         else:
             st.metric("Cash & Equivalents", "—",
                       help="Add cash positions via sidebar → 💵 Cash Positions")
-    with c6:
+    with c3:
         live = int(pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").notna().sum())
         st.metric("Holdings", f"{len(df)}", help=f"{live} with live prices · {len(df)-live} missing")
+
+    st.caption("PERFORMANCE")
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        if total_day_gain is not None:
+            base = (total_value - total_day_gain) if total_value else None
+            pct  = (total_day_gain / base * 100) if base else 0
+            st.metric("Today's Gain / Loss", f"{sym} {fmt_large(abs(total_day_gain))}",
+                      delta=f"{total_day_gain:+,.0f} ({pct:+.2f}%)")
+        else:
+            st.metric("Today's Gain / Loss", "—")
+    with c5:
+        if total_unrealized is not None and total_cost:
+            pct = total_unrealized / total_cost * 100
+            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(total_unrealized))}",
+                      delta=f"{total_unrealized:+,.0f} ({pct:+.1f}%)")
+        else:
+            st.metric("Unrealized P&L", "—")
+    with c6:
+        if total_realized != 0:
+            st.metric("Realized P&L", f"{sym} {fmt_large(abs(total_realized))}",
+                      delta=f"{total_realized:+,.0f}",
+                      help="Net realized gains/losses from sell transactions.")
+        else:
+            st.metric("Realized P&L", "—", help="Add sell transactions in Transaction Log to see realized P&L.")
 
     st.divider()
 

@@ -118,6 +118,7 @@ current_alloc = analyze_current_allocation(_alloc_df, info_map)
 
 cash_positions = get_all_cash_positions()
 from core.currency_normalizer import total_cash_in_base_currency
+from core.ui_components import status_chip
 total_cash = total_cash_in_base_currency(cash_positions, base_currency)
 cash_pct = (total_cash / (total_mv + total_cash) * 100) if (total_mv + total_cash) > 0 else 0
 
@@ -1029,11 +1030,15 @@ with tab_advanced:
                     rate = cp.get("margin_rate") or margin_info.get("rate") or 0
                     annual_cost = calculate_margin_cost(amount, rate) if rate else 0
                     st.markdown(
-                        f"🔴 **{cp['account_name']}** ({broker}) — "
+                        f"{status_chip('MARGIN', 'critical')} **{cp['account_name']}** ({broker}) — "
                         f"{currency} {amount:,.2f} · Rate: **{rate:.2f}%** · "
-                        f"Annual cost: **{currency} {annual_cost:,.0f}**")
+                        f"Annual cost: **{currency} {annual_cost:,.0f}**",
+                        unsafe_allow_html=True)
                 else:
-                    st.markdown(f"🟢 **{cp['account_name']}** ({broker}) — {currency} {amount:,.2f}")
+                    st.markdown(
+                        f"{status_chip('CASH', 'good')} **{cp['account_name']}** ({broker}) — "
+                        f"{currency} {amount:,.2f}",
+                        unsafe_allow_html=True)
 
             with st.expander("Broker Margin Rate Comparison"):
                 rate_rows = []
