@@ -1,10 +1,14 @@
+# Exact pins — the Docker image is rebuilt with no lockfile on every deploy,
+# so a floating range means an unreviewed library upgrade can ship on any
+# push. anthropic and yfinance are pinned hard because both have a history of
+# behaviour-breaking minor releases (see HANDOFF.md v7.4). Bump deliberately.
 streamlit==1.41.1
-anthropic>=0.40.0,<1.0.0
+anthropic==0.125.0
 python-dotenv==1.0.1
 pandas==2.2.3
 Pillow>=10.0.0,<12.0.0
 requests>=2.31.0,<3.0.0
-yfinance>=1.7.0,<2.0
+yfinance==1.7.0
 plotly==5.24.1
 finnhub-python==2.4.20
 openpyxl>=3.1.0,<4.0.0

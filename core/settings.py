@@ -261,6 +261,15 @@ _CLAUDE_MAX_RETRIES = 2
 _CLAUDE_DEFAULT_TIMEOUT = 120  # seconds; callers override (GROW passes more)
 
 
+def cached_system(text: str) -> list:
+    """Wrap a system prompt as a single cache-controlled block. Use for any
+    call whose system prompt is large and stable across turns (chat, the CIO
+    briefing) — turns after the first then bill the system prompt at the
+    ~10x-cheaper cache-read rate instead of full input. Safe to pass anywhere
+    call_claude/call_claude_stream accepts `system`."""
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+
 def _claude_models_to_try(preferred_model: str) -> list:
     ladder = [preferred_model] + [m for m in CLAUDE_AUTO_FALLBACK if m != preferred_model]
     # de-dup while preserving order

@@ -1,0 +1,37 @@
+name: Pre-warm caches
+
+# Fills the shared Turso caches (fundamentals, prices, FX) before the user's
+# morning so the first Prosper page load of the day isn't the slow one.
+# See scripts/prewarm.py and the reliability audit (§ Automation).
+#
+# SETUP (one time): add these as repository secrets
+#   Settings → Secrets and variables → Actions → New repository secret
+#     TURSO_DATABASE_URL, TURSO_AUTH_TOKEN,
+#     FINNHUB_API_KEY, TWELVE_DATA_API_KEY, FMP_API_KEY, ANTHROPIC_API_KEY
+# Until the secrets exist the job runs and simply reports "nothing to warm".
+
+on:
+  schedule:
+    - cron: "0 3 * * *"     # 03:00 UTC daily = 07:00 Gulf Standard Time
+  workflow_dispatch: {}      # allow manual runs from the Actions tab
+
+jobs:
+  prewarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install --no-cache-dir -r requirements.txt
+      - name: Warm caches
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/prewarm.py

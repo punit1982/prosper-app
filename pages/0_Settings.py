@@ -172,10 +172,10 @@ PROSPER_AUTH_ENABLED = true
 ```
 
 **Locally**: add keys to your `.env` file and restart the app:
-- **Finnhub**: Free at [finnhub.io](https://finnhub.io/) — improves analyst data & company news
-- **Twelve Data**: Free at [twelvedata.com](https://twelvedata.com/) — UAE/DFM stock quotes
+- **Finnhub**: Free tier at [finnhub.io](https://finnhub.io/) — price + fundamentals fallback, analyst data, company news
+- **Twelve Data**: [twelvedata.com](https://twelvedata.com/) — UAE / DFM price fallback (behind Mubasher). The current key is a **paid "Basic" plan** (800 calls/day); the free tier does not cover India (NSE/BSE)
 - **Serper**: Free (2.5K/month) at [serper.dev](https://serper.dev/) — Google-powered news + analysis context for Prosper AI
-- **FMP**: Free at [financialmodelingprep.com](https://financialmodelingprep.com/) — additional financial data
+- **FMP**: [financialmodelingprep.com](https://financialmodelingprep.com/) — **US fundamentals fallback only** on the current key (`/stable` endpoints); the legacy `/api/v3` endpoints are discontinued
     """)
 
 st.divider()

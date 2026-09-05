@@ -66,8 +66,19 @@ header, footer { display: none !important; }
 try:
     from core.auth import _OAUTH_SIGNING_KEY  # noqa: F401
 except Exception:
-    _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "") or "dev-placeholder"
-    _OAUTH_SIGNING_KEY = _COOKIE_KEY.encode()
+    # core.auth hard-fails in production when PROSPER_COOKIE_SECRET is unset.
+    # Do NOT paper over that with a public "dev-placeholder" key here — that
+    # would let sign-in "succeed" with forgeable tokens. Only fall back to a
+    # local dev key when we're genuinely not in production.
+    _is_prod = (
+        os.getenv("PROSPER_ENV", "").lower() == "production"
+        or bool(os.getenv("RENDER"))
+    )
+    _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
+    if not _COOKIE_KEY and _is_prod:
+        st.error("Sign-in is unavailable: the server is missing its cookie secret. Contact the administrator.")
+        st.stop()
+    _OAUTH_SIGNING_KEY = (_COOKIE_KEY or _secrets.token_hex(32)).encode()
 
 
 def _verify_oauth_state(state: str) -> bool:

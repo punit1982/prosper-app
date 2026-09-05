@@ -388,6 +388,18 @@ def _yf_fetch_info(ticker: str) -> Dict:
     except Exception:
         pass
 
+    # Numeric-only scrip codes (e.g. "17041163.NS", "500325.BO") — these come
+    # from a broker/Trendlyne ID column, not a real tradeable symbol. yfinance
+    # 404s every one of them (visible as error-log noise) and burns the full
+    # timeout doing it. Skip straight to "no info" — the holding is priced
+    # from its broker last-known value via holdings.last_known_price.
+    # (real BSE scrip codes are exactly 6 digits, e.g. 500325.BO = Reliance,
+    # and those DO resolve on Yahoo — only 7+ digit all-numeric IDs are the
+    # bogus broker/Trendlyne ones.)
+    _sym = ticker.split(":")[0].split(".")[0]
+    if _sym.isdigit() and len(_sym) >= 7:
+        return {}
+
     def _fetch():
         import yfinance as yf
         return yf.Ticker(ticker).info or {}
@@ -482,8 +494,14 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
         # with a flat 5s-per-ticker guess that could add up to many minutes
         # for a large portfolio when — as is currently the case — almost
         # every single call fails.
-        _workers = 10
-        total_timeout = max(30, (len(stale) // _workers + 2) * 8)
+        # 6 workers, not 10: on Render's 512 MB free tier each in-flight
+        # yfinance .info call (curl_cffi session + response buffer + the
+        # FMP/Finnhub fallback bodies) is a real memory allocation, and the
+        # box was peaking at ~423 MB (reliability audit finding #5). The
+        # per-call 6s hard cap means fewer workers just adds a little
+        # wall-clock, not minutes.
+        _workers = 6
+        total_timeout = max(30, (len(stale) // _workers + 2) * 12)
         done, _ = gather(
             get_ticker_info,
             [(t, (t,)) for t in stale],

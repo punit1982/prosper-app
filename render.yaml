@@ -5,17 +5,29 @@ services:
     name: prosper
     runtime: docker
     plan: free
-    region: oregon
+    # Must match the live service — it runs in Singapore (closest region to the
+    # UAE-based user and the ADX/DFM data sources), NOT Oregon.
+    region: singapore
     healthCheckPath: /_stcore/health
     envVars:
+      # ── AI ──
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: FINNHUB_API_KEY
+      # ── Market data ──
+      - key: FINNHUB_API_KEY          # prices + fundamentals fallback + news
         sync: false
+      - key: TWELVE_DATA_API_KEY      # UAE / DFM price fallback (paid "basic" plan)
+        sync: false
+      - key: FMP_API_KEY              # US fundamentals fallback (/stable endpoints only)
+        sync: false
+      - key: SERPER_API_KEY           # Google News + web search for news/sentiment
+        sync: false
+      # ── Persistence ──
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      # ── Auth ──
       - key: PROSPER_AUTH_ENABLED
         value: "true"
       - key: GOOGLE_CLIENT_ID
@@ -24,11 +36,9 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
-      - key: PROSPER_COOKIE_SECRET
+      - key: PROSPER_COOKIE_SECRET    # REQUIRED in prod — app refuses to sign cookies without it
         sync: false
       - key: PROSPER_GOOGLE_COOKIE_SECRET
-        sync: false
-      - key: FMP_API_KEY
         sync: false
       - key: PORT
         value: "8501"

@@ -102,7 +102,7 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
     with st.chat_message("assistant"):
         try:
             import anthropic
-            from core.settings import call_claude_stream, CLAUDE_DEFAULT_MODEL
+            from core.settings import call_claude_stream, CLAUDE_DEFAULT_MODEL, cached_system
 
             client = anthropic.Anthropic(api_key=api_key)
 
@@ -113,7 +113,7 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
 
             reply = st.write_stream(call_claude_stream(
                 client,
-                system=SYSTEM_PROMPT,
+                system=cached_system(SYSTEM_PROMPT),
                 messages=_api_messages,
                 max_tokens=1000,
                 preferred_model=CLAUDE_DEFAULT_MODEL,
