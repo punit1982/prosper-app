@@ -121,9 +121,20 @@ if "avg_cost" in enriched.columns:
     cost_map = dict(zip(enriched[_t_col], pd.to_numeric(enriched["avg_cost"], errors="coerce")))
     div_df["avg_cost"] = div_df["ticker"].map(cost_map).fillna(0)
 
-# ── Calculate annual income ──
+# yfinance's dividendRate is per-share in the STOCK'S OWN trading currency
+# (INR for .NS, AED for .AE, etc.), not base_currency. fx_rate (from
+# enrich_portfolio) converts that currency into base_currency — without it,
+# annual_income below silently mixes currencies (e.g. an INR dividend amount
+# gets summed and labeled as if it were already in USD, ~80x too high).
+if "fx_rate" in enriched.columns:
+    fx_map = dict(zip(enriched[_t_col], pd.to_numeric(enriched["fx_rate"], errors="coerce")))
+    div_df["fx_rate"] = div_df["ticker"].map(fx_map).fillna(1.0)
+else:
+    div_df["fx_rate"] = 1.0
+
+# ── Calculate annual income (converted to base_currency) ──
 div_df["annual_income"] = div_df.apply(
-    lambda r: r["quantity"] * r["dividend_rate"] if pd.notna(r["dividend_rate"]) and r["quantity"] > 0 else 0,
+    lambda r: r["quantity"] * r["dividend_rate"] * r["fx_rate"] if pd.notna(r["dividend_rate"]) and r["quantity"] > 0 else 0,
     axis=1,
 )
 
@@ -172,11 +183,15 @@ with tab_income:
         income_df = income_df.sort_values("annual_income", ascending=False)
 
         display = income_df.copy()
-        display["Div/Share"] = display["dividend_rate"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
-        display["Annual Income"] = display["annual_income"].apply(lambda x: f"${x:,.0f}" if x > 0 else "—")
+        # Div/Share is per-share in the STOCK'S OWN currency (INR, AED, ...),
+        # not base_currency — don't label it with a "$" that isn't accurate for
+        # non-USD holdings. Annual Income / Monthly are converted to
+        # base_currency above (via fx_rate), so those use base_currency.
+        display["Div/Share"] = display["dividend_rate"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+        display["Annual Income"] = display["annual_income"].apply(lambda x: f"{base_currency} {x:,.0f}" if x > 0 else "—")
         display["Yield"] = display["dividend_yield"].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "—")
         display["Yield on Cost"] = display["yield_on_cost"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
-        display["Monthly"] = income_df["annual_income"].apply(lambda x: f"${x/12:,.0f}" if x > 0 else "—")
+        display["Monthly"] = income_df["annual_income"].apply(lambda x: f"{base_currency} {x/12:,.0f}" if x > 0 else "—")
 
         st.dataframe(
             display[["ticker", "name", "Div/Share", "Annual Income", "Monthly", "Yield", "Yield on Cost", "sector"]].rename(
@@ -288,11 +303,12 @@ with tab_calendar:
                     icon = "🟢"
                     tag = ""
 
-                income_per = row["quantity"] * row["dividend_rate"] / 4 if pd.notna(row["dividend_rate"]) else 0
+                income_per = (row["quantity"] * row["dividend_rate"] * row.get("fx_rate", 1.0) / 4
+                              if pd.notna(row["dividend_rate"]) else 0)
                 st.markdown(
                     f"{icon} **{row['ticker']}** — {row['ex_dt'].strftime('%b %d, %Y')} "
                     f"({days} days) "
-                    f"{'· Est income: $' + f'{income_per:,.0f}' if income_per > 0 else ''} "
+                    f"{'· Est income: ' + base_currency + ' ' + f'{income_per:,.0f}' if income_per > 0 else ''} "
                     f"{'· ' + tag if tag else ''}"
                 )
         else:

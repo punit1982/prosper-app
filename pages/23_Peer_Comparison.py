@@ -177,6 +177,13 @@ def _safe_get(info, key, default=None):
     v = info.get(key)
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return default
+    if isinstance(v, str):
+        # yfinance occasionally returns non-numeric placeholders ("N/A", "Infinity", "")
+        # for these fields on thinly-covered tickers (funds, some international listings).
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return default
     return v
 
 rows = []
@@ -267,9 +274,19 @@ with tab_table:
 
     # Format columns
     def _fmt_pct(v):
+        if isinstance(v, str):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return "—"
         return f"{v*100:.1f}%" if pd.notna(v) and v is not None else "—"
 
     def _fmt_num(v, decimals=1):
+        if isinstance(v, str):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return "—"
         return f"{v:.{decimals}f}" if pd.notna(v) and v is not None else "—"
 
     def _fmt_cap(v):

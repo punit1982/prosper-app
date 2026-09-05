@@ -176,6 +176,40 @@ def _fetch_one_quote(sym: str) -> tuple:
     except Exception:
         pass
 
+    # Source 3: Twelve Data general fallback — for anything NOT already routed
+    # to it above (i.e. not UAE). Twelve Data's symbol format is
+    # "TICKER:EXCHANGE"; only include suffixes verified against the live API.
+    # NOTE (2026-09-05): NSE/BSE (India) and OTC mutual-fund symbols currently
+    # return "available starting with the Grow or Venture plan" on the
+    # TWELVE_DATA_API_KEY free tier configured for this app — this fallback
+    # will keep failing for Indian tickers/funds until that plan is upgraded,
+    # but costs nothing extra when it does (it's a last resort, after
+    # yfinance+Finnhub both already failed) and starts working immediately
+    # the day the plan changes, with no further code changes.
+    if not _is_twelve_data_symbol(sym):
+        try:
+            from core.twelve_data_client import get_quote as td_quote, is_configured as td_configured
+            if td_configured():
+                base, _, suffix = sym.partition(".")
+                td_symbol = {
+                    "NS": f"{base}:NSE", "BO": f"{base}:BSE", "L": f"{base}:LSE",
+                }.get(suffix.upper(), sym if "." not in sym else None)
+                if td_symbol:
+                    td = td_quote(td_symbol)
+                    if td:
+                        price = float(td.get("close", 0) or 0)
+                        prev  = float(td.get("previous_close", price) or price)
+                        if price > 0 and _price_sanity_check(sym, price, "twelvedata"):
+                            return sym, {
+                                "symbol":            sym,
+                                "price":             price,
+                                "change":            round(price - prev, 6),
+                                "changesPercentage": round(((price - prev) / prev) * 100, 4) if prev else None,
+                                "source":            "twelvedata",
+                            }
+        except Exception:
+            pass
+
     # All sources failed — mark as failed so we skip for 30 min
     _mark_failed(sym)
     return sym, None
@@ -354,15 +388,22 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
     df["currency"] = df.apply(resolve_currency, axis=1)
 
     # Step 1b: Resolve tickers that are missing exchange suffixes (UAE, Swiss, etc.)
+    # "MF:..." synthetic tickers have no real exchange symbol to resolve — skip
+    # them so the resolver cascade doesn't burn API calls on a guaranteed miss.
     from core.data_engine import resolve_tickers_batch
     pairs = [(str(row["ticker"]), str(row["currency"])) for _, row in df.iterrows()
-             if pd.notna(row.get("ticker"))]
+             if pd.notna(row.get("ticker")) and not str(row["ticker"]).startswith("MF:")]
     resolved = resolve_tickers_batch(pairs)
     df["ticker_resolved"] = df["ticker"].map(lambda t: resolved.get(t, t))
 
     # Step 2: Batch-fetch live quotes in parallel (use resolved tickers)
-    # Uses SQLite cache — instant on second load, only re-fetches stale tickers
-    tickers = df["ticker_resolved"].dropna().tolist()
+    # Uses SQLite cache — instant on second load, only re-fetches stale tickers.
+    # "MF:..." tickers (see core/file_parsers.py parse_trendlyne) are synthetic —
+    # not a real exchange symbol — for funds with no live-tradeable ticker at
+    # all (e.g. Morningstar-ID-only Indian mutual funds). Fetching them would
+    # just burn a cascade of guaranteed-failing API calls on every load; skip
+    # straight to their last_known_price fallback in Step 4 instead.
+    tickers = [t for t in df["ticker_resolved"].dropna().tolist() if not str(t).startswith("MF:")]
     quotes  = fetch_batch_quotes_with_cache(tickers)
 
     # Step 2b: Override currency if yfinance reports a different trading currency
@@ -403,6 +444,16 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
         current_price = quote.get("price")
         price_change  = quote.get("change")
         change_pct    = quote.get("changesPercentage")
+
+        # No live source can price this ticker (offshore/unlisted funds — see
+        # core/file_parsers.py for how last_known_price is captured from the
+        # broker's own statement). Fall back to it so market value reflects
+        # something real instead of silently disappearing.
+        if current_price is None:
+            fallback_price = row.get("last_known_price")
+            if fallback_price is not None and float(fallback_price) > 0:
+                current_price = float(fallback_price)
+                price_change = change_pct = None
 
         cost_basis = qty * avg_cost * fx
 

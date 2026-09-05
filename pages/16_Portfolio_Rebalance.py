@@ -20,7 +20,7 @@ from core.portfolio_optimizer import (
     MODEL_PORTFOLIOS,
     MODEL_DESCRIPTIONS,
 )
-from core.settings import SETTINGS
+from core.settings import SETTINGS, enriched_cache_key
 
 try:
     from core.portfolio_optimizer import get_efficient_frontier, get_optimal_portfolio
@@ -73,8 +73,19 @@ try:
         st.info("No holdings found. Upload a brokerage statement to get started.")
         st.stop()
 
-    with st.spinner("Enriching portfolio data..."):
-        enriched = enrich_portfolio(holdings)
+    # Reuse the portfolio-wide enrichment cache other pages already populate —
+    # this page used to call enrich_portfolio() unconditionally on every visit
+    # (a full live re-fetch/re-price of every holding) with no base_currency
+    # argument at all, silently always pricing in USD regardless of the user's
+    # configured base currency.
+    base_currency = SETTINGS.get("base_currency", "USD")
+    cache_key = enriched_cache_key(base_currency)
+    if cache_key in st.session_state and st.session_state[cache_key] is not None and not st.session_state[cache_key].empty:
+        enriched = st.session_state[cache_key]
+    else:
+        with st.spinner("Enriching portfolio data..."):
+            enriched = enrich_portfolio(holdings, base_currency)
+            st.session_state[cache_key] = enriched
 
     if enriched.empty or "market_value" not in enriched.columns:
         st.warning("Could not enrich holdings. Check your data and try again.")

@@ -96,32 +96,30 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate response
+    # Generate response — streamed so the reply appears as it's generated
+    # instead of the page looking frozen for the whole response time.
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                import anthropic
-                from core.settings import call_claude, extract_text, CLAUDE_DEFAULT_MODEL
+        try:
+            import anthropic
+            from core.settings import call_claude_stream, CLAUDE_DEFAULT_MODEL
 
-                client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic(api_key=api_key)
 
-                # Build messages for API
-                _api_messages = []
-                for m in st.session_state["chat_messages"]:
-                    _api_messages.append({"role": m["role"], "content": m["content"]})
+            # Build messages for API
+            _api_messages = []
+            for m in st.session_state["chat_messages"]:
+                _api_messages.append({"role": m["role"], "content": m["content"]})
 
-                response = call_claude(
-                    client,
-                    system=SYSTEM_PROMPT,
-                    messages=_api_messages,
-                    max_tokens=1000,
-                    preferred_model=CLAUDE_DEFAULT_MODEL,
-                )
-                reply = extract_text(response)
-                st.markdown(reply)
-                st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
-            except Exception as e:
-                st.error(f"Chat error: {e}")
+            reply = st.write_stream(call_claude_stream(
+                client,
+                system=SYSTEM_PROMPT,
+                messages=_api_messages,
+                max_tokens=1000,
+                preferred_model=CLAUDE_DEFAULT_MODEL,
+            ))
+            st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
+        except Exception as e:
+            st.error(f"Chat error: {e}")
 
 # Clear chat button
 if st.session_state.get("chat_messages"):

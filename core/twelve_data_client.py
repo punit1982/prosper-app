@@ -28,6 +28,17 @@ _call_timestamps: List[float] = []
 RATE_LIMIT = 7          # stay safely under 8/min free-tier limit
 UAE_EXCHANGES = ["DFM", "ADX", "XADS"]   # try Dubai first, then Abu Dhabi (ADX = exchange name, XADS = MIC code)
 
+# Exchanges (from a symbol's "TICKER:EXCHANGE" suffix) confirmed to need a paid
+# plan on this account — set the first time the API says so, so every other
+# ticker on that exchange fails instantly instead of paying the rate-limit
+# sleep + network round-trip for a call we already know will 404. Cleared
+# only on process restart; that's fine, a plan upgrade needs a restart anyway.
+_plan_restricted_exchanges: set = set()
+
+
+def is_plan_restricted(exchange: str) -> bool:
+    return exchange.upper() in _plan_restricted_exchanges
+
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -54,15 +65,30 @@ def _get(endpoint: str, params: dict) -> Optional[dict]:
     key = _api_key()
     if not key:
         return None
+    symbol = params.get("symbol", "")
+    exchange = symbol.rpartition(":")[2] if ":" in symbol else ""
+    if exchange and is_plan_restricted(exchange):
+        return None  # already confirmed this exchange needs a paid plan — skip the rate-limit wait entirely
     _rate_limit()
     try:
         params["apikey"] = key
         resp = requests.get(f"{BASE_URL}/{endpoint}", params=params, timeout=10)
+        # Twelve Data returns a real HTTP 404 (with a JSON body) for symbols /
+        # exchanges the current plan doesn't cover, e.g. India NSE/BSE on the
+        # free tier — inspect the body even on non-200 so that gate gets
+        # recorded, not just the plan-agnostic "code":400/404/429 error body
+        # some other endpoints return on their own 200 responses.
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
         if resp.status_code != 200:
+            if exchange and isinstance(data, dict) and "Grow or Venture" in str(data.get("message", "")):
+                _plan_restricted_exchanges.add(exchange.upper())
             return None
-        data = resp.json()
-        # Twelve Data returns {"code": 400, "message": "..."} for invalid symbols
         if isinstance(data, dict) and data.get("code") in (400, 404, 429):
+            if exchange and "Grow or Venture" in str(data.get("message", "")):
+                _plan_restricted_exchanges.add(exchange.upper())
             return None
         return data
     except Exception:

@@ -197,7 +197,12 @@ elif code and state:
                     user_info = ui_resp.json()
                     email = (user_info.get("email") or "").strip().lower()
                     name = user_info.get("name") or ""
-                    verified = user_info.get("email_verified") is True
+                    # oauth2/v2/userinfo returns "verified_email"; "email_verified" is only
+                    # present on the OIDC endpoint / ID token. Check both.
+                    is_verified = user_info.get("verified_email")
+                    if is_verified is None:
+                        is_verified = user_info.get("email_verified")
+                    verified = is_verified is True
 
                     if email and verified:
                         auth_token = _make_signed_token(email)
@@ -222,7 +227,20 @@ elif code and state:
                         )
                         st.stop()
 
-        err_detail = token_resp.text[:200] if token_resp.status_code != 200 else "No access token returned"
+        # Build a precise error instead of a generic one — this used to always say
+        # "No access token returned" even when the real cause was an unverified
+        # email or a failed userinfo call, which made this failure unreproducible
+        # from the UI alone.
+        if token_resp.status_code != 200:
+            err_detail = token_resp.text[:200]
+        elif not access_token:
+            err_detail = "No access token returned"
+        elif ui_resp.status_code != 200:
+            err_detail = f"userinfo request failed ({ui_resp.status_code})"
+        elif not email:
+            err_detail = "Google did not return an email address"
+        else:
+            err_detail = "Google account email is not verified"
         st.markdown(f"""
         <div style='text-align:center;padding:2rem'>
             <div style='font-size:2rem'>⚠️</div>

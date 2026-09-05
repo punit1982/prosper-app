@@ -57,6 +57,17 @@ TICKER_OVERRIDES: Dict[str, str] = {
     "SREN":          "SREN.SW",   # Swiss Re AG (SIX Swiss Exchange, CHF)
     # Franklin Income Fund stored as internal fund code — correct US mutual fund ticker
     "I288654906":    "FKINX",     # Franklin Income Fund Class A1
+    # Franklin Templeton Offshore Funds — Franklin Income Fund W(Acc) USD, a
+    # Luxembourg SICAV (ISIN LU1586275312) — NOT the same share class as FKINX
+    # above, different NAV, do not conflate. yfinance has no coverage at all.
+    # "0P0001ADNT" is Twelve Data's own symbol for this exact ISIN (confirmed
+    # via their symbol_search), but as of 2026-09-05 quoting it 404s with
+    # "available starting with the Grow or Venture plan" on this account's free
+    # tier — this mapping is a no-op today and will start working the moment
+    # the plan is upgraded, with no further code changes. Until then, Prosper
+    # falls back to the price IBKR itself last reported for this holding (see
+    # last_known_price in core/file_parsers.py parse_ibkr_statement).
+    "FTIFWAU LX":    "0P0001ADNT",
     # UAE stocks — ADNOC Drilling (stored without last L)
     "ADNOCDRIL.AE":  "ADNOCDRILL.AE",  # ADNOC Drilling — ADX client has chart ID
     # Missing Singapore/UAE/Swiss tickers from recent errors
@@ -1669,8 +1680,17 @@ def calc_portfolio_volatility(tickers: list, weights: dict, period: str = "1y") 
         return None
 
 
-def resolve_sector(ticker: str, info: dict, name: str = "") -> str:
-    """Smart sector resolution with fallbacks."""
+def resolve_sector(ticker: str, info: dict, name: str = "", asset_category: str = "") -> str:
+    """Smart sector resolution with fallbacks.
+
+    asset_category (from the broker statement itself — see core/file_parsers.py)
+    is checked before the live quoteType lookup: it's ground truth that doesn't
+    depend on the ticker resolving on any price API, unlike quoteType which
+    defaults to "EQUITY" for any fund a live source fails to price (offshore
+    SICAVs, Morningstar-ID-only Indian mutual funds, etc.).
+    """
+    if "fund" in (asset_category or "").lower() or "etf" in (asset_category or "").lower():
+        return "Funds & ETFs"
     qt = str(info.get("quoteType", "EQUITY")).upper()
     if qt in ("ETF", "MUTUALFUND"):
         return "Funds & ETFs"

@@ -307,6 +307,51 @@ def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=
     )
 
 
+def call_claude_stream(client, messages, max_tokens=1024, preferred_model=None, system=None, **kwargs):
+    """Same model-fallback behavior as call_claude(), but yields text deltas as
+    they arrive instead of blocking until the full response is generated.
+
+    Chat pages were calling call_claude() and rendering nothing until the
+    entire reply was done — on a several-hundred-token reply that reads as a
+    frozen page for the whole generation time, even though the model itself
+    isn't unusually slow. Streaming shows the first words within ~1s.
+
+    Usage: for text in call_claude_stream(...): st.write(text)  — or pass the
+    generator straight to st.write_stream().
+    """
+    preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
+    models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
+
+    _extra = dict(kwargs)
+    if system:
+        _extra["system"] = system
+
+    last_error = None
+    for model in models_to_try:
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+                **_extra,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+            return
+        except Exception as e:
+            err_str = str(e)
+            status = getattr(e, "status_code", None)
+            if status == 404 or "404" in err_str or "not_found" in err_str:
+                last_error = e
+                continue  # try next model
+            raise
+
+    raise Exception(
+        f"No Claude model accessible with your API key. "
+        f"Verify billing at console.anthropic.com. Last error: {last_error}"
+    )
+
+
 # ─────────────────────────────────────────
 # LIVE SETTINGS — per-session proxy
 # ─────────────────────────────────────────

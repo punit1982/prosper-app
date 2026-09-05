@@ -138,6 +138,12 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
             cost_price = _num(g("Cost Price"))
             if cost_price <= 0 and qty:
                 cost_price = _num(g("Cost Basis")) / qty
+            # IBKR reports its own last-quoted price per position ("Close Price").
+            # Used only as a last-resort fallback when no live source can price
+            # the ticker (e.g. offshore mutual funds like "FTIFWAU LX" that
+            # yfinance/Twelve Data's free tier don't cover) — without it the
+            # position's market value silently drops to zero.
+            close_price = _num(g("Close Price"))
             desc, exch, _ = instruments.get(symbol, ("", "", asset_cat))
             holdings.append({
                 "ticker": ibkr_symbol_to_ticker(symbol, exch, currency, asset_cat),
@@ -147,6 +153,7 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
                 "currency": currency,
                 "broker_source": broker,
                 "asset_category": asset_cat,
+                "last_known_price": close_price if close_price > 0 else None,
                 "ibkr_symbol": symbol,
             })
 
@@ -290,16 +297,45 @@ def parse_trendlyne(df: pd.DataFrame) -> Tuple[List[Dict], List[Dict], Dict]:
         qty = _num(r.get(cols.get("quantity", ""), 0))
         avg = _num(r.get(cols.get("avg. buy price", cols.get("avg buy price", "")), 0))
         name = str(r.get(cols.get("stock name", ""), "") or "").strip()
+        current_price = _num(r.get(cols.get("current price", ""), 0))
         if qty <= 0:
             continue
-        if nse and nse.lower() not in ("nan", "none", ""):
-            ticker = f"{nse.upper()}.NS"
-        elif bse and bse.lower() not in ("nan", "none", ""):
-            ticker = f"{bse.split('.')[0]}.BO"
+
+        nse_clean = nse if nse.lower() not in ("nan", "none", "") else ""
+        bse_clean = bse if bse.lower() not in ("nan", "none", "") else ""
+        # Trendlyne puts a Morningstar fund id (e.g. "F0GBR06R8K") in the NSEcode
+        # column for open-ended mutual funds — these are NOT exchange-listed and
+        # have no real NSE/BSE ticker, so ".NS"/".BO" on them can never resolve
+        # on any live price source. A purely numeric NSEcode (e.g. "17041163",
+        # vs. real NSE symbols which are always alphabetic like "TCS") is also
+        # not a real NSE ticker — that's usually a stock listed on BSE only.
+        is_fund = nse_clean.upper().startswith("F0") or "fund" in name.lower()
+        nse_valid = bool(nse_clean) and not nse_clean.isdigit() and not nse_clean.upper().startswith("F0")
+
+        if is_fund:
+            # No live exchange ticker exists for this holding. Tag it as a fund
+            # (so sector/allocation classification doesn't need a live quote to
+            # know that) and use Trendlyne's own reported NAV as the last-known
+            # price, so its value isn't silently dropped to zero.
+            holdings.append({
+                "ticker": f"MF:{nse_clean or bse_clean or name[:20]}",
+                "name": name, "quantity": qty, "avg_cost": avg, "currency": "INR",
+                "broker_source": meta["broker_source"], "asset_category": "Mutual Fund",
+                "last_known_price": current_price if current_price > 0 else None,
+            })
+            continue
+
+        if nse_valid:
+            ticker = f"{nse_clean.upper()}.NS"
+        elif bse_clean:
+            ticker = f"{bse_clean.split('.')[0]}.BO"
         else:
             continue
-        holdings.append({"ticker": ticker, "name": name, "quantity": qty, "avg_cost": avg,
-                         "currency": "INR", "broker_source": meta["broker_source"]})
+        holdings.append({
+            "ticker": ticker, "name": name, "quantity": qty, "avg_cost": avg,
+            "currency": "INR", "broker_source": meta["broker_source"],
+            "last_known_price": current_price if current_price > 0 else None,
+        })
     return holdings, [], meta
 
 

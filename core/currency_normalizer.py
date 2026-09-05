@@ -155,3 +155,41 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
 def clear_fx_cache():
     """Clear the in-memory FX rate cache (called when base currency changes)."""
     _fx_cache.clear()
+
+
+def cash_positions_to_base_currency(cash_df, base_currency: str = "USD"):
+    """
+    Return cash_df with an added 'amount_base' column: each row's amount
+    converted from its own currency into base_currency.
+
+    cash_positions rows are multi-currency (IBKR Forex Balances alone can list
+    AED, CHF, EUR, JPY, SGD, USD balances on the same account — see
+    core/file_parsers.py parse_ibkr_statement). Summing the raw 'amount' column
+    across rows mixes units (e.g. -9,150,285 JPY summed with -101,183 CHF and
+    247,712 AED as if they were all the same currency), which produces a
+    meaningless total. Every caller that aggregates cash across positions must
+    use 'amount_base', not 'amount'.
+    """
+    import pandas as pd
+
+    if cash_df is None or cash_df.empty:
+        if cash_df is None:
+            cash_df = pd.DataFrame()
+        out = cash_df.copy()
+        out["amount_base"] = pd.Series(dtype=float)
+        return out
+
+    out = cash_df.copy()
+    out["amount_base"] = [
+        float(row["amount"]) * get_exchange_rate(row.get("currency") or base_currency, base_currency)
+        for _, row in out.iterrows()
+    ]
+    return out
+
+
+def total_cash_in_base_currency(cash_df, base_currency: str = "USD") -> float:
+    """Sum of all cash_positions rows converted to base_currency. See
+    cash_positions_to_base_currency() for why a raw sum of 'amount' is wrong."""
+    if cash_df is None or cash_df.empty:
+        return 0.0
+    return float(cash_positions_to_base_currency(cash_df, base_currency)["amount_base"].sum())

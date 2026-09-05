@@ -117,7 +117,8 @@ if _t_col != "ticker" and _t_col in _alloc_df.columns:
 current_alloc = analyze_current_allocation(_alloc_df, info_map)
 
 cash_positions = get_all_cash_positions()
-total_cash = float(cash_positions["amount"].sum()) if not cash_positions.empty else 0.0
+from core.currency_normalizer import total_cash_in_base_currency
+total_cash = total_cash_in_base_currency(cash_positions, base_currency)
 cash_pct = (total_cash / (total_mv + total_cash) * 100) if (total_mv + total_cash) > 0 else 0
 
 max_single_pct = enriched["weight_pct"].max() if not enriched.empty else 0

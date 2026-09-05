@@ -286,6 +286,20 @@ def init_db():
                 conn2.commit()
             except Exception:
                 pass  # Column already exists
+        # Fund identification + broker-reported price fallback. asset_category
+        # (e.g. "Mutual Funds" from an IBKR statement) is ground truth from the
+        # broker file — unlike a live quoteType lookup, it doesn't depend on the
+        # ticker resolving on any price API. last_known_price is the broker's own
+        # last-quoted price (e.g. IBKR's "Close Price"), used only when every live
+        # price source fails — funds like offshore SICAVs or India Morningstar-ID
+        # mutual funds are never covered by yfinance/Twelve Data's free tier, so
+        # without this their market value silently drops to zero.
+        for _col, _type in (("asset_category", "TEXT"), ("last_known_price", "REAL")):
+            try:
+                conn2.execute(f"ALTER TABLE holdings ADD COLUMN {_col} {_type}")
+                conn2.commit()
+            except Exception:
+                pass  # Column already exists
         # GROW v5.1 engine columns
         for _col, _type in _GROW_ANALYSIS_COLUMNS:
             try:
@@ -835,7 +849,11 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             _src = broker_source or str(row.get("broker_source", "") or "").strip()
             if _src.lower() == "nan":
                 _src = ""
-            rows.append((_ticker, _name, _qty, _cost, _ccy, _src))
+            _asset_cat = str(row.get("asset_category", "") or "").strip()
+            if _asset_cat.lower() in ("", "nan", "none"):
+                _asset_cat = None
+            _last_price = _num_or_none(row.get("last_known_price"))
+            rows.append((_ticker, _name, _qty, _cost, _ccy, _src, _asset_cat, _last_price))
 
         if not rows:
             conn.close()
@@ -851,9 +869,10 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
                 ))
             for t in rows:
                 stmts.append((
-                    "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id, user_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (t[0], t[1], t[2], t[3], t[4], t[5], pid, uid),
+                    "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, "
+                    "asset_category, last_known_price, portfolio_id, user_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], pid, uid),
                 ))
             conn.execute_in_transaction(stmts)
         else:
@@ -867,9 +886,10 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
                 [(pid, uid, t[0]) for t in rows],
             )
             conn.executemany(
-                "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, portfolio_id, user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(t[0], t[1], t[2], t[3], t[4], t[5], pid, uid) for t in rows],
+                "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, "
+                "asset_category, last_known_price, portfolio_id, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], pid, uid) for t in rows],
             )
             conn.commit()
 

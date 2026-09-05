@@ -83,9 +83,19 @@ try:
                 info_map[orig] = info_map[resolved]
 
     # Enrich with classification data
+    def _get_asset_category(t):
+        vals = enriched.loc[enriched[t_col] == t, "asset_category"].values if "asset_category" in enriched.columns else []
+        return str(vals[0]).lower() if len(vals) > 0 and vals[0] else ""
+
     def _resolve_sector(t):
         _inf = info_map.get(t, {})
         qt = str(_inf.get("quoteType", "EQUITY")).upper()
+        # asset_category comes from the broker statement itself (ground truth —
+        # doesn't need the ticker to resolve on any live price API, unlike
+        # quoteType which defaults to EQUITY when a fund fails to price).
+        ac = _get_asset_category(t)
+        if "fund" in ac or "etf" in ac:
+            qt = "MUTUALFUND"
         if qt in ("ETF", "MUTUALFUND"):
             # Try to classify ETF/fund by category or name
             cat = str(_inf.get("category", "")).lower()
@@ -133,6 +143,8 @@ try:
     def _resolve_industry(t):
         _inf = info_map.get(t, {})
         qt = str(_inf.get("quoteType", "EQUITY")).upper()
+        if "fund" in _get_asset_category(t) or "etf" in _get_asset_category(t):
+            qt = "MUTUALFUND"
         if qt in ("ETF", "MUTUALFUND"):
             cat = _inf.get("category", "")
             if cat and str(cat) not in ("", "None", "nan"):

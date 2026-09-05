@@ -87,7 +87,7 @@ if "sector" not in enriched.columns or enriched["sector"].isna().all():
         name = str(row.get("name", "") or "")
         # Use resolve_sector which falls back to name-based keyword matching
         # for tickers that yfinance doesn't know (e.g. SGX, ADX, Swiss listings)
-        return resolve_sector(ticker, info, name)
+        return resolve_sector(ticker, info, name, asset_category=str(row.get("asset_category", "") or ""))
 
     enriched["sector"] = enriched.apply(_assign_sector, axis=1)
 
@@ -101,7 +101,8 @@ holdings_count = len(enriched)
 
 # Cash positions
 cash_positions = get_all_cash_positions()
-total_cash = float(cash_positions["amount"].sum()) if not cash_positions.empty else 0.0
+from core.currency_normalizer import total_cash_in_base_currency
+total_cash = total_cash_in_base_currency(cash_positions, base_currency)
 net_portfolio = total_value + total_cash
 
 unrealized_pct = (unrealized_pnl / total_cost * 100) if total_cost > 0 else 0

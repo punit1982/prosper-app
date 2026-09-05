@@ -105,9 +105,10 @@ with st.sidebar:
     st.subheader("💵 Cash & Margin")
     with st.expander("Manage Cash Positions", expanded=False):
         from core.fortress import get_margin_rate, calculate_margin_cost, BROKER_MARGIN_RATES
+        from core.currency_normalizer import get_exchange_rate, cash_positions_to_base_currency
 
         cash_df = get_all_cash_positions()
-        total_margin_cost = 0.0
+        total_margin_cost = 0.0  # accumulated in base_currency
         if not cash_df.empty:
             for _, cpos in cash_df.iterrows():
                 amt = float(cpos["amount"])
@@ -132,7 +133,10 @@ with st.sidebar:
                             rate_source = "unknown"
 
                         annual_cost = calculate_margin_cost(amt, rate) if rate > 0 else 0
-                        total_margin_cost += annual_cost
+                        # annual_cost is in this position's own currency; convert
+                        # before accumulating so mixed currencies (JPY, CHF, AED, ...)
+                        # don't get summed as if they were the same unit.
+                        total_margin_cost += abs(annual_cost) * get_exchange_rate(currency, base_currency)
                         st.markdown(
                             f"🔴 **{cpos['account_name']}** — {currency} {amt:,.2f} *(margin)* · "
                             f"Rate: **{rate:.2f}%** ({rate_source}) · "
@@ -145,22 +149,26 @@ with st.sidebar:
                         delete_cash_position(int(cpos["id"]))
                         st.rerun()
 
-            # Summary
-            net_cash = float(cash_df["amount"].sum())
-            pos_cash = float(cash_df[cash_df["amount"] >= 0]["amount"].sum()) if len(cash_df[cash_df["amount"] >= 0]) > 0 else 0
-            neg_cash = float(cash_df[cash_df["amount"] < 0]["amount"].sum()) if len(cash_df[cash_df["amount"] < 0]) > 0 else 0
+            # Summary — cash positions span multiple currencies (IBKR Forex
+            # Balances alone can list AED, CHF, EUR, JPY, SGD, USD on one
+            # account); convert every row to base_currency before summing,
+            # otherwise e.g. -9.15M JPY dominates a raw sum with -101k CHF.
+            converted = cash_positions_to_base_currency(cash_df, base_currency)
+            net_cash = float(converted["amount_base"].sum())
+            pos_cash = float(converted[converted["amount_base"] >= 0]["amount_base"].sum())
+            neg_cash = float(converted[converted["amount_base"] < 0]["amount_base"].sum())
             st.markdown("---")
             sc1, sc2, sc3 = st.columns(3)
             with sc1:
-                st.metric("Net Cash", f"{net_cash:,.0f}")
+                st.metric("Net Cash", f"{base_currency} {net_cash:,.0f}")
             with sc2:
                 if neg_cash < 0:
-                    st.metric("Margin Debt", f"{neg_cash:,.0f}")
+                    st.metric("Margin Debt", f"{base_currency} {neg_cash:,.0f}")
                 else:
                     st.metric("Margin Debt", "None")
             with sc3:
                 if total_margin_cost > 0:
-                    st.metric("Annual Margin Cost", f"{total_margin_cost:,.0f}")
+                    st.metric("Annual Margin Cost", f"{base_currency} {total_margin_cost:,.0f}")
                 else:
                     st.metric("Annual Margin Cost", "—")
         else:

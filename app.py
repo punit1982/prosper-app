@@ -344,13 +344,18 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
                     _ctx = f"Portfolio: {len(_enr)} holdings, {SETTINGS.get('base_currency', 'USD')} {_tv:,.0f} total value."
                 client = anthropic.Anthropic(api_key=_chat_key)
                 msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state["mini_chat"][-6:]]
-                resp = call_claude(
-                    client,
-                    system=f"You are Prosper AI, a concise investment assistant. {_ctx} Be brief (2-3 sentences max).",
-                    messages=msgs,
-                    max_tokens=300,
-                    preferred_model=CLAUDE_DEFAULT_MODEL,
-                )
+                # This call used to run with no loading indicator at all — the
+                # popover just sat there looking frozen for the whole response
+                # time, which read as "Ask Prosper takes ages" even when the
+                # actual latency was normal.
+                with st.spinner("Thinking..."):
+                    resp = call_claude(
+                        client,
+                        system=f"You are Prosper AI, a concise investment assistant. {_ctx} Be brief (2-3 sentences max).",
+                        messages=msgs,
+                        max_tokens=300,
+                        preferred_model=CLAUDE_DEFAULT_MODEL,
+                    )
                 st.session_state["mini_chat"].append({"role": "assistant", "content": extract_text(resp)})
                 if len(st.session_state["mini_chat"]) > _CHAT_HISTORY_CAP:
                     st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]

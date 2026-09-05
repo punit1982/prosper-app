@@ -1029,17 +1029,78 @@ BROKER_MARGIN_RATES = {
     "IBKR": {
         "name": "Interactive Brokers",
         "tiers": [
-            {"up_to": 100_000, "rate": 5.83},
-            {"up_to": 1_000_000, "rate": 5.83},
-            {"up_to": 3_000_000, "rate": 5.33},
-            {"up_to": 200_000_000, "rate": 5.08},
-            {"up_to": float("inf"), "rate": 4.83},
+            {"up_to": 100_000, "rate": 5.130},
+            {"up_to": 1_000_000, "rate": 4.630},
+            {"up_to": 50_000_000, "rate": 4.380},
+            {"up_to": 250_000_000, "rate": 4.130},
+            {"up_to": float("inf"), "rate": 4.130},
         ],
-        "benchmark": "Fed Funds + spread",
+        "benchmark": "IBKR Benchmark Rate + tiered spread (IBKR Pro; effective 2026-08-26)",
+        # Tier I (lowest-balance) rate per currency — used only for the flat
+        # broker-comparison table. Accurate tiered lookups use currency_tiers below.
         "currency_rates": {
-            "USD": 5.83, "EUR": 4.636, "GBP": 5.934,
-            "INR": 10.5, "HKD": 6.50, "SGD": 5.25,
-            "AED": 6.00, "AUD": 5.75, "CAD": 5.50,
+            "USD": 5.130, "EUR": 3.697, "GBP": 5.227, "INR": 8.220, "HKD": 5.654,
+            "SGD": 2.916, "AED": 6.090, "AUD": 5.627, "CAD": 3.631, "CHF": 1.500,
+            "JPY": 2.466,
+        },
+        # Full per-currency tier ladders (IBKR Pro rates, effective 2026-08-26 —
+        # https://www.interactivebrokers.com/en/trading/margin-rates.php). IBKR's
+        # margin rate is NOT one USD-denominated schedule applied everywhere — each
+        # currency has its own benchmark + spread ladder, and these vary a lot
+        # (e.g. CHF ~0.75-1.5% vs INR a flat 8.22% vs USD ~4.1-5.1%). This is what
+        # "IBKR International" actually charges per currency.
+        "currency_tiers": {
+            "USD": [
+                {"up_to": 100_000, "rate": 5.130}, {"up_to": 1_000_000, "rate": 4.630},
+                {"up_to": 50_000_000, "rate": 4.380}, {"up_to": 250_000_000, "rate": 4.130},
+                {"up_to": float("inf"), "rate": 4.130},
+            ],
+            "AED": [
+                {"up_to": 350_000, "rate": 6.090}, {"up_to": 3_500_000, "rate": 5.590},
+                {"up_to": 350_000_000, "rate": 5.090}, {"up_to": float("inf"), "rate": 5.090},
+            ],
+            "AUD": [
+                {"up_to": 150_000, "rate": 5.627}, {"up_to": 1_500_000, "rate": 5.127},
+                {"up_to": 75_000_000, "rate": 4.877}, {"up_to": 300_000_000, "rate": 4.627},
+                {"up_to": float("inf"), "rate": 4.627},
+            ],
+            "CAD": [
+                {"up_to": 130_000, "rate": 3.631}, {"up_to": 1_300_000, "rate": 3.131},
+                {"up_to": 64_000_000, "rate": 2.881}, {"up_to": 260_000_000, "rate": 2.631},
+                {"up_to": float("inf"), "rate": 2.631},
+            ],
+            "CHF": [
+                {"up_to": 90_000, "rate": 1.500}, {"up_to": 900_000, "rate": 1.000},
+                {"up_to": 46_000_000, "rate": 0.750}, {"up_to": 180_000_000, "rate": 0.750},
+                {"up_to": float("inf"), "rate": 0.750},
+            ],
+            "EUR": [
+                {"up_to": 90_000, "rate": 3.697}, {"up_to": 900_000, "rate": 3.197},
+                {"up_to": 44_000_000, "rate": 2.947}, {"up_to": 180_000_000, "rate": 2.697},
+                {"up_to": float("inf"), "rate": 2.697},
+            ],
+            "GBP": [
+                {"up_to": 80_000, "rate": 5.227}, {"up_to": 800_000, "rate": 4.727},
+                {"up_to": 38_000_000, "rate": 4.477}, {"up_to": 150_000_000, "rate": 4.227},
+                {"up_to": float("inf"), "rate": 4.227},
+            ],
+            "HKD": [
+                {"up_to": 780_000, "rate": 5.654}, {"up_to": 7_800_000, "rate": 5.154},
+                {"up_to": 780_000_000, "rate": 4.654}, {"up_to": float("inf"), "rate": 4.654},
+            ],
+            "INR": [
+                {"up_to": float("inf"), "rate": 8.220},
+            ],
+            "JPY": [
+                {"up_to": 11_000_000, "rate": 2.466}, {"up_to": 114_000_000, "rate": 1.966},
+                {"up_to": 5_700_000_000, "rate": 1.716}, {"up_to": 23_000_000_000, "rate": 1.466},
+                {"up_to": float("inf"), "rate": 1.466},
+            ],
+            "SGD": [
+                {"up_to": 140_000, "rate": 2.916}, {"up_to": 1_400_000, "rate": 2.416},
+                {"up_to": 68_000_000, "rate": 2.166}, {"up_to": 270_000_000, "rate": 1.916},
+                {"up_to": float("inf"), "rate": 1.916},
+            ],
         },
     },
     "Zerodha": {
@@ -1153,21 +1214,46 @@ def get_margin_rate(broker: str, balance: float = 0, currency: str = "USD") -> D
             "message": f"Broker '{broker}' not found. Add manually.",
         }
 
-    # Get currency-specific rate
+    currency = (currency or "USD").strip().upper()
+    abs_balance = abs(balance)
+
+    # Preferred path: a full per-currency tier ladder (each currency has its own
+    # benchmark + balance-tier spread — e.g. IBKR's INR rate is a flat 8.22% while
+    # its CHF rate ranges 0.75-1.5%, nothing like the USD ladder).
+    currency_tiers = matched.get("currency_tiers", {})
+    if currency in currency_tiers:
+        tiers = currency_tiers[currency]
+        rate = tiers[-1]["rate"]
+        for tier in tiers:
+            if abs_balance <= tier["up_to"]:
+                rate = tier["rate"]
+                break
+        return {
+            "broker_name": matched["name"],
+            "rate": rate,
+            "currency": currency,
+            "benchmark": matched.get("benchmark", ""),
+            "all_tiers": tiers,
+            "all_currency_rates": matched.get("currency_rates", {}),
+        }
+
+    # Fallback path (brokers without full per-currency tier data): a flat rate
+    # per currency, only tiered by balance when quoting the currency the ladder
+    # was published in (USD) — otherwise the USD ladder would silently overwrite
+    # the currency-specific flat rate.
     currency_rates = matched.get("currency_rates", {})
-    if currency in currency_rates:
+    has_currency_rate = currency in currency_rates
+    if has_currency_rate:
         base_rate = currency_rates[currency]
     else:
-        # Default to USD rate
         base_rate = currency_rates.get("USD", matched["tiers"][0]["rate"])
 
-    # Apply tiered rate based on balance
     rate = base_rate
-    abs_balance = abs(balance)
-    for tier in matched["tiers"]:
-        if abs_balance <= tier["up_to"]:
-            rate = tier["rate"]
-            break
+    if not has_currency_rate or currency == "USD":
+        for tier in matched["tiers"]:
+            if abs_balance <= tier["up_to"]:
+                rate = tier["rate"]
+                break
 
     return {
         "broker_name": matched["name"],

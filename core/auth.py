@@ -447,7 +447,13 @@ def _handle_google_user(user_info: dict) -> bool:
     g_name = user_info.get("name") or ""
     if not g_email:
         return False
-    if user_info.get("email_verified") is not True:
+    # Google's v2 userinfo REST API (oauth2/v2/userinfo) returns "verified_email";
+    # only the OIDC endpoint / ID token payload uses "email_verified". Check both
+    # so this works regardless of which Google endpoint supplied user_info.
+    is_verified = user_info.get("verified_email")
+    if is_verified is None:
+        is_verified = user_info.get("email_verified")
+    if is_verified is not True:
         _auth_log.warning("Rejected Google login for unverified email: %s", g_email)
         return False
 
