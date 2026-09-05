@@ -383,25 +383,49 @@ def get_ticker_info(ticker: str) -> Dict:
 
     # Streamlit decorator cache (persists across reruns/pages)
     info = _yf_fetch_info(ticker)
-    if info:
-        _cache_set(f"info_{ticker}", info)
+    # Cache regardless of truthiness — a ticker yfinance can't fetch info for
+    # (currently ~every ticker; Yahoo's quoteSummary endpoint is 404ing across
+    # the board in production, not a market-specific gap) is itself a fact
+    # worth remembering so it isn't retried needlessly within the TTL window.
+    _cache_set(f"info_{ticker}", info)
     return info
 
 
 def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
-    """Fetch info for all tickers in parallel (max 10 workers, scaled timeout)."""
+    """Fetch info for all tickers in parallel (max 4 workers, scaled timeout).
+
+    SQLite/Turso-backed (see save_ticker_info_cache) so this survives a server
+    restart — Render's free tier wipes the in-memory st.cache_data layer on
+    every cold-start spin-down, and yfinance's .info fetch is currently
+    failing for ~every ticker in production (Yahoo's quoteSummary endpoint
+    404ing, confirmed in Render logs — not a market-specific data gap) at
+    ~0.3-0.8s each. Without this, that whole mostly-failing sweep across the
+    full portfolio re-ran on every cold start, adding real seconds on top of
+    Render's own cold-start latency.
+    """
     results = {}
     if not tickers:
         return results
-    total_timeout = max(60, len(tickers) * 5)
-    done, _ = gather(
-        get_ticker_info,
-        [(t, (t,)) for t in tickers],
-        max_workers=4,
-        timeout=total_timeout,
-    )
+
+    from core.database import get_ticker_info_cache, save_ticker_info_cache
+    cached = get_ticker_info_cache(tickers, INFO_TTL)
+    stale = [t for t in tickers if t not in cached]
+
+    if stale:
+        total_timeout = max(60, len(stale) * 5)
+        done, _ = gather(
+            get_ticker_info,
+            [(t, (t,)) for t in stale],
+            max_workers=4,
+            timeout=total_timeout,
+        )
+        fresh = {t: (done.get(t) or {}) for t in stale if t in done}
+        if fresh:
+            save_ticker_info_cache(fresh)
+        cached.update(fresh)
+
     for t in tickers:
-        results[t] = done.get(t) or {}
+        results[t] = cached.get(t) or {}
     return results
 
 

@@ -119,6 +119,16 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS ticker_cache (
             ticker TEXT PRIMARY KEY, resolved TEXT NOT NULL,
             fetched_at REAL DEFAULT 0)""",
+        # Persists core/data_engine.py's yfinance .info fetch across server
+        # restarts. .info is currently failing for ~every ticker in production
+        # (Yahoo's quoteSummary endpoint 404ing — confirmed in Render logs,
+        # not a market-specific gap) at ~0.3-0.8s per ticker; without this,
+        # every Render free-tier cold start (which wipes the in-memory
+        # st.cache_data layer) re-runs that whole guaranteed-mostly-failing
+        # sweep across the full portfolio before anything renders.
+        """CREATE TABLE IF NOT EXISTS ticker_info_cache (
+            ticker TEXT PRIMARY KEY, info_json TEXT NOT NULL,
+            fetched_at REAL DEFAULT 0)""",
         """CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL, name TEXT, type TEXT NOT NULL,
@@ -1413,6 +1423,57 @@ def save_ticker_resolution_cache(resolutions: Dict[str, str]) -> None:
         conn.executemany(
             "INSERT OR REPLACE INTO ticker_cache (ticker, resolved, fetched_at) VALUES (?, ?, ?)",
             [(ticker, resolved, now) for ticker, resolved in resolutions.items()],
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_ticker_info_cache(tickers: List[str], ttl: float) -> Dict[str, dict]:
+    """
+    Read cached yfinance .info results from SQLite for the given tickers.
+    Returns {ticker: info_dict} for entries still within ttl seconds — including
+    a cached EMPTY dict for a ticker whose fetch previously failed, so a known
+    dead/unavailable ticker isn't retried on every cold start (see
+    save_ticker_info_cache).
+    """
+    if not tickers:
+        return {}
+    try:
+        conn = _get_connection()
+        placeholders = ",".join("?" * len(tickers))
+        rows = conn.execute(
+            f"SELECT ticker, info_json, fetched_at FROM ticker_info_cache WHERE ticker IN ({placeholders})",
+            tickers,
+        ).fetchall()
+        conn.close()
+        cutoff = time.time() - ttl
+        result = {}
+        for r in rows:
+            if (r["fetched_at"] or 0) <= cutoff:
+                continue
+            try:
+                result[r["ticker"]] = json.loads(r["info_json"])
+            except Exception:
+                continue
+        return result
+    except Exception:
+        return {}
+
+
+def save_ticker_info_cache(info_map: Dict[str, dict]) -> None:
+    """Save {ticker: info_dict} pairs to SQLite ticker_info_cache — including
+    empty dicts (a failed/unavailable fetch), so that result survives a server
+    restart too instead of being re-attempted on every cold start."""
+    if not info_map:
+        return
+    try:
+        conn = _get_connection()
+        now = time.time()
+        conn.executemany(
+            "INSERT OR REPLACE INTO ticker_info_cache (ticker, info_json, fetched_at) VALUES (?, ?, ?)",
+            [(ticker, json.dumps(info or {}), now) for ticker, info in info_map.items()],
         )
         conn.commit()
         conn.close()
