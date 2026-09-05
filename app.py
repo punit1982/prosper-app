@@ -29,6 +29,14 @@ _is_authed_early = st.session_state.get("authentication_status") is True
 if not _is_authed_early:
     st.html(_SIDEBAR_HIDE_CSS)
 
+# v7.0.1 FIX: the "Continue with Google" render guard is a PER-SCRIPT-RUN guard
+# (it stops the button rendering twice in one run). v6.6 stopped clearing it, so
+# after the first rerun of a session — typing in the login form, a widget click,
+# the cookie check — the Google button silently vanished for good. Clear it here,
+# at the top of every run; the OAuth callback branches inside
+# _show_google_signin() are evaluated before the guard, so nothing is lost.
+st.session_state.pop("_google_auth_rendered_this_rerun", None)
+
 # ── Global Styling ───────────────────────────────────────────────────────────
 st.markdown("""
 <style>

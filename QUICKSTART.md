@@ -2,11 +2,12 @@
 
 ## Run Locally
 
-One-time setup (needs Python 3.12 from https://www.python.org/downloads/):
+One-time setup (needs Python 3.12 or newer from https://www.python.org/downloads/ —
+after installing, open a NEW Terminal window so the `python3` command points at it):
 
 ```bash
 cd "/Users/singpu03/Library/Mobile Documents/com~apple~CloudDocs/AA-Investments /GROW Operating System/prosper"
-python3.12 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env      # then paste your real API keys into .env

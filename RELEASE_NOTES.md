@@ -1,5 +1,24 @@
 # Prosper Release Notes
 
+## v7.0.1 — Sign-in fixes (September 5, 2026)
+
+- **"Continue with Google" button had vanished.** Its once-per-run render guard was never
+  cleared after v6.6, so from the first rerun of a session onward the button was gone.
+  Cleared at the top of every run. (`app.py`)
+- **Sign in with your email.** The form asked for a *Username* but accounts are keyed by the
+  part before the @ (`punit1982@gmail.com` → `punit1982`). The form now says
+  *Email or username* and both work. (`core/auth.py`)
+- **Locked out? Admin recovery via Render environment variables** (set, let the service
+  restart, sign in, then delete them):
+  - `PROSPER_RESET_PASSWORD` = `you@example.com:NewPassword123` — sets that account's
+    password (creates the account as admin if it doesn't exist).
+  - `PROSPER_CLAIM_LEGACY` = `you@example.com` — moves all pre-multi-user data (holdings,
+    transactions, cash, watchlist, NAV history, portfolios) from the legacy `default`
+    shard to that account.
+- Local setup notes updated for python.org installs (`python3`, new Terminal window).
+
+---
+
 ## v7.0 — GROW v5.1 becomes the analysis engine (September 5, 2026)
 
 The PROSPER v3.0 scoring prompt is retired. Every analysis now runs the **GROW v5.1**

@@ -632,6 +632,32 @@ def _claim_legacy_default_shard(user_id: str) -> None:
         conn.close()
 
 
+def claim_legacy_shard_for(user_id: str) -> int:
+    """FORCED reassignment of every legacy 'default' row to user_id (admin recovery).
+
+    Unlike _claim_legacy_default_shard this does not require a single-user DB —
+    it is only invoked via the PROSPER_CLAIM_LEGACY environment variable.
+    Returns the number of rows moved.
+    """
+    if not user_id or user_id == "default":
+        return 0
+    moved = 0
+    conn = _get_connection()
+    try:
+        for tbl in ("holdings", "transactions", "cash_positions", "watchlist",
+                    "nav_snapshots", "portfolios", "briefing_cache", "fortress_state"):
+            try:
+                cur = conn.execute(f"UPDATE {tbl} SET user_id = ? WHERE user_id = 'default'", (user_id,))
+                moved += int(getattr(cur, "rowcount", 0) or 0)
+            except Exception:
+                continue
+        conn.commit()
+    finally:
+        conn.close()
+    _invalidate_holdings_cache()
+    return moved
+
+
 def get_or_create_user_portfolios(user_id: str) -> pd.DataFrame:
     """Return portfolios owned by user_id, creating a default one if none exist.
 

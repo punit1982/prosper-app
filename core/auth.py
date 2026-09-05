@@ -316,19 +316,29 @@ def _rebuild_yaml_from_db():
     for u in users:
         if not u.get("username"):
             continue
-        config["credentials"]["usernames"][u["username"]] = {
+        entry = {
             "email": u.get("email", ""),
             "first_name": u.get("first_name", ""),
             "last_name": u.get("last_name", ""),
             "password": u.get("password_hash") or "",
             "role": u.get("role", "user"),
         }
+        config["credentials"]["usernames"][u["username"]] = entry
+        # v7.0.1: let people sign in with their EMAIL as well as the derived username
+        # ("punit1982@gmail.com" → username "punit1982" was a constant source of
+        # "login not working"). The alias points back at the canonical username.
+        email_key = (u.get("email") or "").strip().lower()
+        if email_key and email_key != u["username"]:
+            alias = dict(entry)
+            alias["_canonical"] = u["username"]
+            config["credentials"]["usernames"][email_key] = alias
 
-    # On-disk copy: no password hashes (B3)
+    # On-disk copy: no password hashes (B3), no aliases
     disk_config = {
         "credentials": {"usernames": {
             name: {k: v for k, v in info.items() if k != "password"}
             for name, info in config["credentials"]["usernames"].items()
+            if "_canonical" not in info
         }},
         "cookie": dict(config["cookie"]),
     }
@@ -752,6 +762,63 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
 
 
 # ─────────────────────────────────────────
+# ADMIN RECOVERY VIA ENVIRONMENT VARIABLES (one-shot, idempotent)
+#   PROSPER_RESET_PASSWORD = "email:NewPassword"  → sets that account's password
+#                                                   (creates the account as admin if it does not exist)
+#   PROSPER_CLAIM_LEGACY   = "email"              → moves all legacy 'default' data to that account
+# Set them on Render → Environment, let the service restart, sign in, then DELETE them.
+# ─────────────────────────────────────────
+_ENV_RECOVERY_APPLIED = False
+
+
+def _find_user_ci(email: str) -> Optional[dict]:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    for u in _db_get_all_users():
+        if (u.get("email") or "").strip().lower() == email or (u.get("username") or "").lower() == email:
+            return u
+    return None
+
+
+def _apply_env_recovery() -> None:
+    global _ENV_RECOVERY_APPLIED
+    if _ENV_RECOVERY_APPLIED:
+        return
+    _ENV_RECOVERY_APPLIED = True
+
+    spec = os.getenv("PROSPER_RESET_PASSWORD", "").strip()
+    if spec and ":" in spec:
+        email, new_pw = spec.split(":", 1)
+        email = email.strip()
+        if email and new_pw:
+            try:
+                user = _find_user_ci(email)
+                new_hash = _hash_password(new_pw)
+                if user:
+                    _db_update_user(user["username"], password_hash=new_hash)
+                    _auth_log.warning("PROSPER_RESET_PASSWORD applied for %s — remove the variable now.", email)
+                else:
+                    username = _unique_username_from_email(email.lower())
+                    role = "admin" if not _db_get_all_users() else "user"
+                    _db_create_user(username, email, email.split("@")[0].title(), "", new_hash, role)
+                    _auth_log.warning("PROSPER_RESET_PASSWORD created account %s (%s) — remove the variable now.", email, role)
+            except Exception:
+                _auth_log.exception("PROSPER_RESET_PASSWORD failed")
+
+    claim = os.getenv("PROSPER_CLAIM_LEGACY", "").strip()
+    if claim:
+        try:
+            user = _find_user_ci(claim)
+            if user:
+                from core.database import claim_legacy_shard_for
+                moved = claim_legacy_shard_for(user.get("email") or user["username"])
+                _auth_log.warning("PROSPER_CLAIM_LEGACY: %s rows moved to %s — remove the variable now.", moved, claim)
+        except Exception:
+            _auth_log.exception("PROSPER_CLAIM_LEGACY failed")
+
+
+# ─────────────────────────────────────────
 # LOGOUT
 # ─────────────────────────────────────────
 def do_logout():
@@ -844,6 +911,7 @@ def run_auth() -> Dict[str, Any]:
         return result
 
     _build_google_creds_file()
+    _apply_env_recovery()
 
     db_users = _db_get_all_users()
     if db_users:
@@ -890,6 +958,10 @@ def run_auth() -> Dict[str, Any]:
         username = st.session_state.get("username", "default")
         display_name = st.session_state.get("name", "User")
         user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
+        if user_data.get("_canonical"):  # signed in via email alias → canonical username
+            username = user_data["_canonical"]
+            st.session_state["username"] = username
+            user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, user_data)
         user_email = user_data.get("email", username)
         st.session_state.setdefault("user_id", user_email or username)
 
@@ -929,16 +1001,25 @@ def run_auth() -> Dict[str, Any]:
             unsafe_allow_html=True,
         )
 
-        authenticator.login()
+        try:
+            authenticator.login(fields={"Form name": "Sign in", "Username": "Email or username",
+                                        "Password": "Password", "Login": "Sign in"})
+        except TypeError:  # very old streamlit-authenticator without `fields`
+            authenticator.login()
         if st.session_state.get("authentication_status") is True:
             username = st.session_state.get("username", "")
             user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})
+            if user_data.get("_canonical"):
+                username = user_data["_canonical"]
+                st.session_state["username"] = username
+                user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, user_data)
             st.session_state["user_id"] = user_data.get("email", username)
             st.session_state["auth_method"] = "email"
             st.rerun()
         elif st.session_state.get("authentication_status") is False:
-            st.error("Invalid username or password.")
-            st.caption("Forgot your password? Contact an administrator or create a new account.")
+            st.error("Invalid email/username or password.")
+            st.caption("Tip: you can sign in with your email address. Forgot your password? "
+                       "An administrator can reset it from the Users page.")
 
         st.markdown("")
         with st.expander("👤 Create New Account", expanded=False):
