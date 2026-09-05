@@ -1,4 +1,4 @@
-# Prosper — Handoff (5 Sep 2026, updated post-v7.9)
+# Prosper — Handoff (5 Sep 2026, updated post-v7.10 + reliability audit)
 
 Paste this into a new chat to continue. Everything below is verified unless marked otherwise.
 
@@ -130,6 +130,46 @@ limitation, not a code bug, and shows up repeatedly in user reports as "slow rel
   published audit artifact: https://claude.ai/code/artifact/e520e963-2086-443a-bda5-f29102aa6aa4 (read-only
   design review, no code — the actual fixes are what shipped in v7.5/v7.8/v7.9).
 
+- **v7.10 (UX audit batches 4–6)**: `core/ui_errors.py` — four canonical templates
+  (`empty_state` / `fetch_failed` / `fetch_pending` / `unsupported`) plus `unexpected` and
+  `safe_message`; real exceptions logged (`prosper.ui` / `prosper.auth`), never shown. Swept every
+  raw-`{e}` render: Equity Deep Dive ×6, Command Center briefing, IBKR Sync ×2, Upload Portal,
+  User Management ×2, Onboarding, AI Chat, Risk Strategy, OAuth callback, app.py ×2, data_engine
+  summaries ×2. `core/ui_components.render_responsive_table()` — CSS-only card-per-row fallback
+  below 768px, applied to Peer Comparison + Dividend Dashboard (income + yield). New
+  `pages/13_Research_Hub.py` ("Research Hub", first in "Research & AI") — orientation + `page_link`
+  nav, "open Equity Deep Dive first"; picks a `st.session_state["research_ticker"]` that seeds
+  Technical Analysis + Peer Comparison defaults. Still open from Step 6: the full tab-merge and
+  ticker-sync for Analyst Consensus / Sentiment / Equity Deep Dive. Chip sweep of the remaining ad
+  hoc 🔴/🟡/🟢 pages (TA, Sentiment, Analyst Consensus, Earnings Calendar, Upload Portal) still not
+  done — lowest priority. Deployed live and clean (dep-dae61dh5efls739mqvtg, status live).
+
+## Reliability & Connections audit (5 Sep 2026, report only — no code changed)
+Full report: https://claude.ai/code/artifact/f3d24762-2d6f-48d0-8edd-6223b0be5a5d
+Live-probed every key/source. **Working:** Anthropic, Finnhub, Serper, Mubasher (ADX/DFM healthy
+with the Referer header). **Twelve Data:** works but it's a *paid "basic" plan* (not free as this
+doc previously said), and daily usage was 568/800 mid-session — treat as fallback-only behind
+Mubasher. **FMP:** legacy `/api/v3/*` endpoints are dead ("no longer supported"); `/stable/*` work
+with the same key — but nothing in the code calls FMP any more (yfinance + Finnhub replaced it), so
+it's just dead config in Settings + render.yaml. **yfinance/Yahoo:** `chart` works unauthenticated;
+`quoteSummary` + v7 `quote` return "Unauthorized / Invalid Crumb" on a raw call (yfinance 1.7's
+internal workaround is the only thing keeping fundamentals alive — the v7.4 fragility persists).
+Top findings, in fix order: (1) **FX fallback returns `1.0`** on any yfinance FX failure
+[`core/currency_normalizer.py:151`] → silently misvalues INR/AED holdings; hard-code the AED peg
+3.6725, fall back to stale cache then a static table, never 1.0. (2) **Yahoo is a single point of
+failure** for prices+FX+fundamentals+analyst data with no non-Yahoo fundamentals fallback for
+US/India → add Finnhub `/stock/metric`. (3) Twelve Data quota. (4) **Turso connector has no
+retry + new connection per query** [`core/db_connector.py:214`] — `tenacity` already a dep, unused.
+(5) **Memory peaks 423 MB / 512 MB cap** on Render free tier → lower enrich concurrency.
+(6) `call_claude` only retries 404, not 429/529; auto Sonnet→Opus fallback = silent cost spike; no
+request timeout. (7) `render.yaml` stale (region oregon vs live singapore) + missing
+`TWELVE_DATA_API_KEY` / `SERPER_API_KEY`. (8) no dependency lock; anthropic/yfinance float.
+(9) cookie-secret fallback `"dev-placeholder"` [`pages/99_OAuth_Callback.py:69`]. (10) static
+lookup maps degrade silently. (11) numeric `.NS` scrip codes reach yfinance. (12) prompt caching
+only in GROW — add to chat/briefing. (13) GROW framework 5-min cache TTL net-negative for one-off
+runs. Plus: **no scheduled jobs** — a nightly cron to pre-warm `ticker_info_cache` + enriched
+snapshot + `fx_rate_cache` would kill the slow-morning load.
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
@@ -147,20 +187,16 @@ nothing regressed — this is the one category of testing a non-interactive sess
    judgment whenever the user is ready to do that work (see v7.7 above for the exact formula used as a
    stopgap, and why).
 2. **Remaining UI/UX audit roadmap items** (see the artifact link above for full detail/mockups):
-   - Step 4: canonical error/empty-state copy — found raw exception text shown directly to the user (e.g.
-     `st.error(f"Failed: {e}")`) in ~10 more files beyond what's been touched: `17_User_Management.py`,
-     `18_Equity_Deep_Dive.py` (6 occurrences), `1_Upload_Portal.py`, `18_Risk_Strategy.py`,
-     `24_AI_Chat.py`, `25_IBKR_Sync.py`, `26_Onboarding.py`. Direction: 4 canonical templates (no data yet /
-     fetch failed-retry / fetch failed-just wait / permanently unsupported), log the real exception, never
-     show it. Not started — no code changes made toward this yet.
-   - Step 5: card-fallback layout for wide tables under 768px (Peer Comparison, Dividend Dashboard) — not
-     started.
-   - Step 6: consolidate the five research pages (Peer Comparison, Analyst Consensus, Sentiment, Technical
-     Analysis, Equity Deep Dive) under one hub with tabs — not started, largest item (~2-3 days per the
-     audit's own estimate).
+   - Steps 4 & 5: **DONE in v7.10** (see session history above).
+   - Step 6: **partially done in v7.10** — the Research Hub landing page shipped; still open is the full
+     tab-merge (fold Analyst Consensus / Sentiment / Technical Analysis into Equity Deep Dive as sections)
+     and wiring `research_ticker` into the 3 pages not yet done (Analyst Consensus, Sentiment, Equity Deep
+     Dive itself).
    - Lower-priority: sweep the remaining ad hoc 🔴/🟡/🟢 patterns in Technical Analysis, Sentiment, Analyst
      Consensus, Earnings Calendar, Upload Portal into `status_chip()` for full consistency (these are more
      "directional signal" than "severity state" semantically, so lower value than the ones already fixed).
+   - **NEW — reliability audit fixes**: see the "Reliability & Connections audit" section above and the
+     linked artifact for the full ranked list. Fix order: FX-fallback / Yahoo-SPOF first.
 3. Twelve Data free tier does not cover India (NSE/BSE) or OTC fund quotes — confirmed live in v7.2, needs a
    paid Twelve Data plan (Grow/Venture) to actually fix; code is ready and will work immediately on upgrade.
 4. Full GROW tier (Opus 5, ~$4/name) not yet live-tested end-to-end this session.
