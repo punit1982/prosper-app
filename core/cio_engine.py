@@ -13,12 +13,13 @@ Why yfinance?
 - Returns prices, day change, P/E, Debt/Equity, and more
 """
 
+import math
 import pandas as pd
 from typing import Dict, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.settings import SETTINGS
 from core.currency_normalizer import detect_currency_from_ticker, get_exchange_rate, normalise_currency
+from core.parallel import gather
 
 
 # ─────────────────────────────────────────
@@ -49,17 +50,35 @@ def clear_failed_tickers():
 # ─────────────────────────────────────────
 
 def _is_twelve_data_symbol(sym: str) -> bool:
-    """Check if a symbol is in Twelve Data exchange format (e.g. 'EMAAR:DFM')."""
-    return ":" in sym and any(sym.endswith(f":{ex}") for ex in ("DFM", "XADS"))
+    """Check if a symbol is in Twelve Data exchange format (e.g. 'EMAAR:DFM').
+
+    Must accept every exchange code twelve_data_client.resolve_uae_symbol() can
+    produce (DFM, ADX, XADS) — previously ':ADX' symbols were never routed to
+    Twelve Data and always ended up as "No live price".
+    """
+    if ":" not in sym:
+        return False
+    try:
+        from core.twelve_data_client import UAE_EXCHANGES
+    except Exception:
+        UAE_EXCHANGES = ["DFM", "ADX", "XADS"]
+    return any(sym.endswith(f":{ex}") for ex in UAE_EXCHANGES)
 
 
 def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
     """
     Return True if the price looks valid.  Suppresses:
+      - None / NaN / infinite prices (data error)
       - Negative prices (data error)
       - ETF/fund prices > 10 000 (likely wrong ticker or currency mismatch)
     """
-    if price is None or price < 0:
+    if price is None:
+        return False
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return False
+    if math.isnan(price) or math.isinf(price) or price < 0:
         return False
     # ETF / fund prices should not exceed 10 000 — flag as suspicious
     # (most ETFs/funds trade well below 1 000; > 10 000 usually means wrong ticker)
@@ -179,26 +198,23 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
 
     results: Dict[str, dict] = {}
     explicit_failures: set = set()
-    max_workers = min(len(tickers), 5)
 
-    # Scale timeout: 30s base + 2s per ticker beyond 20 (was 60s — too slow for initial load)
+    # Scale timeout: 30s base + 2s per ticker beyond 20. This is now a REAL
+    # deadline — core.parallel.gather() abandons stragglers instead of waiting.
     batch_timeout = max(30, 30 + (len(tickers) - 20) * 2) if len(tickers) > 20 else 30
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one_quote, sym): sym for sym in tickers}
-        try:
-            for future in as_completed(futures, timeout=batch_timeout):
-                try:
-                    sym, data = future.result(timeout=10)
-                    if data is not None:
-                        results[sym] = data
-                    else:
-                        explicit_failures.add(sym)
-                except Exception:
-                    pass
-        except Exception:
-            # Timeout — return whatever completed; timed-out tickers are NOT failed
-            pass
+    done, _errored = gather(
+        _fetch_one_quote,
+        [(sym, (sym,)) for sym in tickers],
+        max_workers=6,
+        timeout=batch_timeout,
+    )
+    for sym, (_, data) in done.items():
+        if data is not None:
+            results[sym] = data
+        else:
+            explicit_failures.add(sym)
+    # Timed-out / errored tickers are NOT marked failed — they retry next cycle.
 
     return results, explicit_failures
 
@@ -286,12 +302,14 @@ def add_key_metrics(df: pd.DataFrame) -> pd.DataFrame:
     tickers = df["ticker"].dropna().tolist()
     metrics_map: Dict[str, dict] = {}
 
-    max_workers = min(len(tickers), 5)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one_metrics, sym): sym for sym in tickers}
-        for future in as_completed(futures):
-            sym, data = future.result()
-            metrics_map[sym] = data
+    done, _ = gather(
+        _fetch_one_metrics,
+        [(sym, (sym,)) for sym in tickers],
+        max_workers=5,
+        timeout=max(30, 3 * len(tickers)),
+    )
+    for sym, (_, data) in done.items():
+        metrics_map[sym] = data
 
     df["pe_ratio"]       = df["ticker"].map(lambda t: metrics_map.get(t, {}).get("peRatioTTM"))
     df["roic"]           = df["ticker"].map(lambda t: metrics_map.get(t, {}).get("roicTTM"))
@@ -356,22 +374,17 @@ def enrich_portfolio(df: pd.DataFrame, base_currency: str = "USD") -> pd.DataFra
         if yf_currency and yf_currency != row["currency"]:
             df.at[idx, "currency"] = yf_currency
 
-    # Step 3: Fetch FX rates for each unique currency in parallel (5s timeout each)
+    # Step 3: Fetch FX rates for each unique currency in parallel (15s hard deadline)
     unique_currencies = df["currency"].unique().tolist()
     fx_rates: Dict[str, float] = {}
     if unique_currencies:
-        with ThreadPoolExecutor(max_workers=min(len(unique_currencies), 4)) as fx_pool:
-            fx_futures = {fx_pool.submit(get_exchange_rate, c, base_currency): c
-                          for c in unique_currencies}
-            try:
-                for f in as_completed(fx_futures, timeout=15):
-                    c = fx_futures[f]
-                    try:
-                        fx_rates[c] = f.result(timeout=5)
-                    except Exception:
-                        fx_rates[c] = 1.0
-            except Exception:
-                pass
+        done, _ = gather(
+            get_exchange_rate,
+            [(c, (c, base_currency)) for c in unique_currencies],
+            max_workers=4,
+            timeout=15,
+        )
+        fx_rates.update({c: float(r) for c, r in done.items() if r})
         # Fill any missing currencies
         for c in unique_currencies:
             fx_rates.setdefault(c, 1.0)

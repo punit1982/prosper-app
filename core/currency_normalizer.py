@@ -124,18 +124,17 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
     except Exception:
         pass
 
-    # Layer 3: live fetch from yfinance (5-second timeout)
+    # Layer 3: live fetch from yfinance (real 8-second timeout — the thread is
+    # abandoned on timeout instead of blocking the page until it finishes)
     try:
         import yfinance as yf
-        from concurrent.futures import ThreadPoolExecutor
+        from core.parallel import run_with_timeout
         pair = f"{from_currency}{to_currency}=X"
 
         def _fetch_rate():
             return yf.Ticker(pair).fast_info.last_price
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_fetch_rate)
-            rate = future.result(timeout=5)
+        rate = run_with_timeout(_fetch_rate, timeout=8, default=None)
 
         if rate and float(rate) > 0:
             _fx_cache[cache_key] = float(rate)

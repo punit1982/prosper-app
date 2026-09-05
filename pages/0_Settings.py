@@ -335,12 +335,12 @@ if st.button("💾 Save Settings", type="primary", use_container_width=True):
 
 # Reset to defaults button
 if st.button("↩️ Reset to Defaults", type="secondary"):
-    import os as _os
-    settings_path = _os.path.expanduser("~/prosper_data/user_settings.json")
-    if _os.path.exists(settings_path):
-        _os.remove(settings_path)
-    SETTINGS.update(get_defaults())
-    st.success("Settings reset to defaults. Refresh the page to see changes.")
+    from core.settings import reset_user_settings
+    reset_user_settings()  # clears local file AND this user's database row
+    for key in list(st.session_state.keys()):
+        if key.startswith("enriched_") or key in ("last_refresh_time", "extended_df"):
+            del st.session_state[key]
+    st.success("Settings reset to defaults.")
     st.rerun()
 
-st.caption("ℹ️ Settings are saved to `~/prosper_data/user_settings.json` and persist across restarts.")
+st.caption("ℹ️ Settings are saved per user to the database (and locally to `~/prosper_data/user_settings.json`) and persist across restarts.")

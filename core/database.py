@@ -45,16 +45,22 @@ def _invalidate_holdings_cache(portfolio_id: int = None):
     """
     try:
         pid = portfolio_id or st.session_state.get("active_portfolio_id", 1)
-        prefixes_to_clear = (
-            f"{_HOLDINGS_CACHE_KEY}_{pid}",
-            f"enriched_{pid}_",
-        )
+        # Holdings cache keys look like  _prosper_holdings_cache_<user>_<pid>.
+        # v6.7 FIX: the old prefix "<key>_<pid>" never matched (user id sits in
+        # between), so the dashboard kept showing stale holdings after every
+        # upload / edit / delete until logout. Match on the "_<pid>" suffix.
+        pid_suffix = f"_{pid}"
+        prefixes_to_clear = (f"enriched_{pid}_",)
         exact_to_clear = {
-            "extended_df", "last_refresh_time",
+            "extended_df", "last_refresh_time", "summary_info_map",
             _REALIZED_PNL_CACHE_KEY, _ANALYSES_CACHE_KEY,
         }
         for key in list(st.session_state.keys()):
-            if any(key.startswith(p) for p in prefixes_to_clear) or key in exact_to_clear:
+            if (
+                (key.startswith(_HOLDINGS_CACHE_KEY) and key.endswith(pid_suffix))
+                or any(key.startswith(p) for p in prefixes_to_clear)
+                or key in exact_to_clear
+            ):
                 del st.session_state[key]
     except Exception:
         pass
@@ -205,12 +211,12 @@ def init_db():
 
     conn = _get_connection()
 
-    # Turso: batch all statements in ONE HTTP call
+    # Turso: batch all CREATE TABLE statements in ONE HTTP call
     if hasattr(conn, 'execute_batch'):
-        conn.execute_batch(_TABLE_STATEMENTS + _INDEX_STATEMENTS)
+        conn.execute_batch(_TABLE_STATEMENTS)
     else:
         # SQLite: execute one by one (fast locally)
-        for sql in _TABLE_STATEMENTS + _INDEX_STATEMENTS:
+        for sql in _TABLE_STATEMENTS:
             conn.execute(sql)
         conn.commit()
 
@@ -218,6 +224,9 @@ def init_db():
 
     # ── Migrations: add portfolio_id column if missing ──
     # Use ALTER TABLE directly (works on both SQLite & Turso); catch "duplicate" error
+    # v6.7 FIX: indexes are now created AFTER these migrations. Previously
+    # `CREATE INDEX … holdings(portfolio_id)` ran before the column existed, so a
+    # brand-new database crashed on first start ("no such column: portfolio_id").
     try:
         conn2 = _get_connection()
         try:
@@ -255,6 +264,27 @@ def init_db():
     except Exception:
         pass  # Migration is best-effort — app works without it
 
+    # ── Migration: nav_snapshots legacy UNIQUE(date, base_currency) ──
+    # Pre-multitenancy schema meant only ONE user could store a snapshot per day;
+    # every other user's daily NAV history silently never saved.
+    _migrate_nav_snapshots_unique()
+
+    # ── Indexes (each best-effort so one failure can't block startup) ──
+    try:
+        conn3 = _get_connection()
+        for sql in _INDEX_STATEMENTS:
+            try:
+                conn3.execute(sql)
+            except Exception:
+                pass
+        try:
+            conn3.commit()
+        except Exception:
+            pass
+        conn3.close()
+    except Exception:
+        pass
+
     # ── Migration: copy users from auth_config.yaml into the users table ──
     _migrate_yaml_users_to_db()
 
@@ -266,6 +296,66 @@ def init_db():
         pass
 
     st.session_state["_db_initialized"] = True
+
+
+def _migrate_nav_snapshots_unique() -> None:
+    """Rebuild nav_snapshots so the UNIQUE constraint includes user_id.
+
+    Idempotent: does nothing once the table already has the per-user constraint.
+    Runs as a single transaction (BEGIN/COMMIT) on both SQLite and Turso.
+    """
+    conn = None
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nav_snapshots'"
+        ).fetchone()
+        if not row:
+            return
+        ddl = row[0] if isinstance(row, (tuple, list)) else row["sql"]
+        ddl_flat = " ".join(str(ddl or "").split()).lower()
+        if "unique(date, base_currency)" not in ddl_flat and "unique (date, base_currency)" not in ddl_flat:
+            return  # already migrated (or no legacy constraint)
+        if "user_id" not in ddl_flat:
+            return  # user_id column not present yet — leave for the next start
+
+        cols = "date, total_value, total_cost, unrealized_pnl, realized_pnl, holdings_count, base_currency, snapshot_at, user_id"
+        stmts = [
+            ("""CREATE TABLE IF NOT EXISTS nav_snapshots__new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL, total_value REAL NOT NULL,
+                    total_cost REAL, unrealized_pnl REAL, realized_pnl REAL,
+                    holdings_count INTEGER, base_currency TEXT DEFAULT 'USD',
+                    snapshot_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_id TEXT NOT NULL DEFAULT 'default',
+                    UNIQUE(date, base_currency, user_id))""", ()),
+            (f"INSERT INTO nav_snapshots__new ({cols}) SELECT {cols} FROM nav_snapshots", ()),
+            ("DROP TABLE nav_snapshots", ()),
+            ("ALTER TABLE nav_snapshots__new RENAME TO nav_snapshots", ()),
+        ]
+        if hasattr(conn, "execute_in_transaction"):
+            conn.execute_in_transaction(stmts)
+        else:
+            conn.execute("BEGIN")
+            for sql, params in stmts:
+                conn.execute(sql, params)
+            conn.commit()
+        import logging as _lg
+        _lg.getLogger("prosper.db").info("nav_snapshots migrated to per-user UNIQUE constraint")
+    except Exception as exc:
+        import logging as _lg
+        _lg.getLogger("prosper.db").warning("nav_snapshots migration skipped: %s", exc)
+        try:
+            if conn is not None and not hasattr(conn, "execute_in_transaction"):
+                conn.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────
@@ -563,14 +653,22 @@ def save_user_settings_db(user_id: str, settings: dict) -> None:
 # ─────────────────────────────────────────
 
 def save_briefing(briefing_date: str, currency: str, content: str):
-    """Save an AI briefing to the database for persistence across sessions."""
+    """Save an AI briefing to the database — scoped to the current user (A1).
+
+    v6.7 FIX: briefings were stored/read without user_id, so one user's
+    portfolio briefing (holdings, P&L, weights) was shown to every other user.
+    """
+    uid = _current_user_id()
     try:
         conn = _get_connection()
-        # Delete old briefings for this date+currency to avoid duplicates
-        conn.execute("DELETE FROM briefing_cache WHERE briefing_date = ? AND currency = ?", (briefing_date, currency))
+        # Delete old briefings for this user+date+currency to avoid duplicates
         conn.execute(
-            "INSERT INTO briefing_cache (briefing_date, currency, content) VALUES (?, ?, ?)",
-            (briefing_date, currency, content),
+            "DELETE FROM briefing_cache WHERE briefing_date = ? AND currency = ? AND user_id = ?",
+            (briefing_date, currency, uid),
+        )
+        conn.execute(
+            "INSERT INTO briefing_cache (briefing_date, currency, content, user_id) VALUES (?, ?, ?, ?)",
+            (briefing_date, currency, content, uid),
         )
         conn.commit()
         conn.close()
@@ -579,12 +677,14 @@ def save_briefing(briefing_date: str, currency: str, content: str):
 
 
 def get_latest_briefing(currency: str = "USD") -> Optional[Dict]:
-    """Get the most recent briefing (today or yesterday) from the database."""
+    """Get the current user's most recent briefing from the database."""
+    uid = _current_user_id()
     try:
         conn = _get_connection()
         row = conn.execute(
-            "SELECT briefing_date, content, created_at FROM briefing_cache WHERE currency = ? ORDER BY briefing_date DESC, created_at DESC LIMIT 1",
-            (currency,),
+            "SELECT briefing_date, content, created_at FROM briefing_cache "
+            "WHERE currency = ? AND user_id = ? ORDER BY briefing_date DESC, created_at DESC LIMIT 1",
+            (currency, uid),
         ).fetchone()
         conn.close()
         if row:

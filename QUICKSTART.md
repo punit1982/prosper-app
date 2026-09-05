@@ -2,12 +2,26 @@
 
 ## Run Locally
 
+One-time setup (needs Python 3.12 from https://www.python.org/downloads/):
+
 ```bash
-cd "/Users/singpu03/Documents/Prosper with Claude March 2026"
-streamlit run app.py
+cd "/Users/singpu03/Library/Mobile Documents/com~apple~CloudDocs/AA-Investments /GROW Operating System/prosper"
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env      # then paste your real API keys into .env
+```
+
+Every time after that:
+
+```bash
+cd "/Users/singpu03/Library/Mobile Documents/com~apple~CloudDocs/AA-Investments /GROW Operating System/prosper"
+./run.sh
 ```
 
 Then open your browser to: **http://localhost:8501**
+
+Tip: to skip the login screen while working locally, add `PROSPER_AUTH_ENABLED=false` to your `.env`.
 
 ---
 

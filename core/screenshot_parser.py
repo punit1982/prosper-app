@@ -218,12 +218,10 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
     client = anthropic.Anthropic(api_key=api_key)
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
 
-    # D5: import the canonical model list from settings — was duplicated here.
-    # Sonnet first because it handles 95%+ of screenshots at ~60% the cost of Opus.
-    from core.settings import CLAUDE_MODEL_PRIORITY
-    _MODELS_TO_TRY = [
-        "claude-sonnet-4-20250514",
-    ] + [m for m in CLAUDE_MODEL_PRIORITY if m != "claude-sonnet-4-20250514"]
+    # D5: the canonical model ladder lives in settings — Sonnet first because it
+    # handles 95%+ of screenshots at a fraction of Opus cost, Opus as fallback.
+    from core.settings import CLAUDE_MODEL_PRIORITY, extract_text
+    _MODELS_TO_TRY = list(CLAUDE_MODEL_PRIORITY)
 
     content = [
         {
@@ -271,7 +269,9 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
         )
 
     # --- Parse the response ---
-    result_text = response.content[0].text
+    result_text = extract_text(response)
+    if not result_text:
+        return "Claude returned an empty response. Please try again."
 
     # Strip markdown code blocks if Claude wrapped the JSON
     cleaned = result_text.strip()

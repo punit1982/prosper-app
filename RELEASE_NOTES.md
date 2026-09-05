@@ -1,5 +1,55 @@
 # Prosper Release Notes
 
+## v6.7 — Stability & Reliability Audit (September 5, 2026)
+
+Full code audit of all 21k lines. Every fix below was reproduced first, then verified
+with an automated test suite (32 checks) and a live click-through of the app.
+
+### 🔴 Critical bugs fixed
+- **Email/password sign-in was broken** for every user (`KeyError: 'password'`). The v6.6
+  hardening removed the password hash from the in-memory credentials that
+  streamlit-authenticator needs. Hashes are now kept in memory only and still never
+  written to disk. (`core/auth.py`)
+- **Brand-new database crashed on first start** (`no such column: portfolio_id`) — indexes
+  were created before the migration that adds the column. Indexes now run after
+  migrations, each one best-effort. (`core/database.py`)
+- **All AI features pointed at retired Claude model IDs** (`claude-3-5-haiku-*`,
+  `claude-sonnet-4-2025*`, a non-existent `claude-haiku-4-5-20250514`). Updated to the
+  current generation (Sonnet 5 / Opus 5 / Haiku 4.5) in one place, and responses are now
+  read with `extract_text()` because current models can return a thinking block before
+  the text (`response.content[0].text` would crash). (`core/settings.py` + all call sites)
+- **Dashboard showed stale holdings after every upload / edit / delete** until logout —
+  the cache-invalidation key prefix never matched the real key. (`core/database.py`)
+- **Local/dev mode (`PROSPER_AUTH_ENABLED=false`) rendered a blank page.** (`core/auth.py`)
+
+### 🟠 Data-integrity & multi-user fixes
+- **Saved preferences were never loaded at startup** — base currency and column choices
+  reverted to defaults after every restart/redeploy. They now load once per session.
+- **Preferences were shared between all logged-in users** (one global dict). `SETTINGS` is
+  now per-session; saved per user in the database. (`core/settings.py`)
+- **AI CIO briefings leaked between users** — briefings are now saved and read per user.
+- **Only one user could store a daily NAV snapshot** (legacy `UNIQUE(date, currency)`).
+  Table is migrated in place, keeping all history. (`core/database.py`)
+- **Turso writes with NaN values were silently rejected** (NaN is not valid JSON) — NaN/inf
+  now store as NULL, numpy numbers are typed correctly. (`core/db_connector.py`)
+- **UAE tickers resolved as `TICKER:ADX` were never routed to Twelve Data.** (`core/cio_engine.py`)
+- Onboarding "Go to Command Center" used an invalid page path. (`pages/26_Onboarding.py`)
+- OAuth callback page now uses the same signing key as the main app in local dev.
+
+### ⚡ Speed & latency
+- **Timeouts were not real.** Every parallel fetch (prices, FX, ticker resolution,
+  fundamentals, news, RSS) waited for *all* threads to finish when the `with` block closed,
+  so one hung ticker could freeze a page for minutes. New `core/parallel.py` enforces hard
+  deadlines and abandons stragglers. Concurrency raised 5→6 for quotes/news, 3→5 for RSS.
+- Removed the dead Reuters RSS feed (DNS no longer resolves).
+- "Reset to Defaults" in Settings now also clears the database copy (previously a no-op on Render).
+
+### 🧭 Local setup
+- `run.sh`, `.claude/launch.json`, and `QUICKSTART.md` now point at this folder and a local
+  `venv/` (they referenced the old `~/Documents/Prosper with Claude March 2026` path).
+
+---
+
 ## Phase 3 — User Experience & Preferences (March 12, 2026)
 
 ### ✨ New Features

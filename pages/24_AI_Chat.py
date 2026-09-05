@@ -101,7 +101,7 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
         with st.spinner("Thinking..."):
             try:
                 import anthropic
-                from core.settings import call_claude
+                from core.settings import call_claude, extract_text, CLAUDE_DEFAULT_MODEL
 
                 client = anthropic.Anthropic(api_key=api_key)
 
@@ -115,9 +115,9 @@ if prompt := st.chat_input("Ask about your portfolio, a stock, or market conditi
                     system=SYSTEM_PROMPT,
                     messages=_api_messages,
                     max_tokens=1000,
-                    preferred_model="claude-sonnet-4-20250514",
+                    preferred_model=CLAUDE_DEFAULT_MODEL,
                 )
-                reply = response.content[0].text
+                reply = extract_text(response)
                 st.markdown(reply)
                 st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
             except Exception as e:

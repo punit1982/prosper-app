@@ -171,6 +171,19 @@ class TursoConnection:
         IMPORTANT: Turso v2 pipeline expects native JSON types for values —
         floats must be actual JSON numbers (not strings), integers likewise.
         """
+        # Normalise numpy scalars (pandas hands these to us constantly) so they
+        # don't fall through to the text branch and get stored as strings.
+        try:
+            import numpy as _np
+            if isinstance(val, _np.bool_):
+                val = bool(val)
+            elif isinstance(val, _np.integer):
+                val = int(val)
+            elif isinstance(val, _np.floating):
+                val = float(val)
+        except Exception:
+            pass
+
         if val is None:
             return {"type": "null"}
         elif isinstance(val, bool):
@@ -178,6 +191,11 @@ class TursoConnection:
         elif isinstance(val, int):
             return {"type": "integer", "value": str(val)}
         elif isinstance(val, float):
+            # NaN/inf are not valid JSON — the whole pipeline request would be
+            # rejected (HTTP 400) and the write silently lost. Store NULL instead,
+            # which is exactly what local SQLite does with NaN.
+            if val != val or val in (float("inf"), float("-inf")):
+                return {"type": "null"}
             return {"type": "float", "value": val}
         elif isinstance(val, bytes):
             import base64

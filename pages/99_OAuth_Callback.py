@@ -55,11 +55,14 @@ header, footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Load signing key (same as auth.py) ───────────────────────────────────────
-_COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "")
-if not _COOKIE_KEY:
-    _COOKIE_KEY = "dev-placeholder"
-_OAUTH_SIGNING_KEY = _COOKIE_KEY.encode()
+# ── Load signing key (MUST be identical to auth.py or every token fails HMAC) ─
+# Import it from core.auth so local dev (where auth.py generates a random
+# per-process key) signs and verifies with the same bytes.
+try:
+    from core.auth import _OAUTH_SIGNING_KEY  # noqa: F401
+except Exception:
+    _COOKIE_KEY = os.getenv("PROSPER_COOKIE_SECRET", "") or "dev-placeholder"
+    _OAUTH_SIGNING_KEY = _COOKIE_KEY.encode()
 
 
 def _verify_oauth_state(state: str) -> bool:

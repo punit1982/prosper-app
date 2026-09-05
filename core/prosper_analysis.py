@@ -23,30 +23,32 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # MODEL CONFIGURATION
 # ─────────────────────────────────────────
 
+from core.settings import CLAUDE_FAST_MODEL, CLAUDE_DEFAULT_MODEL, CLAUDE_BEST_MODEL
+
 MODEL_TIERS = {
     "quick": {
         "label": "Quick Score",
-        "model": "claude-3-5-haiku-20241022",
+        "model": CLAUDE_FAST_MODEL,          # Haiku 4.5: $1 / $5 per 1M tokens
         "max_tokens": 1200,
-        "description": "Fast archetype + score using pre-fetched data only (~$0.008/stock)",
+        "description": "Fast archetype + score using pre-fetched data only (~$0.01/stock)",
         "cost_per_1k_input": 0.001,
         "cost_per_1k_output": 0.005,
     },
     "standard": {
         "label": "Standard",
-        "model": "claude-sonnet-4-20250514",
+        "model": CLAUDE_DEFAULT_MODEL,       # Sonnet 5: $2 / $10 per 1M tokens
         "max_tokens": 2000,
-        "description": "Full scoring + fair value with multi-source data (~$0.04/stock)",
-        "cost_per_1k_input": 0.003,
-        "cost_per_1k_output": 0.015,
+        "description": "Full scoring + fair value with multi-source data (~$0.03/stock)",
+        "cost_per_1k_input": 0.002,
+        "cost_per_1k_output": 0.010,
     },
     "full": {
         "label": "Full CIO",
-        "model": "claude-sonnet-4-20250514",
+        "model": CLAUDE_BEST_MODEL,          # Opus 5: $5 / $25 per 1M tokens
         "max_tokens": 2500,
-        "description": "Deep analysis with web search + all sources (~$0.04/stock + search)",
-        "cost_per_1k_input": 0.003,
-        "cost_per_1k_output": 0.015,
+        "description": "Deep analysis with web search + all sources (~$0.08/stock + search)",
+        "cost_per_1k_input": 0.005,
+        "cost_per_1k_output": 0.025,
     },
 }
 
@@ -586,7 +588,7 @@ def run_analysis(
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
 
-        from core.settings import call_claude
+        from core.settings import call_claude, extract_text
 
         t0 = time.time()
         response = call_claude(
@@ -605,7 +607,7 @@ def run_analysis(
             + output_tokens / 1000 * tier_config["cost_per_1k_output"]
         )
 
-        raw_text = response.content[0].text.strip()
+        raw_text = extract_text(response).strip()
 
         # Parse JSON — handle potential markdown wrapping
         json_text = raw_text

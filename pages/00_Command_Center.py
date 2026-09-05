@@ -588,13 +588,14 @@ FORMAT (use markdown):
 
 Be sharp, specific, actionable. No generic advice. This investor has {holdings_count} positions worth {base_currency} {net_portfolio:,.0f}."""
 
+        from core.settings import extract_text, CLAUDE_DEFAULT_MODEL
         response = call_claude(
             client,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=700,
-            preferred_model="claude-sonnet-4-5",
+            preferred_model=CLAUDE_DEFAULT_MODEL,
         )
-        return response.content[0].text
+        return extract_text(response) or "Briefing came back empty — please try again."
 
     except Exception as e:
         return f"Could not generate briefing: {str(e)[:100]}"

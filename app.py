@@ -124,6 +124,12 @@ init_db()
 # ── Authenticated ─────────────────────────────────────────────────────────────
 _run_auth()
 
+# ── Load this user's saved preferences into SETTINGS (once per session) ──────
+# v6.7 FIX: previously saved preferences (base currency, columns, …) were never
+# loaded at startup, so every restart/redeploy silently reverted to defaults.
+from core.settings import ensure_settings_loaded as _ensure_settings_loaded
+_ensure_settings_loaded()
+
 # ── Onboarding Check ────────────────────────────────────────────────────────
 if "onboarding_complete" not in st.session_state:
     from core.settings import load_user_settings
@@ -315,7 +321,7 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
                 st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]
             try:
                 import anthropic
-                from core.settings import call_claude, SETTINGS
+                from core.settings import call_claude, extract_text, SETTINGS, CLAUDE_DEFAULT_MODEL
                 from core.settings import enriched_cache_key as _eck
                 _enr = st.session_state.get(_eck(SETTINGS.get('base_currency', 'USD')))
                 _ctx = "No portfolio loaded."
@@ -329,9 +335,9 @@ if _chat_key and _chat_key != "your_anthropic_api_key_here":
                     system=f"You are Prosper AI, a concise investment assistant. {_ctx} Be brief (2-3 sentences max).",
                     messages=msgs,
                     max_tokens=300,
-                    preferred_model="claude-sonnet-4-20250514",
+                    preferred_model=CLAUDE_DEFAULT_MODEL,
                 )
-                st.session_state["mini_chat"].append({"role": "assistant", "content": resp.content[0].text})
+                st.session_state["mini_chat"].append({"role": "assistant", "content": extract_text(resp)})
                 if len(st.session_state["mini_chat"]) > _CHAT_HISTORY_CAP:
                     st.session_state["mini_chat"] = st.session_state["mini_chat"][-_CHAT_HISTORY_CAP:]
                 st.rerun()

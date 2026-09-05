@@ -26,8 +26,9 @@ import hashlib
 import pandas as pd
 import streamlit as st
 from typing import Dict, List, Optional, Any, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+
+from core.parallel import gather
 
 # ─────────────────────────────────────────
 # CACHE TTLs (seconds)
@@ -318,25 +319,18 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
             items_to_resolve.append((ticker, currency))
 
     if items_to_resolve:
-        with ThreadPoolExecutor(max_workers=min(len(items_to_resolve), 4)) as pool:
-            futures = {
-                pool.submit(resolve_ticker, t, c): t
-                for t, c in items_to_resolve
-            }
-            try:
-                for f in as_completed(futures, timeout=30):
-                    orig = futures[f]
-                    try:
-                        result[orig] = f.result(timeout=10)
-                    except Exception:
-                        result[orig] = orig
-            except Exception:
-                for t, _ in items_to_resolve:
-                    if t not in result:
-                        result[t] = t
+        done, _ = gather(
+            resolve_ticker,
+            [(t, (t, c)) for t, c in items_to_resolve],
+            max_workers=4,
+            timeout=max(30, 4 * len(items_to_resolve)),
+        )
+        for t, _ in items_to_resolve:
+            result[t] = done.get(t) or t
 
-        # Save newly resolved tickers to SQLite for next session
-        new_resolutions = {t: result[t] for t, _ in items_to_resolve if t in result}
+        # Save newly resolved tickers to SQLite for next session (only the ones
+        # that actually resolved — timed-out tickers get another chance next run)
+        new_resolutions = {t: done[t] for t in done if done[t]}
         save_ticker_resolution_cache(new_resolutions)
 
     return result
@@ -383,21 +377,15 @@ def get_ticker_info_batch(tickers: List[str]) -> Dict[str, Dict]:
     results = {}
     if not tickers:
         return results
-    max_w = min(len(tickers), 4)
     total_timeout = max(60, len(tickers) * 5)
-    with ThreadPoolExecutor(max_workers=max_w) as pool:
-        futures = {pool.submit(get_ticker_info, t): t for t in tickers}
-        try:
-            for f in as_completed(futures, timeout=total_timeout):
-                t = futures[f]
-                try:
-                    results[t] = f.result(timeout=15)
-                except Exception:
-                    results[t] = {}
-        except Exception:
-            for t in tickers:
-                if t not in results:
-                    results[t] = {}
+    done, _ = gather(
+        get_ticker_info,
+        [(t, (t,)) for t in tickers],
+        max_workers=4,
+        timeout=total_timeout,
+    )
+    for t in tickers:
+        results[t] = done.get(t) or {}
     return results
 
 
@@ -680,24 +668,20 @@ def get_portfolio_news(tickers: List[str], limit: int = 50, names: Optional[Dict
     if cached is not None:
         return cached[:limit]
 
-    # Fetch fresh — each get_ticker_news() is bounded by 5s HTTP timeout,
-    # so we don't need a tight outer timeout. Use shutdown(wait=False) to
-    # avoid hanging on executor cleanup.
+    # Fetch fresh — hard 45s deadline for the whole batch (stragglers are
+    # abandoned, not awaited), 6 tickers at a time.
     all_news = []
-    with ThreadPoolExecutor(max_workers=min(len(tickers), 4)) as pool:
-        futures = {pool.submit(get_ticker_news, t): t for t in tickers}
-        try:
-            for f in as_completed(futures, timeout=45):
-                ticker_done = futures[f]
-                try:
-                    items = f.result()
-                    for item in items:
-                        item["related_ticker"] = ticker_done
-                        all_news.append(item)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    done, _ = gather(
+        get_ticker_news,
+        [(t, (t,)) for t in tickers],
+        max_workers=6,
+        timeout=45,
+    )
+    for ticker_done, items in done.items():
+        for item in items or []:
+            item = dict(item)
+            item["related_ticker"] = ticker_done
+            all_news.append(item)
 
     # Sort by publish time (newest first), deduplicate by title
     seen_titles = set()
@@ -779,7 +763,7 @@ MARKET_RSS_FEEDS = [
     ("https://feeds.marketwatch.com/marketwatch/topstories/", "MarketWatch"),
     ("https://www.fool.com/feeds/index.aspx?id=market-news", "Motley Fool"),
     ("https://feeds.bloomberg.com/markets/news.rss", "Bloomberg"),
-    ("https://feeds.reuters.com/reuters/businessNews", "Reuters"),
+    # feeds.reuters.com was shut down (DNS no longer resolves) — removed.
     ("https://seekingalpha.com/market_currents.xml", "Seeking Alpha"),
     ("https://news.google.com/rss/search?q=stock+market+today&hl=en-US&gl=US&ceid=US:en", "Google News"),
     ("https://www.ft.com/rss/home", "Financial Times"),
@@ -808,22 +792,16 @@ def get_market_news() -> List[Dict]:
     except Exception:
         pass
 
-    # Fetch from multiple credible RSS sources in parallel
+    # Fetch from multiple credible RSS sources in parallel (15s hard deadline)
     try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_done
-
-        def _fetch_one(feed_url_source):
-            url, source = feed_url_source
-            return _fetch_rss_feed(url, source, max_items=10)
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futs = {pool.submit(_fetch_one, f): f for f in MARKET_RSS_FEEDS}
-            for f in _as_done(futs, timeout=15):
-                try:
-                    rss_items = f.result(timeout=10)
-                    yf_news.extend(rss_items)
-                except Exception:
-                    pass
+        done, _ = gather(
+            _fetch_rss_feed,
+            [(url, (url, source, 10)) for url, source in MARKET_RSS_FEEDS],
+            max_workers=5,
+            timeout=15,
+        )
+        for rss_items in done.values():
+            yf_news.extend(rss_items or [])
     except Exception:
         pass
 
@@ -872,14 +850,14 @@ In 2-3 sentences:
 
 Be concise and professional. No disclaimers."""
 
-        from core.settings import call_claude
+        from core.settings import call_claude, extract_text, CLAUDE_FAST_MODEL
         response = call_claude(
             client,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
-            preferred_model="claude-3-5-haiku-20241022",
+            preferred_model=CLAUDE_FAST_MODEL,
         )
-        return response.content[0].text
+        return extract_text(response) or "Summary unavailable: empty response."
     except Exception as e:
         return f"Summary unavailable: {str(e)[:100]}"
 
@@ -1782,17 +1760,17 @@ def _summarize_analyst_uncached(ticker: str, analyst_data: str) -> str:
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        from core.settings import call_claude
-        
+        from core.settings import call_claude, extract_text, CLAUDE_FAST_MODEL
+
         response = call_claude(
             client,
             messages=[{"role": "user", "content":
                 f"Summarize the recent analyst activity for {ticker} in 2-3 sentences. "
                 f"Focus on the overall trend (bullish/bearish) and key actions:\n\n{analyst_data}"}],
             max_tokens=200,
-            preferred_model="claude-3-5-haiku-20241022",
+            preferred_model=CLAUDE_FAST_MODEL,
         )
-        return response.content[0].text
+        return extract_text(response) or "Summary unavailable: empty response."
     except Exception as e:
         return f"Summary unavailable: {str(e)[:100]}"
 

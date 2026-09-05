@@ -1,16 +1,28 @@
 """
 Prosper App Settings
 ====================
-Manages app configuration with persistent user preferences.
-Settings are stored in ~/prosper_data/user_settings.json and
-merged on top of defaults at startup.
+Manages app configuration with persistent, PER-USER preferences.
+
+Storage:
+  • Database  (user_preferences table, keyed by user_id) — survives Render redeploys
+  • Local file (~/prosper_data/user_settings.json)       — fast path for single-user/local
+
+v6.7 changes (audit):
+  • SETTINGS is now a per-session proxy instead of one module-level dict shared by
+    every logged-in user. Previously user A changing base currency changed it for
+    user B, and saved preferences were NOT loaded at startup (they reverted to
+    defaults after every restart/redeploy).
+  • Claude model IDs updated to the current generation; retired IDs 404.
+  • extract_text() helper — current Claude models can return thinking blocks
+    before the text block, so `response.content[0].text` is no longer safe.
 """
 
 import os
 import json
+from typing import Any, Dict, Iterator
 
 # ─────────────────────────────────────────
-# DEFAULTS — fallback values if no user settings file exists
+# DEFAULTS — fallback values if no user settings exist
 # ─────────────────────────────────────────
 _DEFAULTS = {
 
@@ -64,78 +76,120 @@ _DEFAULTS = {
 # Path to persistent user settings file
 _SETTINGS_PATH = os.path.expanduser("~/prosper_data/user_settings.json")
 
+_SESSION_KEY = "_prosper_settings"
+_SESSION_LOADED_KEY = "_prosper_settings_loaded_for"
 
-def load_user_settings() -> dict:
-    """
-    Load user settings: try local JSON file first, then database, then defaults.
-    This ensures settings survive Render redeploys (DB) and work fast locally (file).
-    """
-    settings = dict(_DEFAULTS)
 
-    # 1. Try local file (fast, works when filesystem persists)
-    loaded_from_file = False
+def _session_state():
+    """Return st.session_state if we're inside a running Streamlit script, else None."""
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if get_script_run_ctx() is None:
+            return None
+        return st.session_state
+    except Exception:
+        return None
+
+
+def _current_user_id() -> str:
+    ss = _session_state()
+    try:
+        uid = (ss.get("user_id") if ss is not None else None) or "default"
+        return str(uid).strip() or "default"
+    except Exception:
+        return "default"
+
+
+def _read_settings_file() -> dict:
     try:
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH, "r") as f:
                 user = json.load(f)
-            if isinstance(user, dict) and user:
-                settings.update(user)
-                loaded_from_file = True
+            if isinstance(user, dict):
+                return user
     except (json.JSONDecodeError, IOError, OSError):
         pass
+    return {}
 
-    # 2. If no local file, try database (survives redeploys)
-    if not loaded_from_file:
-        try:
-            import streamlit as st
-            user_id = st.session_state.get("user_id", "default")
-            from core.database import get_user_settings_db
-            db_settings = get_user_settings_db(user_id)
-            if db_settings:
-                settings.update(db_settings)
-        except Exception:
-            pass  # DB not available yet — use defaults
 
+def _read_settings_db(user_id: str) -> dict:
+    try:
+        from core.database import get_user_settings_db
+        db_settings = get_user_settings_db(user_id)
+        return db_settings if isinstance(db_settings, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_user_overrides(user_id: str = None) -> dict:
+    """Return ONLY the user's saved overrides (not merged with defaults).
+
+    Order:
+      • Logged-in user (user_id != 'default'): database first (per-user, survives
+        redeploys), then local file as a fallback.
+      • Legacy/local single-user mode: local file first, then database.
+    """
+    user_id = user_id or _current_user_id()
+    if user_id != "default":
+        overrides = _read_settings_db(user_id)
+        if overrides:
+            return overrides
+        return _read_settings_file()
+    overrides = _read_settings_file()
+    if overrides:
+        return overrides
+    return _read_settings_db(user_id)
+
+
+def load_user_settings() -> dict:
+    """Return the effective settings for the current user (defaults + overrides)."""
+    settings = dict(_DEFAULTS)
+    settings.update(_load_user_overrides())
     return settings
 
 
 def save_user_settings(updates: dict):
-    """
-    Save user preference overrides to JSON file.
-    Only saves keys that differ from defaults to keep the file clean.
-    """
-    # Load existing user overrides (not merged with defaults)
-    existing = {}
-    try:
-        if os.path.exists(_SETTINGS_PATH):
-            with open(_SETTINGS_PATH, "r") as f:
-                existing = json.load(f)
-    except (json.JSONDecodeError, IOError, OSError):
-        pass
+    """Persist preference overrides for the current user (file + database)."""
+    if not updates:
+        return
+    user_id = _current_user_id()
 
-    # Merge new updates
+    existing = _load_user_overrides(user_id)
     existing.update(updates)
 
     # Write to local file (best-effort — may fail on ephemeral filesystem)
     try:
         os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
         with open(_SETTINGS_PATH, "w") as f:
-            json.dump(existing, f, indent=2)
+            json.dump(existing, f, indent=2, default=str)
     except OSError:
         pass  # Ephemeral filesystem (Render free tier) — DB is the fallback
 
-    # Also persist to database (survives redeploys)
+    # Persist to database (per-user, survives redeploys)
     try:
-        import streamlit as st
-        user_id = st.session_state.get("user_id", "default")
         from core.database import save_user_settings_db
         save_user_settings_db(user_id, existing)
     except Exception:
         pass  # DB save is best-effort
 
-    # Update the module-level SETTINGS dict so all code sees new values immediately
-    global SETTINGS
+    # Update the live settings so all code sees new values immediately
     SETTINGS.update(updates)
+
+
+def reset_user_settings():
+    """Delete all saved overrides for the current user (file + database)."""
+    try:
+        if os.path.exists(_SETTINGS_PATH):
+            os.remove(_SETTINGS_PATH)
+    except OSError:
+        pass
+    try:
+        from core.database import save_user_settings_db
+        save_user_settings_db(_current_user_id(), {})
+    except Exception:
+        pass
+    SETTINGS.replace(dict(_DEFAULTS))
 
 
 def get_defaults() -> dict:
@@ -174,24 +228,54 @@ def get_api_key(key_name: str) -> str:
     return ""
 
 
-# D5: single source of truth for the Claude fallback ladder.
-# Imported by core/screenshot_parser.py and any other future caller so a
+# ─────────────────────────────────────────
+# CLAUDE MODELS — single source of truth
+# ─────────────────────────────────────────
+# Current-generation model IDs. Older IDs (claude-3-5-haiku-*, claude-sonnet-4-2025*,
+# claude-opus-4-1-*) are retired and return 404 — every AI feature silently failed.
+CLAUDE_DEFAULT_MODEL = "claude-sonnet-5"    # everyday: screenshot parsing, chat, briefings
+CLAUDE_BEST_MODEL    = "claude-opus-5"      # deepest reasoning (fallback / full analysis)
+CLAUDE_FAST_MODEL    = "claude-haiku-4-5"   # cheapest: one-line news/analyst summaries
+
+# D5: fallback ladder. Imported by core/screenshot_parser.py and any other caller so a
 # new Claude release only requires one edit, not N.
 CLAUDE_MODEL_PRIORITY = [
-    "claude-opus-4-1-20250805",
-    "claude-sonnet-4-20250514",
-    "claude-haiku-4-5-20250514",
+    CLAUDE_DEFAULT_MODEL,
+    CLAUDE_BEST_MODEL,
+    CLAUDE_FAST_MODEL,
 ]
 
 
-def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonnet-4-5", system=None):
+def extract_text(response) -> str:
+    """Return the concatenated text of a Claude response.
+
+    Current models may return a `thinking` block BEFORE the `text` block, so
+    `response.content[0].text` raises AttributeError. Always use this helper.
+    """
+    parts = []
+    try:
+        for block in getattr(response, "content", []) or []:
+            if getattr(block, "type", "") == "text":
+                parts.append(block.text)
+    except Exception:
+        pass
+    if parts:
+        return "".join(parts)
+    # Last resort — legacy shape
+    try:
+        return response.content[0].text
+    except Exception:
+        return ""
+
+
+def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=None):
     """
     Call Claude API with automatic model fallback.
-    Tries multiple model IDs until one works — handles different API tiers/regions.
-    Returns the API response object.
+    Tries multiple model IDs until one works — handles retired IDs / API tiers.
+    Returns the API response object (use extract_text() to read it).
     Raises Exception if ALL models fail.
     """
-    # Put the preferred model first, deduplicate against CLAUDE_MODEL_PRIORITY
+    preferred_model = preferred_model or CLAUDE_DEFAULT_MODEL
     models_to_try = [preferred_model] + [m for m in CLAUDE_MODEL_PRIORITY if m != preferred_model]
 
     _extra = {}
@@ -210,7 +294,8 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
             return response
         except Exception as e:
             err_str = str(e)
-            if "404" in err_str or "not_found" in err_str:
+            status = getattr(e, "status_code", None)
+            if status == 404 or "404" in err_str or "not_found" in err_str:
                 last_error = e
                 continue  # try next model
             raise  # non-404 errors should propagate immediately
@@ -222,9 +307,110 @@ def call_claude(client, messages, max_tokens=1024, preferred_model="claude-sonne
 
 
 # ─────────────────────────────────────────
-# LIVE SETTINGS — loaded once at import time, updated when user saves
+# LIVE SETTINGS — per-session proxy
 # ─────────────────────────────────────────
-SETTINGS = dict(_DEFAULTS)  # Start with defaults; updated after auth in app.py
+class _SettingsProxy:
+    """Dict-like view of the current user's settings.
+
+    Inside a Streamlit session the data lives in st.session_state, so each
+    logged-in user has their own copy. Outside a session (tests, scripts) it
+    falls back to a module-level dict.
+    """
+
+    def __init__(self):
+        self._fallback: Dict[str, Any] = dict(_DEFAULTS)
+
+    def _store(self) -> Dict[str, Any]:
+        ss = _session_state()
+        if ss is None:
+            return self._fallback
+        try:
+            if _SESSION_KEY not in ss:
+                ss[_SESSION_KEY] = dict(_DEFAULTS)
+            return ss[_SESSION_KEY]
+        except Exception:
+            return self._fallback
+
+    # dict interface
+    def get(self, key, default=None):
+        return self._store().get(key, default)
+
+    def __getitem__(self, key):
+        return self._store()[key]
+
+    def __setitem__(self, key, value):
+        self._store()[key] = value
+
+    def __delitem__(self, key):
+        del self._store()[key]
+
+    def __contains__(self, key):
+        return key in self._store()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._store())
+
+    def __len__(self):
+        return len(self._store())
+
+    def keys(self):
+        return self._store().keys()
+
+    def values(self):
+        return self._store().values()
+
+    def items(self):
+        return self._store().items()
+
+    def update(self, *args, **kwargs):
+        self._store().update(*args, **kwargs)
+
+    def setdefault(self, key, default=None):
+        return self._store().setdefault(key, default)
+
+    def pop(self, key, *default):
+        return self._store().pop(key, *default)
+
+    def copy(self) -> Dict[str, Any]:
+        return dict(self._store())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self._store())
+
+    def replace(self, new_values: Dict[str, Any]):
+        store = self._store()
+        store.clear()
+        store.update(new_values)
+
+    def __repr__(self):
+        return f"SETTINGS({self._store()!r})"
+
+
+SETTINGS = _SettingsProxy()
+
+
+def ensure_settings_loaded(force: bool = False) -> None:
+    """Load the current user's saved preferences into SETTINGS once per session.
+
+    Call after authentication (app.py). Cheap to call repeatedly — it only does
+    work the first time per session, or when the logged-in user changes.
+    """
+    ss = _session_state()
+    user_id = _current_user_id()
+    if ss is not None and not force:
+        try:
+            if ss.get(_SESSION_LOADED_KEY) == user_id:
+                return
+        except Exception:
+            pass
+    merged = dict(_DEFAULTS)
+    merged.update(_load_user_overrides(user_id))
+    SETTINGS.replace(merged)
+    if ss is not None:
+        try:
+            ss[_SESSION_LOADED_KEY] = user_id
+        except Exception:
+            pass
 
 
 def enriched_cache_key(currency: str) -> str:

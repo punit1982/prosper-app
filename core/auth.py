@@ -292,12 +292,16 @@ def _yaml_lock():
 
 def _rebuild_yaml_from_db():
     """
-    Rebuild the YAML credentials file from the database.
+    Rebuild the credentials config from the database.
 
-    B3 FIX: password_hash is intentionally omitted from the YAML output.
-    streamlit-authenticator uses the YAML only to validate cookies (via the
-    cookie key + expiry). Bcrypt hashes stored in the DB are the authoritative
-    credential store. Writing them to disk creates an unnecessary attack surface.
+    Returns the IN-MEMORY config (with bcrypt password hashes) that
+    streamlit-authenticator needs to verify email/password logins.
+
+    B3: the copy written to disk has the password hashes stripped — the DB is
+    the authoritative credential store and hashes on disk only add attack surface.
+
+    v6.7 FIX: v6.6 stripped the hash from the in-memory config too, which made
+    streamlit-authenticator raise KeyError('password') on every email login.
     """
     import yaml
     users = _db_get_all_users()
@@ -310,17 +314,28 @@ def _rebuild_yaml_from_db():
         },
     }
     for u in users:
+        if not u.get("username"):
+            continue
         config["credentials"]["usernames"][u["username"]] = {
             "email": u.get("email", ""),
             "first_name": u.get("first_name", ""),
             "last_name": u.get("last_name", ""),
-            # B3: password field omitted — DB is authoritative, no hash on disk
+            "password": u.get("password_hash") or "",
             "role": u.get("role", "user"),
         }
+
+    # On-disk copy: no password hashes (B3)
+    disk_config = {
+        "credentials": {"usernames": {
+            name: {k: v for k, v in info.items() if k != "password"}
+            for name, info in config["credentials"]["usernames"].items()
+        }},
+        "cookie": dict(config["cookie"]),
+    }
     try:
         with _yaml_lock():
             with open(_AUTH_CONFIG_PATH, "w") as f:
-                yaml.dump(config, f, default_flow_style=False)
+                yaml.dump(disk_config, f, default_flow_style=False)
     except Exception:
         pass
     return config
@@ -798,8 +813,17 @@ def run_auth() -> Dict[str, Any]:
     auth_enabled = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 
     if not auth_enabled:
+        # v6.7 FIX: app.py gates everything on authentication_status is True and
+        # calls st.stop() otherwise. Dev mode never set it, so the whole app
+        # rendered as a blank page whenever PROSPER_AUTH_ENABLED=false.
         st.session_state.setdefault("user_id", "default")
-        result.update(authenticated=True, method="disabled")
+        st.session_state.setdefault("username", "default")
+        st.session_state.setdefault("name", "Local User")
+        st.session_state.setdefault("auth_method", "disabled")
+        st.session_state["authentication_status"] = True
+        result.update(authenticated=True, method="disabled",
+                      user_id=st.session_state["user_id"],
+                      display_name=st.session_state["name"])
         with st.sidebar:
             st.caption("🔓 Auth disabled (dev mode)")
             st.divider()
