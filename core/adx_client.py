@@ -50,6 +50,11 @@ HISTORY_BASE = (
     "/File.Historical_Stock_Charts_Dir"
 )
 MUBASHER_STOCK_BASE = "https://english.mubasher.info/markets/ADX/stocks"
+# Mubasher covers both UAE exchanges under separate market-path segments —
+# confirmed live: /markets/ADX/stocks/{slug} and /markets/DFM/stocks/{slug}
+# both return a real stock page. A ".AE" ticker could be either exchange, so
+# get_fundamentals() tries both rather than assuming ADX.
+_UAE_MUBASHER_MARKETS = ["ADX", "DFM"]
 
 _SESSION = requests.Session()
 _SESSION.headers.update({
@@ -181,6 +186,79 @@ def get_history_csv(ticker: str) -> Optional[str]:
         return r.text if r.status_code == 200 else None
     except Exception:
         return None
+
+
+# ─── Fundamentals (Market Cap, P/E, P/B, EPS) ───────────────────────────────
+# yfinance's .info returns NOTHING for ADX/DFM tickers — confirmed via
+# production logs as a real "Quote not found" 404, not just thin coverage —
+# and no free tier of Twelve Data/FMP/Finnhub covers UAE fundamentals either
+# (all three gate it behind a paid plan; verified live, September 2026).
+# Mubasher's own stock page renders these numbers directly in static HTML
+# (no auth, no JS execution needed) — this is the one free source that
+# actually has them.
+_STAT_PATTERN = re.compile(
+    r'stock-overview__text">([^<]+)</span>\s*'
+    r'<span class="stock-overview__value[^"]*">\s*'
+    r'<span class="number[^"]*">([^<]+)</span>',
+    re.S,
+)
+# Mubasher's own label -> the yfinance .info key name it corresponds to, so
+# the result merges into the same downstream path as a normal yfinance fetch.
+_STAT_LABEL_MAP = {
+    "Market Cap":        "marketCap",
+    "P/E Ratio":         "trailingPE",
+    "P/B Ratio":         "priceToBook",
+    "EPS":               "trailingEps",
+    "Book Value (BVPS)": "bookValue",
+}
+_FUNDAMENTALS_CACHE_TTL = 6 * 3600  # 6 hours — these don't move intraday
+_fundamentals_cache: Dict[str, Tuple[dict, float]] = {}
+
+
+def get_fundamentals(ticker: str) -> Optional[Dict]:
+    """
+    Scrape basic fundamentals from the stock's own Mubasher page.
+
+    Returns a dict keyed exactly like yfinance's .info (marketCap, trailingPE,
+    priceToBook, trailingEps, bookValue, currency, quoteType) so callers can
+    treat it as a drop-in substitute — see core/data_engine.py get_ticker_info().
+    None if the page has no recognizable stats (e.g. this ADX/DFM slug is a
+    fund, not a company) or the request fails.
+    """
+    now = time.time()
+    cached = _fundamentals_cache.get(ticker)
+    if cached and (now - cached[1]) < _FUNDAMENTALS_CACHE_TTL:
+        return cached[0]
+
+    # Prefer the manually-curated slug in ADX_CHART_IDS (some tickers are
+    # stored abbreviated, e.g. "PUREHEALT.AE" vs. Mubasher's actual
+    # "PUREHEALTH" slug) — fall back to a naive derivation otherwise.
+    _known = ADX_CHART_IDS.get(ticker)
+    slug = _known[0] if _known else ticker.upper().replace(".AE", "").replace(".AD", "")
+    for market in _UAE_MUBASHER_MARKETS:
+        url = f"https://english.mubasher.info/markets/{market}/stocks/{slug}"
+        try:
+            r = _SESSION.get(url, timeout=12)
+            if r.status_code != 200:
+                continue
+            result: Dict = {}
+            for label, raw_value in _STAT_PATTERN.findall(r.text):
+                key = _STAT_LABEL_MAP.get(label.strip())
+                if not key:
+                    continue
+                try:
+                    result[key] = float(raw_value.strip().replace(",", ""))
+                except ValueError:
+                    continue
+            if not result:
+                continue
+            result["currency"] = "AED"
+            result["quoteType"] = "EQUITY"
+            _fundamentals_cache[ticker] = (result, now)
+            return result
+        except Exception:
+            continue
+    return None
 
 
 def is_adx_ticker(ticker: str) -> bool:

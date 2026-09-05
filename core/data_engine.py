@@ -372,6 +372,22 @@ def _yf_fetch_info(ticker: str) -> Dict:
     """
     from core.parallel import run_with_timeout
 
+    # UAE (.AE/.AD) tickers: yfinance's .info returns NOTHING for these —
+    # confirmed via production logs as a real "Quote not found" 404, not a
+    # thin-coverage gap — and no free tier of Twelve Data/FMP/Finnhub covers
+    # UAE fundamentals either (all three gate it behind a paid plan; verified
+    # live). Mubasher's own stock page has Market Cap/P-E/P-B/EPS in plain
+    # HTML for free — try that FIRST for these tickers instead of burning a
+    # guaranteed-to-fail yfinance call.
+    if ticker.upper().endswith((".AE", ".AD")):
+        try:
+            from core.adx_client import get_fundamentals as _adx_fundamentals
+            adx_info = _adx_fundamentals(ticker)
+            if adx_info:
+                return adx_info
+        except Exception:
+            pass
+
     def _fetch():
         import yfinance as yf
         return yf.Ticker(ticker).info or {}

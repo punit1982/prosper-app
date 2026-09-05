@@ -878,8 +878,32 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
         # ticker holding, since that account's row isn't part of this batch to
         # be reinserted. COALESCE handles legacy rows saved with a NULL
         # broker_source (SQL NULL never equality-matches '', even bound to it).
+        #
+        # Restricted-stock / retirement rows (asset_category "Restricted
+        # Stock" / "Retirement Account") get an ADDITIONAL, broader delete
+        # first: their ticker is synthetic, AI-generated from PDF content at
+        # parse time (e.g. "RESTRICTED:NIQ:RSU") — not a stable exchange
+        # symbol — so it can drift slightly between two separate uploads of
+        # the same statement (a different AI run, a reworded sub-plan name).
+        # Matching by ticker alone would then fail to replace the old row
+        # and silently DUPLICATE it every time the same statement is
+        # re-uploaded. Instead, for every (broker_source) that this batch
+        # touches with one of these categories, clear ALL of that account's
+        # existing rows in that category before inserting the fresh ones —
+        # a full replace scoped to broker_source + category, immune to
+        # exact-ticker drift. Regular holdings for that same broker_source
+        # (no restricted/retirement category) are untouched.
+        _restricted_cats = ("Restricted Stock", "Retirement Account")
+        _restricted_brokers = {t[5] for t in rows if t[6] in _restricted_cats}
+
         if hasattr(conn, "execute_in_transaction"):
             stmts = []
+            for src in _restricted_brokers:
+                stmts.append((
+                    "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? "
+                    "AND COALESCE(broker_source, '') = ? AND asset_category IN (?, ?)",
+                    (pid, uid, src, *_restricted_cats),
+                ))
             for t in rows:
                 stmts.append((
                     "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ? "
@@ -900,6 +924,12 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
                 conn.execute("BEGIN")
             except Exception:
                 pass
+            if _restricted_brokers:
+                conn.executemany(
+                    "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? "
+                    "AND COALESCE(broker_source, '') = ? AND asset_category IN (?, ?)",
+                    [(pid, uid, src, *_restricted_cats) for src in _restricted_brokers],
+                )
             conn.executemany(
                 "DELETE FROM holdings WHERE portfolio_id = ? AND user_id = ? AND ticker = ? "
                 "AND COALESCE(broker_source, '') = ?",

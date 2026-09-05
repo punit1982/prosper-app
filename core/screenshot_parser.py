@@ -218,6 +218,15 @@ stock row above; extract each as its own entry with these extra fields:
   last_known_price — the plan's OWN reported total current value for that
     row (e.g. Fidelity's "Total Value" for that bucket), NOT a per-share
     price times a share count you computed yourself.
+  broker_source — ALWAYS include this for restricted/retirement rows, built
+    from stable identifiers that are the SAME every time this exact account
+    is re-uploaded next month (do not invent a creative or varying label):
+    "{Institution} Stock Plan — {Company Ticker}" for stock-plan awards
+    (e.g. "Fidelity Stock Plan — NIQ"), "{Institution} 401(k)" for a 401(k),
+    "{Institution} DCP" for deferred compensation. This is how Prosper knows
+    two uploads of the same account are the same account, so re-uploading a
+    later month's statement UPDATES this account's values instead of
+    creating a second, duplicate copy of it.
 
 A Fidelity "Stock Plans" section typically breaks into multiple named
 sub-plans on one statement (e.g. "Restricted Stock Awards", "Restricted Stock
@@ -235,16 +244,19 @@ Details) as separate rows.
 
 Example — a Fidelity statement showing:
   "Restricted Stock Units - Restricted Units: Total Unvested Units 7,564,
-  Total Value August 31, 2026 $144,169.84"
+  Total Value August 31, 2026 $144,169.84" for company ticker NIQ
 becomes:
   {"ticker": "RESTRICTED:NIQ:RSU", "name": "NIQ Restricted Stock Units - Restricted Units",
    "quantity": 7564, "avg_cost": 0, "currency": "USD",
-   "asset_category": "Restricted Stock", "last_known_price": 144169.84}
+   "asset_category": "Restricted Stock", "last_known_price": 144169.84,
+   "broker_source": "Fidelity Stock Plan — NIQ"}
 
 For 401(k) / DCP statements, if individual fund line items ARE shown (fund
 name + balance), extract each fund as its own row exactly like a normal
-holding but with asset_category = "Retirement Account" added; if only a
-single total account balance is shown, extract one row for that total instead.
+holding but with asset_category = "Retirement Account" and the SAME
+broker_source (e.g. "Fidelity 401(k)") added to every row from that account;
+if only a single total account balance is shown, extract one row for that
+total instead, with that same broker_source.
 
 If you cannot read the image or find portfolio data, return:
 {"error": "Short description of the problem (e.g. image is blurry, no holdings table found)"}
