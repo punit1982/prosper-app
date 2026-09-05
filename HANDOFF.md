@@ -1,136 +1,170 @@
-# Prosper — Handoff (5 Sep 2026, updated post-v7.2)
+# Prosper — Handoff (5 Sep 2026, updated post-v7.9)
 
 Paste this into a new chat to continue. Everything below is verified unless marked otherwise.
 
 ## What Prosper is
 Streamlit + Python investment operating system for one family's multi-broker portfolio (IBKR ×2 accounts,
-Coinbase, India via Trendlyne, Fidelity 401k/DCP/RSUs). Owner: Punit Singh (non-programmer, product lead).
-Repo: https://github.com/punit1982/prosper-app (branch `main`, this folder). Production: Render free tier
-(Docker, Python 3.12, Turso cloud SQLite), auto-deploys on every push to `main`, URL
-https://prosper-gzlf.onrender.com, service id `srv-d70gqpuuk2gs739abg7g`, workspace `tea-d70gmplm5p6s73asj1hg`
-(user has granted full Render access via the Render MCP connector). Free tier spins down when idle → 30–60 s
-cold starts and a "stale sidebar flash" on the first request.
+Coinbase, India via Trendlyne, Fidelity 401k/DCP/RSUs/NIQ stock). Owner: Punit Singh (non-programmer, product
+lead, email punit_singh@outlook.com). Repo: https://github.com/punit1982/prosper-app (branch `main`, this
+folder). Production: Render free tier (Docker, Python 3.12, Turso cloud SQLite), auto-deploys on every push to
+`main`, URL https://prosper-gzlf.onrender.com, service id `srv-d70gqpuuk2gs739abg7g`, workspace
+`tea-d70gmplm5p6s73asj1hg` (user has granted full Render access via the Render MCP connector). Free tier spins
+down when idle → 30–60s cold starts and a "stale sidebar flash" on the first request — this is an infra
+limitation, not a code bug, and shows up repeatedly in user reports as "slow reload."
 
 ## Local machine
 - Folder: `…/AA-Investments /GROW Operating System/prosper/` (iCloud). Sibling folders: `New GROW Prompts/`
-  (source of the GROW framework files), `Portfolio Info/` (latest broker exports, Sep 2026).
+  (source of the GROW framework files — check here for any future GROW methodology revisions), `Portfolio Info/`
+  (latest broker exports, Sep 2026).
 - `venv/` = Python 3.14 with the **exact production pins** (streamlit 1.41.1, streamlit-authenticator 0.3.3,
-  yfinance 1.7, anthropic 0.125). Run the app: `./run.sh`. `.env` holds real API keys (git-ignored):
-  ANTHROPIC, FMP, FINNHUB, TWELVE_DATA, SERPER. Google OAuth + Turso creds exist only on Render.
+  yfinance 1.7.0 — confirmed latest published release, anthropic SDK for claude-sonnet-5/claude-opus-5/
+  claude-haiku-4-5). Run the app: `./run.sh`. `.env` holds real API keys (git-ignored): ANTHROPIC, FMP,
+  FINNHUB, TWELVE_DATA, SERPER. Google OAuth + Turso creds exist only on Render.
 - Old folder `~/Documents/Prosper with Claude March 2026/` (py3.9 venv) is legacy — don't use.
-- Local data `~/prosper_data/prosper.db` (stale, April 2026). Test against a COPY with `HOME=<scratch dir>`.
-- Test scripts used today live in the session scratchpad (not in repo): verify_fixes.py (32 checks),
-  test_auth.py (14), test_grow.py (23 + optional `--live TICKER --tier screen|standard`).
+- `yfinance` segfaults locally for ANY ticker in this machine's venv (Python 3.14), independent of app code —
+  production runs Python 3.12 in Docker and does not have this problem. Test data-fetch logic against
+  production logs / live curl instead of relying on local yfinance calls.
 
 ## Architecture (key files)
-- `app.py` — page config, sidebar-hide CSS, auth gate, `ensure_settings_loaded()`, `st.navigation` (page URLs
-  come from FILE NAMES, e.g. `/Portfolio_Dashboard`), NAV snapshot, floating chat.
-- `core/auth.py` — email/password (streamlit-authenticator) + Google OAuth popup → `pages/99_OAuth_Callback.py`.
-  Usernames are derived from the email local part (`punit1982@gmail.com` → `punit1982`); since v7.0.1 the form
-  also accepts the email (alias entries carry `_canonical`). Credentials need `name`+`roles` (lib 0.3.3).
-  Recovery env vars: `PROSPER_RESET_PASSWORD="email:pw"`, `PROSPER_CLAIM_LEGACY="email"` (one-shot; delete after).
-- `core/settings.py` — per-session `SETTINGS` proxy (per-user prefs in DB), Claude model IDs
-  (`claude-sonnet-5` default, `claude-opus-5` best, `claude-haiku-4-5` fast), `call_claude`, `extract_text`.
+- `app.py` — page config, sidebar-hide CSS, auth gate, `ensure_settings_loaded()`, `st.navigation`, NAV
+  snapshot, floating "Ask Prosper" chat popover (hidden on the full Ask Prosper page itself; uses the app's own
+  accent color `#0984e3`/`#0a6bb3`, not a generic purple gradient).
+- `core/auth.py` + `pages/99_OAuth_Callback.py` — Google OAuth popup flow. Checks `verified_email` (Google's
+  REST userinfo field), not `email_verified` (only exists on the OIDC/ID-token path). Popup close fallback
+  button renders in a properly-sized `st.components.v1.html(..., height=180)` iframe (NOT height=0 — that was
+  a real bug, invisible-but-present button, fixed in v7.5).
+- `core/settings.py` — per-session `SETTINGS` proxy, Claude model IDs (`claude-sonnet-5` default,
+  `claude-opus-5` best, `claude-haiku-4-5` fast), `call_claude`/`call_claude_stream` — both default
+  `thinking={"type":"disabled"}` via `.setdefault()` unless the caller explicitly opts in (GROW engine does,
+  per-tier) — **critical**: `claude-opus-5` has extended thinking ON by default and it consumes real
+  `max_tokens` budget, so an unprotected Opus fallback (e.g. from a transient Sonnet error) can return empty
+  text with `stop_reason="max_tokens"`.
 - `core/database.py` — SQLite/Turso via `core/db_connector.py`; multi-tenant `user_id` scoping; migrations in
-  `init_db` (indexes AFTER migrations; nav_snapshots UNIQUE now per user); `grow_verdict_log`; admin helpers
-  `get_data_ownership_summary`, `move_data_between_users`, `claim_legacy_shard_for`.
-- `core/cio_engine.py` + `core/data_engine.py` + `core/currency_normalizer.py` — prices (ADX/Mubasher →
-  Twelve Data → yfinance → Finnhub), FX, news, fundamentals; all parallel fetches go through
-  `core/parallel.py` (hard deadlines; `pool.shutdown(wait=False)`).
-- `core/grow_engine.py` — **GROW v5.1 is the analysis engine** (PROSPER v3.0 retired). Tiers: screen
-  (Sonnet 5, thinking off, ~$0.10/1 min), standard (Sonnet 5 + web_search/web_fetch, ~$1.20/9 min),
-  full (Opus 5, ~$4). Framework text from `grow/` sent as a cached system block; deterministic §8 resolver
-  `resolve_entry()` recomputes Entry verdict + price ladder + ±25% stability from the model's inputs.
-  `core/grow_render.py` renders; `pages/15_GROW_Analysis.py` = batch page; Deep Dive shows the memo.
+  `init_db()` (additive `ALTER TABLE` in try/except, following the `_GROW_ANALYSIS_COLUMNS` pattern);
+  `ticker_info_cache` table (persists yfinance `.info` results — including failures — across Render
+  restarts, critical for cold-start speed); `save_holdings()` DELETE-before-insert is scoped by
+  `(ticker, broker_source)` so re-uploading one account never wipes another account's same-ticker position;
+  a SECOND, broader delete scoped by `(broker_source, asset_category IN ('Restricted Stock',
+  'Retirement Account'))` runs first for those two categories specifically, because their tickers are
+  AI-generated fresh each parse and can drift between uploads.
+- `core/cio_engine.py` + `core/data_engine.py` + `core/currency_normalizer.py` — prices/fundamentals waterfall
+  (UAE `.AE`/`.AD` tickers → `core/adx_client.py get_fundamentals()` [Mubasher scrape] first → Twelve Data →
+  yfinance → Finnhub), FX, news (region-appropriate Google News edition + company name in the query, not just
+  the bare ticker), fundamentals. All parallel fetches go through `core/parallel.py`: `gather()` (bounded
+  parallel with an OUTER deadline that only bounds how long the CALLER waits for already-completed futures —
+  does NOT cap how long one call occupies its worker slot) and `run_with_timeout()` (a real per-call hard
+  timeout via nested ThreadPoolExecutor — used to wrap the actual yfinance calls in `_yf_fetch_info` and
+  `_fetch_one_quote`, 6s each, after a real production incident where slow-failing yfinance calls serialized
+  into a 5+ minute hang with only 4 workers).
+- `core/adx_client.py` — `get_fundamentals(ticker)`: scrapes english.mubasher.info stock pages (static HTML,
+  no auth) for Market Cap/P/E/P/B/EPS/Book Value, tries both ADX and DFM market paths, 6h cache. Does not cover
+  every yfinance `.info` field (no sector/beta/dividend yield/52-week range) — only what Mubasher itself
+  reports.
+- `core/grow_engine.py` — **GROW v5.1 is the analysis engine** (PROSPER v3.0 retired). Framework text lives in
+  `grow/` (CORE.md + Annexes A/B/C/E, D is review-only) sent as a cached system block. Tiers: screen (Sonnet 5,
+  thinking off), standard (Sonnet 5 + web_search/web_fetch), full (Opus 5). Deterministic §8 resolver
+  `resolve_entry()` recomputes the Entry verdict + 5-rung price ladder + ±25% stability stress from the
+  model's own JSON inputs, OVERRIDING the model's own arithmetic if it disagrees — this is by design (§8 is
+  arithmetic, not judgment) but means `resolve_entry()` must be kept in exact sync with whatever CORE.md's
+  formula currently says, or it will silently replace correct new-methodology numbers with stale ones (this
+  happened and was caught proactively — see v7.7 below). `core/grow_render.py` renders (falls back to the old
+  4-rung ladder text for analyses saved before the 5-rung update); `pages/15_GROW_Analysis.py` = batch page.
+  `grow/grow_verify.py` is a standalone self-consistency verifier (not imported by the live app) — run it after
+  ANY change to `grow/*.md`: `venv/bin/python3 grow/grow_verify.py "grow/GROW v5 1 CORE 04Sep2026.md"`, expect
+  `RESULT: ALL CHECKS PASS`.
 - `core/file_parsers.py` — IBKR Activity Statement, Coinbase, Trendlyne, generic table → holdings + cash.
-- `core/screenshot_parser.py` — Claude vision for images; PDFs sent as `document` blocks.
+- `core/screenshot_parser.py` — Claude vision for images/PDFs; restricted stock/retirement rows get an AI-built
+  deterministic `broker_source` (e.g. "Fidelity Stock Plan — NIQ") for consistent re-upload tagging — **only
+  if the Upload Portal's Broker dropdown is left on "Auto-detect"** for these files; a manual dropdown
+  selection overrides every row's broker_source uniformly and would collapse NIQ/401(k)/DCP into one tag.
+- `core/ui_components.py` — shared `status_chip(label, level)` (critical/warn/good/neutral — one consistent
+  color+shape for "fine/watch/act now" across the whole app, replacing a different ad hoc emoji vocabulary per
+  page) and `fmt_age(secs)` (human "X ago" string, shared so every freshness caption reads the same way).
+  Currently used in: Dividend Dashboard, Portfolio Dashboard (cash positions + alerts), Command Center
+  (alerts), Risk Strategy (cash & margin). NOT yet applied to: Technical Analysis, Sentiment, Analyst
+  Consensus, Earnings Calendar, Upload Portal (all still have their own 🔴/🟡/🟢 patterns — lower priority,
+  those are directional buy/sell signals more than the "same three severity states" problem the audit flagged,
+  but worth sweeping eventually for full consistency).
 
-## Today's history (all pushed)
-v6.7 audit (login KeyError, fresh-DB crash, retired model IDs, stale-holdings cache, per-user settings,
-briefings & NAV, real timeouts, dev-mode blank page) → v7.0 GROW engine → v7.0.1/7.0.2 sign-in fixes
-(Google button, email login, `name` field, redirect URI) → v7.1 OAuth callback route, broker-file parsers,
-PDF fix, data diagnostics. Live-verified: Screen + Standard GROW runs on MSFT.
+## Session history (chronological, all pushed + confirmed live via Render MCP unless noted)
+- **v6.x → v7.0**: GROW v5.1 engine replaces PROSPER v3.0; OAuth/parser/PDF fixes.
+- **v7.2**: 8 user-reported bugs (Google sign-in field-name bug, cash/FX mismatch, Twelve Data India/fund
+  plan-gating discovered, Trendlyne fund-ID parsing, Rebalance page missing cache, dividend FX, Peer Comparison
+  crash, Ask Prosper streaming).
+- **v7.3**: second cash-FX occurrence (Grand Total hero card), multi-account upload data-loss (DELETE not
+  scoped by broker_source), sentiment "news" hardcoded has_data=True skewing composite scores neutral,
+  restricted/unvested holdings introduced as a category, missing company names for numeric scrip codes
+  (Japan/Singapore), Google OAuth popup close behavior, Ask Prosper nav-stuck (two independent chat widgets on
+  one page), CIO Briefing hallucinated tickers.
+- **v7.4**: root-caused yfinance `.info` failing for ~every ticker (Yahoo API-side, not a coverage gap);
+  `ticker_info_cache` DB table added so the failing sweep persists across Render cold-start restarts instead
+  of re-running from scratch on every login.
+- **v7.5**: the actual 5+ minute Portfolio Dashboard hang (see `core/parallel.py` note above — `gather()`'s
+  outer timeout doesn't bound a single call's worker-slot time); Claude Opus thinking-token empty-response bug
+  (see `core/settings.py` note above); invisible OAuth popup fallback button (`height=0` → `height=180`);
+  sentiment `company_name` parameter was dead code, now actually threaded through + regional Google News
+  editions; UX batch one (chat button recolor, Dividend Dashboard `status_chip`).
+- **v7.6**: UAE fundamentals via Mubasher scraping (`core/adx_client.py get_fundamentals()`), verified live
+  against real holdings (ADCB, EMAAR, ALDAR, PUREHEALT, SPACE42); restricted-holdings re-upload duplication
+  fixed (category-scoped delete, see `core/database.py` note above) + AI-generated deterministic
+  `broker_source` tags.
+- **v7.7**: GROW framework synced to CORE.md Revision 2 (05-Sep-2026, sourced from `New GROW Prompts/`) —
+  new CAGR formula (`destination = central + cash_returned`), 5th price-ladder rung ("Acceptable below",
+  gated on a supplied `base_cost_of_equity`). `resolve_entry()`/`run_grow()`/`database.py`/`grow_render.py`
+  updated to match. **Important, still true today**: Annex E's archetype premium/required-return table
+  (`grow/GROW v5 1 ANNEX E ARCHETYPE LOOKUPS.md`) is a **mechanical linear rescale of the old pre-compression
+  values**, NOT a real calibration — explicitly labeled as a placeholder in the file itself, per the user's
+  own choice (they were asked, via AskUserQuestion, whether to invent calibrated numbers, wait, or apply a
+  mechanical rescale as a stopgap; they chose the rescale). `grow_verify.py` passes cleanly against this
+  placeholder table, but if the user ever provides real per-archetype calibration, it should replace these
+  numbers — do not treat them as final. Also: CORE's own rule says v5.0-and-earlier Entry verdicts are not
+  convertible to this scale; the same likely applies across this Revision-2 change too, so any GROW analysis
+  saved before 2026-09-05 should be treated as run under a different methodology, not directly comparable to
+  new runs.
+- **v7.8 / v7.9 (UX audit batches two and three)**: extended `status_chip()` to Command Center's alerts and
+  Portfolio Dashboard's/Risk Strategy's cash-position rows; added a "📡 Data as of {age}" freshness caption to
+  Command Center (it silently reuses whatever enriched snapshot is cached rather than refetching — no visible
+  sign of that before, likely a real contributor to "I thought numbers would be cached" confusion); regrouped
+  Portfolio Dashboard's Grand Total metrics into "Net Worth" / "Performance" clusters instead of one flat row
+  mixing a point-in-time balance with today-only and since-purchase deltas. Full roadmap and rationale in the
+  published audit artifact: https://claude.ai/code/artifact/e520e963-2086-443a-bda5-f29102aa6aa4 (read-only
+  design review, no code — the actual fixes are what shipped in v7.5/v7.8/v7.9).
 
-## v7.2 (5 Sep 2026, same-day follow-up) — user reported 8 bugs after testing v7.1, all addressed, pushed, live
-Root-caused via Render production logs + live API testing (Twelve Data, Google userinfo) rather than guessing:
-1. **Google sign-in "No access token returned"** — real cause (confirmed in Render logs: "Rejected Google
-   login for unverified email"): code checked `email_verified`, but Google's `oauth2/v2/userinfo` REST endpoint
-   returns `verified_email` (`email_verified` only exists on the OIDC endpoint / ID token). Every real login was
-   being rejected. Fixed in `core/auth.py` + `pages/99_OAuth_Callback.py`; callback error message is now specific
-   (token/userinfo/email/verification) instead of always the same generic string.
-2. **Cash & margin currency mismatch** — `cash_positions.amount` was being summed across currencies as raw
-   numbers with no FX conversion (IBKR alone can report AED/CHF/EUR/JPY/SGD/USD balances on one account — see
-   `core/file_parsers.py parse_ibkr_statement` Forex Balances parsing, which is itself correct). Added
-   `core/currency_normalizer.py: cash_positions_to_base_currency() / total_cash_in_base_currency()`; used in
-   `00_Command_Center.py`, `2_Portfolio_Dashboard.py`, `18_Risk_Strategy.py`. Margin rates: replaced the stale
-   March-2026 flat-per-currency IBKR table with the live per-currency tier ladders (effective 2026-08-26, pulled
-   from interactivebrokers.com) in `core/fortress.py`, and fixed `get_margin_rate()` silently overwriting every
-   non-USD rate with the USD tier ladder.
-3. **Missing prices / "some Indian tickers and funds un-fetched"** — Twelve Data's FREE tier does NOT cover
-   India (NSE/BSE) or OTC fund quotes at all — confirmed live: `quote?symbol=RELIANCE:NSE` → 404 "available
-   starting with the Grow or Venture plan". This is a plan limitation, not fixable in code without an upgrade.
-   Added a general (previously UAE-only) Twelve Data fallback in `core/cio_engine.py _fetch_one_quote` with
-   plan-restriction caching in `core/twelve_data_client.py` (`_plan_restricted_exchanges`) so this 404 is learned
-   once per exchange and every other ticker on it fails instantly instead of repeating the rate-limited call —
-   this was actively making page loads slower before the fix. If the Twelve Data plan is ever upgraded, India
-   pricing starts working with zero further code changes.
-4. **Funds not identified / value not accurate** — root cause had two parts: (a) Trendlyne exports put a
-   Morningstar fund ID (e.g. "F0GBR06R8K") in the NSEcode column for actual mutual funds, and a numeric-only
-   BSE code in the NSEcode column for BSE-only stocks (e.g. Exhicon Events) — both were turned into bogus
-   ".NS" tickers no source can ever price. Fixed in `core/file_parsers.py parse_trendlyne`. (b) `holdings` had
-   no DB columns for `asset_category` / `last_known_price` at all — the IBKR parser already captured
-   `asset_category="Mutual Funds"` for things like the Franklin Templeton offshore fund "FTIFWAU LX", but
-   `save_holdings()` silently dropped it before it ever reached the database. Added both columns (migration in
-   `core/database.py init_db()`, additive/safe, already applied to production Turso — confirmed live in Render
-   logs, no startup errors). `core/cio_engine.py enrich_portfolio()` now falls back to `last_known_price`
-   (IBKR's own "Close Price" / Trendlyne's own "Current Price") when every live source fails, and skips live
-   fetch entirely for synthetic `"MF:..."` tickers. `resolve_sector()` (`core/data_engine.py`) and
-   `pages/4_Portfolio_Summary.py`'s local `_resolve_sector`/`_resolve_industry` now check `asset_category`
-   (ground truth from the broker file) before falling back to a live `quoteType` lookup that only works when a
-   ticker actually resolves. FTIFWAU LX ≠ FKINX — different Franklin Income Fund share classes, different NAV,
-   do not conflate (TICKER_OVERRIDES entry for FTIFWAU LX points at Twelve Data's own "0P0001ADNT", confirmed
-   via ISIN LU1586275312 symbol_search — also plan-gated today, same as #3).
-5. **Page loading "takes ages"** — `pages/16_Portfolio_Rebalance.py` was calling `enrich_portfolio(holdings)` on
-   every visit with NO session-cache check (unlike every other page) AND no `base_currency` argument at all,
-   meaning it always silently priced in USD regardless of the user's actual setting. Fixed to reuse the shared
-   `enriched_cache_key` pattern. Remaining likely cause: Render free-tier cold starts (30-60s) — already flagged
-   below, needs the paid tier to actually fix, not something a code change can address.
-6. **Dividend amount absurdly high** — `dividendRate` from yfinance is per-share in the STOCK'S OWN currency
-   (INR for .NS, AED for .AE, etc.), not `base_currency` — was multiplied by share count and summed/labeled as
-   base_currency with zero FX conversion (same root pattern as #2). Fixed in `pages/22_Dividend_Dashboard.py`
-   using the `fx_rate` column `enrich_portfolio()` already computes per holding.
-7. **Peer Comparison crash** (`ValueError: Unknown format code 'f' for object of type 'str'`) — yfinance
-   occasionally returns a non-numeric placeholder string for a metric field on thinly-covered tickers; `_safe_get`
-   in `pages/23_Peer_Comparison.py` now coerces to float and drops it to `None` on failure (defense added at the
-   formatter functions too).
-8. **Ask Prosper chat "took ages"** — the full chat page (`pages/24_AI_Chat.py`) blocked with zero visual
-   feedback until the ENTIRE reply was generated; now streams via a new `core/settings.py call_claude_stream()` +
-   `st.write_stream()`, so the first words appear in ~1s. The floating mini-chat popover in `app.py` had no
-   spinner at all during its blocking call — added one. Actual latency may still be dominated by Render free-tier
-   cold starts (see below) — streaming/spinners fix the *perceived* freeze, not a literal cold start.
-
-All 19 changed files pass `python -m py_compile`; migration + parser logic smoke-tested against the real Sep-2026
-`Portfolio Info/` exports and a local SQLite copy (see session transcript). Could NOT locally exercise the live
-`enrich_portfolio()` price-fetch path end-to-end — `yfinance` segfaults for ANY ticker (even bare "AAPL") in this
-machine's `venv` (Python 3.14) independent of any of these changes; isolated the new MF-skip/last_known_price
-logic by mocking the quote-fetch layer instead. Production runs Python 3.12 in Docker, a different environment —
-worth a real click-through on the deployed app to confirm, especially Google sign-in (needs a real Google account)
-and a Portfolio Dashboard/Command Center load to see actual cash/dividend/margin numbers with the new FX math.
+## Verification note (important limitation)
+This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
+(`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
+"live"`), and targeted live tests (forcing the Opus fallback path, scratch-DB round-trips, live curl/browser
+checks against Mubasher). **This session did NOT have Punit's login credentials** and could not click through
+the actual signed-in Command Center / Portfolio Dashboard / Risk Strategy pages in a browser — the sign-in
+page itself was confirmed to render without error, and Render's error-level logs show only expected external
+API 404s (yfinance quoteSummary failures for tickers now handled by fallback sources), no Python tracebacks.
+**Punit should do a real click-through of Command Center, Portfolio Dashboard, and Risk Strategy** after this
+session to visually confirm the new status chips and the "Net Worth"/"Performance" grouping look right and
+nothing regressed — this is the one category of testing a non-interactive session structurally cannot do.
 
 ## Open items / next steps
-1. ~~User to re-test Google sign-in after v7.1 deploy~~ — root cause found and fixed in v7.2 (see above);
-   user should re-test.
-2. Holdings on production: `PROSPER_CLAIM_LEGACY` moved only 13 rows — production Turso never held the 116
-   April holdings (they are only in the stale local DB). Plan: re-import from `Portfolio Info/` via Upload Portal
-   (IBKR PS + AS, Coinbase, Trendlyne; Fidelity PDFs via AI). Settings → Diagnostics shows who owns what.
-3. Twelve Data free tier does not cover India (NSE/BSE) or OTC fund quotes — confirmed live, needs a paid
-   Twelve Data plan (Grow/Venture) to actually fix; the code is ready and will work immediately on upgrade
-   (see v7.2 §3/§4 above). Until then, Indian mutual funds and the offshore Franklin fund price from their
-   broker-statement-reported last known price, not a live quote.
-4. Full GROW tier not yet live-tested. Batch cost guide: screen ≈ $0.10/name, standard ≈ $1.20/name.
-5. Optimisation ideas: Render paid instance ($7) to kill cold starts (still the most likely cause of any
-   remaining "slow page load" complaints); multi-portfolio per IBKR account (AS vs PS); Fidelity 401k as a
-   separate "retirement" portfolio; net-worth summary CSV → cash/other assets; Full-tier verification;
-   verifier (`grow/grow_verify.py`) in CI.
-6. Never map old PROSPER verdicts onto GROW (rule 22); every verdict shown must carry Durability + Entry arithmetic
-   (rule 20); positions are never sent to the engine (rule 13).
+1. **GROW Annex E calibration** — replace the mechanical-rescale placeholder premiums with real per-archetype
+   judgment whenever the user is ready to do that work (see v7.7 above for the exact formula used as a
+   stopgap, and why).
+2. **Remaining UI/UX audit roadmap items** (see the artifact link above for full detail/mockups):
+   - Step 4: canonical error/empty-state copy — found raw exception text shown directly to the user (e.g.
+     `st.error(f"Failed: {e}")`) in ~10 more files beyond what's been touched: `17_User_Management.py`,
+     `18_Equity_Deep_Dive.py` (6 occurrences), `1_Upload_Portal.py`, `18_Risk_Strategy.py`,
+     `24_AI_Chat.py`, `25_IBKR_Sync.py`, `26_Onboarding.py`. Direction: 4 canonical templates (no data yet /
+     fetch failed-retry / fetch failed-just wait / permanently unsupported), log the real exception, never
+     show it. Not started — no code changes made toward this yet.
+   - Step 5: card-fallback layout for wide tables under 768px (Peer Comparison, Dividend Dashboard) — not
+     started.
+   - Step 6: consolidate the five research pages (Peer Comparison, Analyst Consensus, Sentiment, Technical
+     Analysis, Equity Deep Dive) under one hub with tabs — not started, largest item (~2-3 days per the
+     audit's own estimate).
+   - Lower-priority: sweep the remaining ad hoc 🔴/🟡/🟢 patterns in Technical Analysis, Sentiment, Analyst
+     Consensus, Earnings Calendar, Upload Portal into `status_chip()` for full consistency (these are more
+     "directional signal" than "severity state" semantically, so lower value than the ones already fixed).
+3. Twelve Data free tier does not cover India (NSE/BSE) or OTC fund quotes — confirmed live in v7.2, needs a
+   paid Twelve Data plan (Grow/Venture) to actually fix; code is ready and will work immediately on upgrade.
+4. Full GROW tier (Opus 5, ~$4/name) not yet live-tested end-to-end this session.
+5. Render free-tier cold starts (30-60s) remain the most likely residual cause of any "slow page load"
+   complaints not otherwise explained — a $7/mo paid instance would eliminate this; a code fix can't.
+6. Never map old PROSPER-era verdicts onto GROW; every GROW verdict shown must carry Durability + Entry
+   arithmetic; positions are never sent to the engine (existing GROW rules, unchanged).
