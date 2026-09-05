@@ -5,6 +5,7 @@ Bloomberg-style CIO morning view: market context, portfolio pulse,
 performance attribution, FORTRESS regime, alerts, and AI briefing.
 """
 
+import time
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,7 +15,7 @@ from datetime import datetime, timedelta
 
 from core.database import (
     get_all_holdings, get_nav_history, get_all_prosper_analyses,
-    get_total_realized_pnl, get_all_cash_positions,
+    get_total_realized_pnl, get_all_cash_positions, get_price_cache_age,
 )
 try:
     from core.database import save_briefing, get_latest_briefing
@@ -24,6 +25,7 @@ except ImportError:
 from core.settings import SETTINGS, get_api_key, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import fmt_large
+from core.ui_components import fmt_age
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -50,6 +52,18 @@ else:
     with st.spinner("Loading portfolio data..."):
         enriched = enrich_portfolio(holdings, base_currency)
         st.session_state[cache_key] = enriched
+        st.session_state.setdefault("last_refresh_time", time.time())
+
+# Data-freshness caption — this view reuses whatever was last fetched (here or
+# on Portfolio Dashboard) rather than re-fetching, so make that explicit
+# instead of leaving the user unsure whether the numbers are live or stale.
+_refresh_ts = st.session_state.get("last_refresh_time")
+if _refresh_ts:
+    st.caption(f"📡 Data as of **{fmt_age(time.time() - _refresh_ts)}** · Base: **{base_currency}**")
+else:
+    _sqlite_age = get_price_cache_age()
+    if _sqlite_age is not None and _sqlite_age > 0:
+        st.caption(f"📡 Data as of **{fmt_age(_sqlite_age)}** · Base: **{base_currency}**")
 
 if enriched.empty:
     st.warning("Could not load portfolio data. Try visiting the Portfolio Dashboard first.")
@@ -346,7 +360,7 @@ with col_alerts:
             for idx, w in weights.items():
                 if w > 0.15:
                     ticker = enriched.loc[idx, "ticker"]
-                    alerts.append(("🔴", f"**{ticker}** is {w:.0%} of portfolio"))
+                    alerts.append(("critical", "🎯", f"**{ticker}** is {w:.0%} of portfolio"))
 
             if "sector" in enriched.columns:
                 sector_weights = enriched.copy()
@@ -354,20 +368,20 @@ with col_alerts:
                 sector_agg = sector_weights.groupby("sector")["mv"].sum() / total
                 for sec, sw in sector_agg.items():
                     if sw > 0.35 and sec not in ("", "Unknown", None):
-                        alerts.append(("🟡", f"**{sec}** sector {sw:.0%}"))
+                        alerts.append(("warn", "🎯", f"**{sec}** sector {sw:.0%}"))
 
     # Big daily drops
     if "day_change_pct" in enriched.columns:
         big_drops = enriched[pd.to_numeric(enriched["day_change_pct"], errors="coerce") < -3]
         for _, row in big_drops.iterrows():
             pct = float(row["day_change_pct"])
-            alerts.append(("📉", f"**{row['ticker']}** down {pct:.1f}%"))
+            alerts.append(("warn", "📉", f"**{row['ticker']}** down {pct:.1f}%"))
 
     # Earnings within 5 days — use cached earnings data if available (avoid slow batch fetch)
     _earnings_cache = st.session_state.get("cmd_earnings_alerts", [])
     for tk, days in _earnings_cache:
         tag = "TODAY" if days == 0 else f"in {days}d"
-        alerts.append(("📅", f"**{tk}** earnings {tag}"))
+        alerts.append(("neutral", "📅", f"**{tk}** earnings {tag}"))
 
     # AI analysis coverage
     try:
@@ -377,7 +391,7 @@ with col_alerts:
             recent = analyses[analyses["analysis_date"] >= cutoff]
             coverage = len(recent) / holdings_count * 100 if holdings_count > 0 else 0
             if coverage < 50:
-                alerts.append(("🤖", f"Only {coverage:.0f}% analysed (7d)"))
+                alerts.append(("neutral", "🤖", f"Only {coverage:.0f}% analysed (7d)"))
     except Exception:
         pass
 
@@ -385,9 +399,9 @@ with col_alerts:
     try:
         from core.fortress import check_circuit_breakers
         if regime_name == "Slowing Down":
-            alerts.append(("🏰", "**Slowing Down** regime active — reduce risk"))
+            alerts.append(("warn", "🏰", "**Slowing Down** regime active — reduce risk"))
         elif regime_name == "Heating Up":
-            alerts.append(("🏰", "**Heating Up** — tighten stops, trim winners"))
+            alerts.append(("warn", "🏰", "**Heating Up** — tighten stops, trim winners"))
 
         if total_cost > 0:
             dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
@@ -395,16 +409,19 @@ with col_alerts:
                 cb = check_circuit_breakers(dd_pct)
                 level = cb["portfolio_level"]["level"]
                 if level != "NONE":
-                    alerts.append(("🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
+                    alerts.append(("critical", "🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
     except Exception:
         pass
 
     if alerts:
-        for icon, text in alerts[:8]:
+        from core.ui_components import status_chip
+        for level, icon, text in alerts[:8]:
+            chip = status_chip(level.upper(), level)
             st.markdown(
-                f"<div style='padding:4px 8px;margin:2px 0;border-radius:6px;"
+                f"<div style='display:flex;align-items:center;gap:8px;"
+                f"padding:4px 8px;margin:2px 0;border-radius:6px;"
                 f"background:rgba(255,255,255,0.03);font-size:0.9rem'>"
-                f"{icon} {text}</div>",
+                f"<span>{icon}</span>{chip}<span>{text}</span></div>",
                 unsafe_allow_html=True,
             )
     else:

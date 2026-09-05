@@ -22,6 +22,7 @@ from core.database import (get_all_holdings, clear_all_holdings, get_price_cache
 from core.cio_engine import enrich_portfolio, add_key_metrics
 from core.data_engine import get_ticker_info_batch, fmt_large
 from core.settings import SETTINGS, save_user_settings, enriched_cache_key
+from core.ui_components import status_chip, fmt_age
 
 # ─────────────────────────────────────────
 # SIDEBAR — Persistent Preferences
@@ -138,12 +139,18 @@ with st.sidebar:
                         # don't get summed as if they were the same unit.
                         total_margin_cost += abs(annual_cost) * get_exchange_rate(currency, base_currency)
                         st.markdown(
-                            f"🔴 **{cpos['account_name']}** — {currency} {amt:,.2f} *(margin)* · "
+                            f"{status_chip('MARGIN', 'critical')} **{cpos['account_name']}** — "
+                            f"{currency} {amt:,.2f} · "
                             f"Rate: **{rate:.2f}%** ({rate_source}) · "
-                            f"Annual cost: **{currency} {annual_cost:,.0f}**"
+                            f"Annual cost: **{currency} {annual_cost:,.0f}**",
+                            unsafe_allow_html=True,
                         )
                     else:
-                        st.markdown(f"🟢 **{cpos['account_name']}** — {currency} {amt:,.2f}")
+                        st.markdown(
+                            f"{status_chip('CASH', 'good')} **{cpos['account_name']}** — "
+                            f"{currency} {amt:,.2f}",
+                            unsafe_allow_html=True,
+                        )
                 with c2:
                     if st.button("🗑️", key=f"del_cash_{cpos['id']}", help="Delete"):
                         delete_cash_position(int(cpos["id"]))
@@ -664,14 +671,7 @@ def portfolio_section():
 
     hdr1, hdr2 = st.columns([7, 1])
     with hdr1:
-        def _fmt_age(secs):
-            """Human-friendly age string."""
-            s = int(secs)
-            if s < 60: return f"{s}s ago"
-            if s < 3600: return f"{s//60}m {s%60}s ago"
-            if s < 86400: return f"{s//3600}h {(s%3600)//60}m ago"
-            return f"{s//86400}d ago"
-
+        _fmt_age = fmt_age
         _best_age = None
         if has_cache and 0 < cache_age < 86400 * 7:
             _best_age = cache_age

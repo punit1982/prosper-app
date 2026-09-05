@@ -22,6 +22,20 @@ _CHIP_COLORS = {
 }
 
 
+def fmt_age(secs: float) -> str:
+    """Human-friendly "how long ago" string, shared so every page's
+    data-freshness caption reads the same way (see the UI/UX audit,
+    finding on unlabelled cached data reading as a slow/stuck reload)."""
+    s = int(secs)
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        return f"{s // 60}m {s % 60}s ago"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60}m ago"
+    return f"{s // 86400}d ago"
+
+
 def status_chip(label: str, level: str = "neutral") -> str:
     """
     Return inline HTML for a small status chip: a colored dot + label.
