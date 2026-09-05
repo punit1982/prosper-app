@@ -1,5 +1,18 @@
 # Prosper Release Notes
 
+## v7.0.2 — Sign-in follow-ups (September 5, 2026)
+
+- Fixed `KeyError: 'name'` after a *correct* password: production pins streamlit-authenticator
+  0.3.3, which reads a `name` field the rebuilt credentials no longer had. Verified against the
+  exact production library versions.
+- Google `redirect_uri_mismatch`: `GOOGLE_REDIRECT_URI` may now be either the site root or the
+  full `…/OAuth_Callback` URL — the full form was being suffixed twice. The URL sent must still
+  be registered verbatim in Google Cloud Console → Credentials → Authorized redirect URIs.
+- GROW: cost/time estimates updated from a measured Standard run (MSFT: 11 searches, 9 min,
+  $1.15); memo view no longer shows the model's between-search narration.
+
+---
+
 ## v7.0.1 — Sign-in fixes (September 5, 2026)
 
 - **"Continue with Google" button had vanished.** Its once-per-run render guard was never

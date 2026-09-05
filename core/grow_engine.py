@@ -90,8 +90,8 @@ GROW_TIERS = {
         "effort": "high",
         "web": True,
         "max_searches": 12,
-        "description": "Full two-verdict memo; Claude retrieves filings via web search (~$0.60/stock)",
-        "est_cost": 0.60,
+        "description": "Full two-verdict memo; Claude retrieves the filings via web search (~$1.20 and 5–10 min per stock)",
+        "est_cost": 1.20,
     },
     "full": {
         "label": "Full GROW",
@@ -101,8 +101,8 @@ GROW_TIERS = {
         "effort": "xhigh",
         "web": True,
         "max_searches": 25,
-        "description": "Opus 5, deeper retrieval, technical appendix printed (~$2.50/stock)",
-        "est_cost": 2.50,
+        "description": "Opus 5, deeper retrieval, technical appendix printed (~$4 and 10–15 min per stock)",
+        "est_cost": 4.00,
     },
 }
 
@@ -445,11 +445,15 @@ def _extract_json_block(text: str) -> Optional[dict]:
 
 
 def _strip_json_block(text: str) -> str:
-    """Memo markdown = everything before the final JSON fence."""
+    """Memo markdown = everything before the final JSON fence, minus the model's
+    between-search narration ("I'll start by pulling the 10-K…") that precedes the
+    memo's first heading."""
     m = list(re.finditer(r"```(?:json)?\s*\{", text))
-    if not m:
-        return text.strip()
-    return text[: m[-1].start()].rstrip()
+    memo = text[: m[-1].start()].rstrip() if m else text.strip()
+    h = re.search(r"^#{1,3} ", memo, flags=re.M)
+    if h and h.start() > 0:
+        memo = memo[h.start():]
+    return memo.strip()
 
 
 def _f(v) -> Optional[float]:
