@@ -658,6 +658,52 @@ def claim_legacy_shard_for(user_id: str) -> int:
     return moved
 
 
+def get_data_ownership_summary() -> pd.DataFrame:
+    """Admin diagnostics: row counts per user_id for every multi-tenant table."""
+    rows = []
+    conn = _get_connection()
+    try:
+        for tbl in ("holdings", "portfolios", "transactions", "cash_positions", "watchlist", "nav_snapshots"):
+            try:
+                res = conn.execute(f"SELECT user_id, COUNT(*) AS n FROM {tbl} GROUP BY user_id").fetchall()
+                for r in res:
+                    uid = r[0] if isinstance(r, (tuple, list)) else r["user_id"]
+                    n = r[1] if isinstance(r, (tuple, list)) else r["n"]
+                    rows.append({"table": tbl, "user_id": uid, "rows": int(n)})
+            except Exception:
+                continue
+    finally:
+        conn.close()
+    return pd.DataFrame(rows, columns=["table", "user_id", "rows"])
+
+
+def move_data_between_users(src_user_id: str, dst_user_id: str) -> int:
+    """Admin recovery: reassign every row owned by src_user_id to dst_user_id. Returns rows moved."""
+    if not src_user_id or not dst_user_id or src_user_id == dst_user_id:
+        return 0
+    moved = 0
+    conn = _get_connection()
+    try:
+        for tbl in ("holdings", "transactions", "cash_positions", "watchlist",
+                    "nav_snapshots", "portfolios", "briefing_cache", "fortress_state"):
+            try:
+                cur = conn.execute(f"UPDATE {tbl} SET user_id = ? WHERE user_id = ?", (dst_user_id, src_user_id))
+                moved += int(getattr(cur, "rowcount", 0) or 0)
+            except Exception:
+                continue
+        conn.commit()
+    finally:
+        conn.close()
+    _invalidate_holdings_cache()
+    try:
+        for k in list(st.session_state.keys()):
+            if k.startswith(_HOLDINGS_CACHE_KEY) or k.startswith("enriched_"):
+                del st.session_state[k]
+    except Exception:
+        pass
+    return moved
+
+
 def get_or_create_user_portfolios(user_id: str) -> pd.DataFrame:
     """Return portfolios owned by user_id, creating a default one if none exist.
 
@@ -776,10 +822,19 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             if not _ticker:
                 continue
             _name = str(row.get("name", "") or "").strip()
-            _qty = float(row.get("quantity", 0) or 0)
-            _cost = float(row.get("avg_cost", 0) or 0)
-            _ccy = str(row.get("currency", "USD") or "USD").strip()
-            _src = broker_source or ""
+            if _name.lower() == "nan":
+                _name = ""
+            # NaN (blank cell in an uploaded sheet / edited grid) must not reach the
+            # NOT NULL columns — it used to abort the whole save with a DB error.
+            _qty = _num_or_none(row.get("quantity", 0)) or 0.0
+            _cost = _num_or_none(row.get("avg_cost", 0)) or 0.0
+            _ccy = str(row.get("currency", "USD") or "USD").strip().upper()
+            if _ccy in ("", "NAN", "NONE"):
+                _ccy = "USD"
+            # Explicit broker_source wins; otherwise the per-row value the file parser detected
+            _src = broker_source or str(row.get("broker_source", "") or "").strip()
+            if _src.lower() == "nan":
+                _src = ""
             rows.append((_ticker, _name, _qty, _cost, _ccy, _src))
 
         if not rows:

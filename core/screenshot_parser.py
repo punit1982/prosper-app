@@ -42,13 +42,15 @@ def parse_brokerage_image(image_bytes: bytes, media_type: str) -> ParseResult:
     # C8: pre-flight size check. Anthropic Vision rejects ≥5 MB; reject early
     # so we don't burn an API call (and a few seconds of latency) on a doomed
     # request. Streamlit caps upload at 50 MB but doesn't enforce per-image.
-    _MAX_IMAGE_BYTES = 4_500_000  # ~4.5 MB — safe under Anthropic's 5 MB limit
+    _MAX_IMAGE_BYTES = 4_500_000  # ~4.5 MB — safe under Anthropic's 5 MB image limit
+    _MAX_PDF_BYTES = 30_000_000   # PDFs go as documents: 32 MB / 100 pages limit
     if not image_bytes:
         return "Empty file — please re-upload."
-    if len(image_bytes) > _MAX_IMAGE_BYTES:
+    _is_pdf = (media_type or "").lower() == "application/pdf"
+    if len(image_bytes) > (_MAX_PDF_BYTES if _is_pdf else _MAX_IMAGE_BYTES):
         return (
-            f"Image too large ({len(image_bytes)/1_000_000:.1f} MB). "
-            f"Please use an image under 4.5 MB — try cropping or reducing resolution."
+            f"File too large ({len(image_bytes)/1_000_000:.1f} MB). "
+            + ("Please use a PDF under 30 MB." if _is_pdf else "Please use an image under 4.5 MB — try cropping or reducing resolution.")
         )
 
     cache_enabled = SETTINGS.get("parse_cache_enabled", True)
@@ -223,15 +225,21 @@ def _claude_vision_parse(image_bytes: bytes, media_type: str, api_key: str) -> P
     from core.settings import CLAUDE_MODEL_PRIORITY, extract_text
     _MODELS_TO_TRY = list(CLAUDE_MODEL_PRIORITY)
 
-    content = [
-        {
+    # PDFs must be sent as a `document` block, not an `image` block — the API
+    # rejects application/pdf inside an image source (this is why every PDF
+    # statement upload failed with "Claude API call failed").
+    if (media_type or "").lower() == "application/pdf":
+        file_block = {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": image_data},
+        }
+    else:
+        file_block = {
             "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": image_data,
-            },
-        },
+            "source": {"type": "base64", "media_type": media_type, "data": image_data},
+        }
+    content = [
+        file_block,
         {"type": "text", "text": _EXTRACTION_PROMPT},
     ]
 

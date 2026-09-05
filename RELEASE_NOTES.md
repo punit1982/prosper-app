@@ -1,5 +1,29 @@
 # Prosper Release Notes
 
+## v7.1 — Google sign-in completes, real broker files import, find-my-data (September 5, 2026)
+
+- **Google sign-in "Page not found"**: the OAuth callback page (`/OAuth_Callback`) was never
+  registered with `st.navigation`, so the popup landed on a non-existent URL. Registered
+  (hidden) in the pre-login navigation. (`app.py`, `pages/99_OAuth_Callback.py`)
+- **Upload Portal now understands real broker exports** — no AI call, no cost:
+  - **IBKR Activity Statement CSV** (multi-section): Open Positions → holdings with the
+    correct Yahoo suffix from the listing exchange (ADX/DFM→`.AE`, EBS→`.SW`, SGX→`.SI`,
+    TSEJ→`.T`, LSE→`.L`…), names from Financial Instrument Information, cash/margin per
+    currency from Forex Balances, account id/alias as the broker tag.
+  - **Coinbase transaction history**: Buy / Convert / Sell / staking & reward income netted
+    into positions with average cost; USDC becomes USD cash.
+  - **Trendlyne (India) Excel**: NSE/BSE codes → `.NS`/`.BO`, INR.
+  - Plain tables still work; ragged CSVs no longer crash the page.
+  - Each row keeps its own account/broker tag through review and save.
+- **PDF statements** were failing at the AI call — PDFs must be sent as documents, not
+  images. Fixed; PDFs up to 30 MB.
+- **Settings → Account & Data Diagnostics (admins)**: row counts per user id for every
+  table and a one-click "move everything from X to my account" — for the classic
+  "my holdings disappeared after login" case.
+- Crypto ticker map: AKT, SUI, XLM, BNB.
+
+---
+
 ## v7.0.2 — Sign-in follow-ups (September 5, 2026)
 
 - Fixed `KeyError: 'name'` after a *correct* password: production pins streamlit-authenticator

@@ -93,6 +93,10 @@ CRYPTO_TICKERS: Dict[str, str] = {
     "UNI":   "UNI-USD",  # Note: UNI7593.DU is Uniper (stock) — only map if no price as stock
     "LTC":   "LTC-USD",
     "SHIB":  "SHIB-USD",
+    "AKT":   "AKT-USD",   # Akash Network
+    "SUI":   "SUI-USD",
+    "XLM":   "XLM-USD",
+    "BNB":   "BNB-USD",
 }
 
 # ─────────────────────────────────────────

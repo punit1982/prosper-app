@@ -223,6 +223,36 @@ with col_m3:
 st.divider()
 
 # ─────────────────────────────────────────
+# ACCOUNT & DATA DIAGNOSTICS (admins) — "where is my data?"
+# ─────────────────────────────────────────
+try:
+    from core.database import get_user_by_username, get_data_ownership_summary, move_data_between_users
+    _me_user = st.session_state.get("username", "")
+    _me_id = st.session_state.get("user_id", "default")
+    _me_row = get_user_by_username(_me_user) if _me_user else None
+    _is_admin = (_me_row or {}).get("role") == "admin" or os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("false", "0", "no")
+    if _is_admin:
+        st.subheader("🧭 Account & Data Diagnostics")
+        st.caption(f"You are signed in as **{_me_id}**. Holdings are stored per account (user id) and per portfolio. "
+                   "If your data seems to have vanished, it is usually sitting under another user id — move it here.")
+        _own = get_data_ownership_summary()
+        if _own.empty:
+            st.info("No data rows found in the database yet.")
+        else:
+            _pivot = _own.pivot_table(index="user_id", columns="table", values="rows", aggfunc="sum", fill_value=0)
+            st.dataframe(_pivot, use_container_width=True)
+            _others = sorted(u for u in _own["user_id"].dropna().unique().tolist() if u != _me_id)
+            if _others:
+                _src = st.selectbox("Move ALL data owned by…", _others, key="_diag_src_uid")
+                if st.button(f"Move everything from '{_src}' to my account ({_me_id})", key="_diag_move_btn"):
+                    _n = move_data_between_users(_src, _me_id)
+                    st.success(f"Moved {_n} rows to {_me_id}. Refreshing…")
+                    st.rerun()
+        st.divider()
+except Exception:
+    pass
+
+# ─────────────────────────────────────────
 # ABOUT
 # ─────────────────────────────────────────
 st.subheader("ℹ️ About Prosper")

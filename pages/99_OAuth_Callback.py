@@ -34,12 +34,17 @@ import secrets as _secrets
 import streamlit as st
 import streamlit.components.v1 as _components
 
-st.set_page_config(
-    page_title="Prosper — Signing in...",
-    page_icon="📈",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+try:
+    # Only allowed when this file is run standalone; inside st.navigation app.py has
+    # already called set_page_config and a second call raises.
+    st.set_page_config(
+        page_title="Prosper — Signing in...",
+        page_icon="📈",
+        layout="centered",
+        initial_sidebar_state="collapsed",
+    )
+except Exception:
+    pass
 
 # Hide sidebar and ALL chrome — this is a bare callback page
 st.markdown("""

@@ -290,31 +290,28 @@ if not st.session_state.parsed_holdings:
             ext = file.name.rsplit(".", 1)[-1].lower() if "." in file.name else ""
             progress_bar.progress((i + 1) / total_files, text=f"Parsing {file.name}...")
 
-            if ext == "csv":
-                try:
-                    file.seek(0)
-                    df = pd.read_csv(file)
-                    parsed = _parse_tabular(df)
-                    if parsed:
-                        st.success(f"Extracted **{len(parsed)}** holdings from {file.name}")
-                        all_holdings.extend(parsed)
-                    else:
-                        st.warning(f"No holdings found in {file.name}")
-                except Exception as e:
-                    st.error(f"{file.name} — Error: {e}")
-
-            elif ext in ("xlsx", "xls"):
-                try:
-                    file.seek(0)
-                    df = pd.read_excel(file)
-                    parsed = _parse_tabular(df)
-                    if parsed:
-                        st.success(f"Extracted **{len(parsed)}** holdings from {file.name}")
-                        all_holdings.extend(parsed)
-                    else:
-                        st.warning(f"No holdings found in {file.name}")
-                except Exception as e:
-                    st.error(f"{file.name} — Error: {e}")
+            if ext in ("csv", "xlsx", "xls"):
+                # Auto-detects IBKR Activity Statements, Coinbase transaction history,
+                # Trendlyne (India) exports, or any plain table with ticker/qty/cost columns.
+                from core.file_parsers import parse_portfolio_file
+                file.seek(0)
+                parsed, cash_parsed, meta = parse_portfolio_file(file.name, file.getvalue())
+                fmt = meta.get("format", "table")
+                acct = meta.get("account") or meta.get("alias") or ""
+                if parsed or cash_parsed:
+                    st.success(
+                        f"{file.name} — recognised as **{fmt}**"
+                        + (f" (account {acct}{', ' + meta['name'] if meta.get('name') else ''})" if acct else "")
+                        + f": **{len(parsed)}** holdings"
+                        + (f", **{len(cash_parsed)}** cash/margin balances" if cash_parsed else "")
+                    )
+                    all_holdings.extend(parsed)
+                    all_holdings.extend(cash_parsed)
+                elif meta.get("error"):
+                    st.error(f"{file.name} — could not read this file: {meta['error']}")
+                else:
+                    st.warning(f"No holdings found in {file.name} (read as {fmt}). "
+                               "Expected columns like Ticker/Symbol, Quantity, Avg Cost.")
 
             elif ext == "pdf":
                 with st.spinner(f"AI parsing {file.name}..."):
@@ -374,9 +371,10 @@ with col_restart:
 st.caption("Click any cell to edit. When everything looks right, click **Save to Portfolio**.")
 
 df = pd.DataFrame(st.session_state.parsed_holdings)
-for col in ["ticker", "name", "quantity", "avg_cost", "currency"]:
+for col in ["ticker", "name", "quantity", "avg_cost", "currency", "broker_source"]:
     if col not in df.columns:
         df[col] = ""
+df["broker_source"] = df["broker_source"].fillna("").astype(str)
 
 # Highlight missing fields
 missing_currency = df["currency"].isna() | (df["currency"].astype(str).isin(["", "nan"]))
@@ -394,15 +392,16 @@ if missing_currency.any() or missing_avg_cost.any() or missing_qty.any():
     st.warning("Missing data: " + " · ".join(issues))
 
 edited_df = st.data_editor(
-    df[["ticker", "name", "quantity", "avg_cost", "currency"]],
+    df[["ticker", "name", "quantity", "avg_cost", "currency", "broker_source"]],
     num_rows="dynamic",
     use_container_width=True,
     column_config={
         "ticker": st.column_config.TextColumn("Ticker", help="e.g. AAPL, RELIANCE.NS, SREN.SW"),
         "name": st.column_config.TextColumn("Company Name"),
-        "quantity": st.column_config.NumberColumn("Qty", min_value=0, format="%.4f"),
+        "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
         "avg_cost": st.column_config.NumberColumn("Avg Cost", min_value=0, format="%.4f"),
         "currency": st.column_config.SelectboxColumn("Currency", options=SUPPORTED_CURRENCIES, default="USD"),
+        "broker_source": st.column_config.TextColumn("Account / Broker", help="Detected from the file; edit if needed"),
     },
 )
 
@@ -420,12 +419,13 @@ for idx, row in edited_df.iterrows():
         amt = float(row.get("quantity", 0) or 0)
         # If avg_cost is set and looks like a total, use it
         avg = float(row.get("avg_cost", 0) or 0)
-        amount = amt * avg if avg > 0 and amt > 0 else (amt if amt != 0 else avg)
+        amount = amt * avg if avg > 0 and amt != 0 else (amt if amt != 0 else avg)
         cash_lines.append({
             "account_name": name or ticker,
             "currency": str(row.get("currency", "USD")).strip(),
             "amount": amount,
             "is_margin": "margin" in f"{ticker} {name}".lower() or amount < 0,
+            "broker_source": str(row.get("broker_source", "") or "").strip() or None,
         })
     else:
         stock_lines.append(idx)
@@ -466,7 +466,7 @@ if st.button(
                     currency=cl["currency"],
                     amount=cl["amount"],
                     is_margin=cl["is_margin"],
-                    broker_source=broker,
+                    broker_source=broker or cl.get("broker_source"),
                 )
 
             st.session_state.save_done = True

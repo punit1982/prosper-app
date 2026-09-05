@@ -107,10 +107,16 @@ from core.auth import run_auth as _run_auth
 _is_authed = st.session_state.get("authentication_status") is True
 
 if not _is_authed:
+    # v7.0.3 FIX: the Google popup lands on /OAuth_Callback, which was never registered
+    # with st.navigation → "Page not found" and the sign-in could never complete.
+    _oauth_page = st.Page("pages/99_OAuth_Callback.py", title="Signing in…", url_path="OAuth_Callback")
     pg = st.navigation(
-        [st.Page("pages/00_Command_Center.py", default=True)],
+        [st.Page("pages/00_Command_Center.py", default=True), _oauth_page],
         position="hidden",
     )
+    if getattr(pg, "url_path", "") == "OAuth_Callback":
+        pg.run()
+        st.stop()
     _run_auth()
     if st.session_state.get("authentication_status") is True:
         st.rerun()
