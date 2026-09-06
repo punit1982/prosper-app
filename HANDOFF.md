@@ -208,6 +208,74 @@ snapshot + `fx_rate_cache` would kill the slow-morning load.
   - **NOT done, deliberately**: GROW framework 1-hour cache TTL (audit #13 — marginal, needs a beta
     header, risk not worth it); folding the remaining research pages into the hub (UX Step 6 tail).
 
+- **v7.13 (6 Sep 2026) — UAE prices fixed + three mis-mapped tickers**: the Mubasher price path was
+  gated on `is_adx_ticker()` (exact match against a 7-entry static chart-ID map) in BOTH
+  `cio_engine._fetch_one_quote` and `data_engine.resolve_ticker` — v7.11 introduced the broader
+  `is_uae_symbol()` but wired it only into fundamentals. ALDAR/BURJEEL/PUREHEALTH therefore never
+  reached Mubasher, and `resolve_ticker` then rewrote them via Twelve Data into `X:DFM`/`X:ADX`, a
+  form Mubasher cannot match and Twelve Data's plan will not quote. **That bad resolution was cached
+  24h in `ticker_cache`, and `resolve_tickers_batch` reads the cache BEFORE calling `resolve_ticker`**
+  — so the fast-path was never reached and the failure re-armed on every refresh, which is why the
+  four tickers that ARE in the static map also failed in production while working in isolation.
+  Fixes: `is_uae_symbol()` on the price/resolve/history paths; a UAE pin in `resolve_tickers_batch`
+  ahead of the cache read (self-heals poisoned rows); chart-ID discovery across BOTH ADX and DFM
+  market paths with `_MUBASHER_SLUG_OVERRIDES`; day change now measured against the previous
+  **session** close from the daily history CSV (it used the previous intraday **bar**, so every UAE
+  holding read 0.00% every day). New **keyless Yahoo `chart` fallback** in `_fetch_one_quote` between
+  yfinance and Finnhub — the reliability audit confirmed `chart` works unauthenticated while
+  `quoteSummary`/v7 `quote` return "Invalid Crumb"; verified it prices PRY.MI / 543895.BO / AAPL /
+  D05.SI / NESN.SW with yfinance fully stubbed, which closes the Yahoo-single-point-of-failure
+  finding for prices. Ticker corrections, each verified live: `PRYM.MI` → `PRY.MI` (IBKR writes
+  Prysmian as "PRYm" — the trailing lowercase letter is a share-class marker, **the real symbol and
+  exchange are in the statement's own "Financial Instrument Information" section: PRY / BVME /
+  IT0004176001**; PRY.MI quoted EUR 122.25 against a 119.80 prior close, both matching the
+  statement's marks); `17041163.NS` → `543895.BO` (Exhicon Events Media, a BSE-only SME —
+  `parse_trendlyne` already prefers BSEcode for numeric NSEcodes, so this only rescues pre-fix rows;
+  **note Yahoo's live 258.55 vs Trendlyne's 469.85 — a corporate action, confirm the share count
+  before trusting the value**). New `cio_engine.NO_LIVE_SOURCE` registry routes OZON (Nasdaq listing
+  suspended, IBKR carries it on its internal "VALUE" exchange), ISPATALLOY.NS (Balasore Alloys —
+  no data on Yahoo for NSE or BSE, and Trendlyne's own export reports a blank Day Change %) and
+  legacy `F0…​.NS` Morningstar fund rows straight to `last_known_price`. Portfolio Dashboard now
+  separates "couldn't fetch a price" (actionable) from "no market quote exists and none is expected".
+
+- **v7.14 (6 Sep 2026) — mobile design system**: measured first on a real 375×812 viewport against the
+  owner's 182-holding portfolio (see the preview-harness note below). Before: Command Center 3,677px =
+  4.5 screens with the first portfolio number **526px** down; Portfolio Dashboard's holdings table
+  showed **3 of its 12 columns**; **54 tap targets under 44px**. Root cause is layout arithmetic, not
+  styling — `st.columns()` stacks below ~640px with no per-row opt-out, and `st.dataframe` is a
+  fixed-height widget with its own horizontal AND vertical scrollbars. New in `core/ui_components.py`:
+  `mobile_shell()` (stylesheet: block padding, 44px tap targets, hides Plotly's modebar, fades
+  scrollable tab strips), `page_header()`, `hero_metric()`, `stat_grid()` (**the core fix** — a CSS
+  grid that stays a row at 375px), `row_list()` / `responsive_holdings()` (card rows on phones, the
+  full sortable dataframe on desktop, swapped by CSS `:has()` alone since Streamlit cannot read the
+  viewport), `holdings_rows()`, `fmt_compact()`. Applied to Command Center + Portfolio Dashboard:
+  first number 526px → 118px, 4.5 → 3.9 screens, ~4 → ~15 positions per screen. **Bound the card list
+  (25 largest by value + an explicit "show all")** — the first cut rendered all 182 and made the
+  Dashboard 12.8 screens, worse than the scroll-box it replaced. Two bugs found only by running it:
+  Command Center alerts rendered literal `**ADBE**` (Markdown authored text injected into
+  `unsafe_allow_html`, which Streamlit does not parse — regressed in v7.8), and the new per-tab
+  "show all" checkbox raised `StreamlitDuplicateElementKey` because `_render_currency_section` runs
+  once per country tab. Desktop verified unchanged at 1280px. Design review + page-by-page plan:
+  https://claude.ai/code/artifact/fe1423f6-44eb-4103-909f-4c4e495fafc7
+  **Not done**: Plotly charts are still unusable at 375px (clipped axis labels, 4–6px treemap text,
+  allocation bars spending 40% of width on labels); the 24-page sidebar wants a 4-item bottom bar;
+  Equity Deep Dive, Risk & Strategy and Portfolio Summary are the P1 pages still unconverted.
+
+## Seeing the signed-in app at phone width (the missing test class)
+Earlier sessions could not click through the signed-in pages and said so. This is how it was done on
+6 Sep 2026, with **no credentials and no repo changes**: `rsync` the repo to a scratch dir (excluding
+`venv/.git/__pycache__`); in the COPY's `app.py` force `st.session_state["authentication_status"]=True`
++ `user_id`, no-op `run_auth`, and short-circuit the onboarding gate (bypass auth — never create an
+account or type a password to do this); seed the scratch SQLite by running `parse_ibkr_statement` /
+`parse_trendlyne` over the real files in `Portfolio Info/` and `save_holdings()`; **pre-warm
+`save_price_cache()` and `save_ticker_info_cache({t: {} …})` offline first**, or the first load runs
+past two minutes and you never see the UI; run with `PYTHONPATH=<scratch>/stub` holding a stub
+`yfinance.py` (this machine's Python 3.14 segfaults on any real yfinance call — the new Yahoo `chart`
+fallback covers everything, so the app still runs live). Streamlit's watcher does **not** pick up edits
+here (no watchdog) — restart on a new port and clear `__pycache__` after every change. Measure with JS
+against `[data-testid="stMain"]`, **not** `document.documentElement`: Streamlit scrolls an inner
+container, so the document's own `scrollHeight` is always just the viewport height.
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
