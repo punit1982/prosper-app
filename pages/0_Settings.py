@@ -9,8 +9,8 @@ import os
 import streamlit as st
 from core.settings import SETTINGS, save_user_settings, get_defaults, load_user_settings
 
-st.header("⚙️ Settings & Configuration")
-
+from core.ui_components import page_header
+page_header('Settings', 'Currency, refresh, data sources and keys')
 # Reload current saved settings (not the cached import-time snapshot)
 current = load_user_settings()
 defaults = get_defaults()

@@ -8,6 +8,7 @@ Sections: Identity, Price, Chart, Fundamentals, Analyst, Sentiment,
 
 import math
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -25,7 +26,9 @@ from core.grow_engine import run_grow, GROW_TIERS
 from core.settings import SETTINGS, enriched_cache_key
 from core.ui_errors import fetch_failed
 
-st.header("Equity Deep Dive")
+from core.ui_components import (page_header, hero_metric, stat_grid,
+                                fmt_compact, render_responsive_table)
+page_header("Equity Deep Dive", "One name, everything Prosper knows about it")
 st.caption("Comprehensive 360° view of any stock — fundamentals, analyst consensus, sentiment, ownership, and the GROW two-verdict analysis.")
 
 # ─────────────────────────────────────────
@@ -208,46 +211,50 @@ lo52 = info.get("fiftyTwoWeekLow")
 pe = info.get("trailingPE")
 fwd_pe = info.get("forwardPE")
 
-c1, c2, c3, c4 = st.columns(4)
+# Price is the headline; market cap, P/E and the 52-week position support it.
+# As st.columns(4) these were four equal tracks that stacked into four rows on
+# a phone, putting the tab strip below the fold on the app's densest page.
+hero_metric(
+    "Price",
+    f"USD {price:,.2f}" if price else "—",
+    delta=(f"{day_change:+.2f} ({day_pct:+.1f}%) today"
+           if day_change is not None else ""),
+    delta_value=day_change,
+    sub=info.get("shortName") or info.get("longName") or "",
+)
 
-with c1:
-    if price:
-        delta_str = f"{day_change:+.2f} ({day_pct:+.1f}%)" if day_change is not None else None
-        st.metric("Price", f"USD {price:,.2f}", delta=delta_str)
+_pe_v = _sf(pe)
+_fwd_v = _sf(fwd_pe)
+stat_grid([
+    ("Market cap", fmt_large(mcap) if mcap else "—"),
+    ("P/E", f"{_pe_v:.1f}" if _pe_v is not None else "—"),
+    ("Fwd P/E", f"{_fwd_v:.1f}" if _fwd_v is not None else "—"),
+], columns=3)
 
-with c2:
-    if mcap:
-        st.metric("Market Cap", fmt_large(mcap))
-
-with c3:
-    if hi52 and lo52 and price:
-        range_span = hi52 - lo52
-        if range_span > 0:
-            position = (price - lo52) / range_span
-            pct = max(0, min(100, position * 100))
-            color = "#00C853" if pct > 60 else "#f39c12" if pct > 30 else "#DD2C00"
-            st.caption("52-Week Range")
-            st.markdown(
-                f'<div style="display:flex; align-items:center; gap:8px;">'
-                f'<span style="font-size:12px;">USD {lo52:,.0f}</span>'
-                f'<div style="flex:1; background:#333; border-radius:4px; height:8px; position:relative;">'
-                f'<div style="background:{color}; height:8px; border-radius:4px; width:{pct:.0f}%;"></div>'
-                f'</div>'
-                f'<span style="font-size:12px;">USD {hi52:,.0f}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-with c4:
-    pe_parts = []
-    if _sf(pe) is not None:
-        pe_parts.append(f"P/E: {_sf(pe):.1f}")
-    if _sf(fwd_pe) is not None:
-        pe_parts.append(f"Fwd: {_sf(fwd_pe):.1f}")
-    if pe_parts:
-        st.metric("P/E Ratio", pe_parts[0].split(": ")[1] if pe else "—")
-        if len(pe_parts) > 1:
-            st.caption(pe_parts[1])
+# 52-week position — a bar says "where in the year's range are we" faster than
+# two numbers do, so it stays, but as a full-width row rather than one cramped
+# quarter of a four-column split.
+if hi52 and lo52 and price:
+    range_span = hi52 - lo52
+    if range_span > 0:
+        pct = max(0, min(100, ((price - lo52) / range_span) * 100))
+        color = "#1a9e5c" if pct > 60 else "#a6741a" if pct > 30 else "#d63031"
+        st.markdown(
+            '<div style="margin:2px 0 12px">'
+            '<div style="font-size:0.63rem;letter-spacing:0.05em;text-transform:uppercase;'
+            'opacity:0.55;font-weight:600;margin-bottom:5px">52-week range</div>'
+            '<div style="display:flex;align-items:center;gap:9px">'
+            f'<span style="font-size:0.72rem;opacity:0.7;font-variant-numeric:tabular-nums">'
+            f'{lo52:,.0f}</span>'
+            '<div style="flex:1;background:rgba(128,128,128,0.25);border-radius:4px;height:7px;'
+            'position:relative">'
+            f'<div style="background:{color};height:7px;border-radius:4px;width:{pct:.0f}%"></div>'
+            '</div>'
+            f'<span style="font-size:0.72rem;opacity:0.7;font-variant-numeric:tabular-nums">'
+            f'{hi52:,.0f}</span>'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
 
 st.divider()
 
@@ -340,7 +347,7 @@ with tab_chart:
                 showlegend=True,
             )
             fig.update_xaxes(rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
         else:
             st.info("No price history available for this ticker.")
 
@@ -355,27 +362,23 @@ with tab_chart:
         if _div_rate or _div_yield:
             st.markdown("---")
             st.caption(f"**Dividend Summary — {ticker}**")
-            _d1, _d2, _d3, _d4 = st.columns(4)
-            with _d1:
-                _div_rate_f = _sf(_div_rate)
-                st.metric("Dividend/Share", f"USD {_div_rate_f:.2f}" if _div_rate_f is not None else "---")
-            with _d2:
-                _dy_f = _sf(_div_yield)
-                _dy = _dy_f * 100 if _dy_f is not None and _dy_f < 1 else _dy_f
-                st.metric("Dividend Yield", f"{_dy:.2f}%" if _dy is not None else "---")
-            with _d3:
-                if _ex_date:
-                    try:
-                        from datetime import datetime as _dt
-                        _ed = _dt.fromtimestamp(_ex_date).strftime("%b %d, %Y")
-                        st.metric("Ex-Dividend Date", _ed)
-                    except Exception:
-                        st.metric("Ex-Dividend Date", "---")
-                else:
-                    st.metric("Ex-Dividend Date", "---")
-            with _d4:
-                _payout_f = _sf(_payout)
-                st.metric("Payout Ratio", f"{_payout_f*100:.0f}%" if _payout_f is not None else "---")
+            _div_rate_f = _sf(_div_rate)
+            _dy_f = _sf(_div_yield)
+            _dy = _dy_f * 100 if _dy_f is not None and _dy_f < 1 else _dy_f
+            _payout_f = _sf(_payout)
+            _ed = "—"
+            if _ex_date:
+                try:
+                    from datetime import datetime as _dt
+                    _ed = _dt.fromtimestamp(_ex_date).strftime("%d %b %Y")
+                except Exception:
+                    _ed = "—"
+            stat_grid([
+                ("Div / share", f"USD {_div_rate_f:.2f}" if _div_rate_f is not None else "—"),
+                ("Yield", f"{_dy:.2f}%" if _dy is not None else "—"),
+                ("Payout", f"{_payout_f*100:.0f}%" if _payout_f is not None else "—"),
+            ], columns=3)
+            stat_grid([("Ex-dividend date", _ed)], columns=2)
     except Exception as e:
         fetch_failed("this section", e)
 
@@ -575,13 +578,15 @@ with tab_analyst:
                     },
                 ))
                 fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=10), template="plotly_dark")
-                st.plotly_chart(fig_gauge, use_container_width=True)
+                show_chart(fig_gauge)
 
             with info_col:
                 upside = ((target_mean - price) / price * 100) if target_mean and price else None
-                st.metric("Consensus", consensus or "—")
-                st.metric("Mean Target", f"USD {target_mean:,.2f}" if target_mean else "—",
-                          delta=f"{upside:+.1f}% upside" if upside else None)
+                stat_grid([
+                    ("Consensus", consensus or "—"),
+                    ("Mean target", f"USD {target_mean:,.2f}" if target_mean else "—",
+                     f"{upside:+.1f}% upside" if upside else "", upside),
+                ], columns=2)
                 if target_low and target_high:
                     st.caption(f"Range: USD {target_low:,.2f} — USD {target_high:,.2f}")
 
@@ -602,7 +607,7 @@ with tab_analyst:
                     })
                 if ud_rows:
                     st.caption("**Recent Analyst Actions**")
-                    st.dataframe(pd.DataFrame(ud_rows), use_container_width=True, hide_index=True)
+                    render_responsive_table(pd.DataFrame(ud_rows))
         else:
             st.info("No analyst coverage data available for this ticker.")
 
@@ -626,13 +631,11 @@ with tab_analyst:
                 # Score display — convert to -100..+100 scale
                 score_100 = round(score * 100)
                 score_color = "#00C853" if score > 0.1 else "#DD2C00" if score < -0.1 else "#f39c12"
-                sc1, sc2, sc3 = st.columns(3)
-                with sc1:
-                    st.metric("Sentiment Score", f"{score_100:+d}", delta=label)
-                with sc2:
-                    st.metric("Headlines Analyzed", str(total_h))
-                with sc3:
-                    st.metric("Direct/Related", f"{relevant} of {total_h}")
+                stat_grid([
+                    ("Sentiment", f"{score_100:+d}", label, score),
+                    ("Headlines", str(total_h)),
+                    ("Direct", f"{relevant}/{total_h}"),
+                ], columns=3)
 
                 # Top positive & negative headlines with AI summaries
                 top_pos = sentiment.get("top_positive", [])[:3]
@@ -737,7 +740,7 @@ with tab_ownership:
                     ))
                     fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
                                            template="plotly_dark", showlegend=False)
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    show_chart(fig_pie)
 
                 with insight_col:
                     st.markdown("**Ownership Insights**")
@@ -794,7 +797,7 @@ with tab_ownership:
                                 lambda x: f"{x/1e6:.1f}M" if pd.notna(x) and x >= 1e6 else (f"{x:,.0f}" if pd.notna(x) else "—")
                             )
                             cols_show.append("Shares")
-                        st.dataframe(display_inst[cols_show], use_container_width=True, hide_index=True)
+                        render_responsive_table(display_inst[cols_show])
                 else:
                     st.caption("No institutional holder data available")
 
@@ -851,13 +854,13 @@ with tab_ownership:
                     # Filter to only existing, unique columns
                     display_cols = list(dict.fromkeys(c for c in display_cols if c in recent_txns.columns))
                     if display_cols:
-                        st.dataframe(clean_nan(recent_txns[display_cols]), use_container_width=True, hide_index=True)
+                        render_responsive_table(clean_nan(recent_txns[display_cols]))
                     else:
                         # Fallback: show whatever columns exist
-                        st.dataframe(clean_nan(recent_txns), use_container_width=True, hide_index=True)
+                        render_responsive_table(clean_nan(recent_txns))
                 elif not purchases.empty:
                     st.markdown("**Insider Purchase Summary**")
-                    st.dataframe(purchases.head(3), use_container_width=True, hide_index=True)
+                    render_responsive_table(purchases.head(3))
                 else:
                     st.caption("No insider activity data available")
 
@@ -916,17 +919,28 @@ with tab_technical:
                 _signals.append(("RSI 14", f"{_rsi_val_f:.1f}", rsi_label, rsi_color))
 
             # Display signal cards
-            _sig_cols = st.columns(min(len(_signals), 4)) if _signals else []
-            for _si, (_sname, _sval, _slabel, _scolor) in enumerate(_signals):
-                with _sig_cols[_si % len(_sig_cols)]:
-                    st.markdown(
-                        f"<div style='padding:10px;border-radius:8px;border-left:4px solid {_scolor};"
-                        f"background:rgba(255,255,255,0.03);margin-bottom:8px'>"
-                        f"<div style='font-size:0.8rem;color:#999'>{_sname}</div>"
-                        f"<div style='font-size:1.1rem;font-weight:700'>{_sval}</div>"
-                        f"<div style='font-size:0.85rem;color:{_scolor}'>{_slabel}</div></div>",
-                        unsafe_allow_html=True,
-                    )
+            # One CSS grid rather than st.columns(4): the signal cards are the
+            # densest thing on this tab and stacking them four-deep on a phone
+            # buried the price chart below them. Two per row at 375px, four on
+            # desktop, from the same markup.
+            if _signals:
+                _cards = "".join(
+                    f"<div style='padding:9px 11px;border-radius:8px;"
+                    f"border-left:3px solid {_scolor};background:rgba(128,128,128,0.08)'>"
+                    f"<div style='font-size:0.63rem;letter-spacing:0.04em;text-transform:uppercase;"
+                    f"opacity:0.6;font-weight:600'>{_sname}</div>"
+                    f"<div style='font-size:1.05rem;font-weight:700;"
+                    f"font-variant-numeric:tabular-nums;line-height:1.3'>{_sval}</div>"
+                    f"<div style='font-size:0.75rem;font-weight:600;color:{_scolor}'>{_slabel}</div>"
+                    f"</div>"
+                    for _sname, _sval, _slabel, _scolor in _signals
+                )
+                st.markdown(
+                    "<div style='display:grid;gap:8px;margin:4px 0 12px;"
+                    "grid-template-columns:repeat(auto-fit,minmax(150px,1fr))'>"
+                    f"{_cards}</div>",
+                    unsafe_allow_html=True,
+                )
 
             # Mini chart with overlays
             _fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
@@ -940,7 +954,7 @@ with tab_technical:
                 _fig_tech.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=2, col=1)
             _fig_tech.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
                                     legend=dict(orientation="h", y=1.02), yaxis2_title="RSI")
-            st.plotly_chart(_fig_tech, use_container_width=True)
+            show_chart(_fig_tech)
         else:
             st.info("Not enough price history for technical analysis (need at least 50 data points).")
         st.caption("For detailed technical analysis with MACD, Bollinger Bands, and more patterns, visit the Technical Analysis page.")
@@ -965,28 +979,30 @@ with tab_ai:
 
                 if not match.empty:
                     row = match.iloc[0]
-                    st.subheader("Your Position")
+                    st.markdown("#### Your position")
 
-                    p1, p2, p3, p4, p5 = st.columns(5)
-                    with p1:
-                        st.metric("Shares", f"{row.get('quantity', 0):,.2f}")
-                    with p2:
-                        avg = row.get("avg_cost")
-                        st.metric("Avg Cost", f"USD {avg:,.2f}" if avg else "—")
-                    with p3:
-                        mv = row.get("market_value")
-                        st.metric("Market Value", fmt_large(mv) if mv else "—")
-                    with p4:
-                        pnl = row.get("unrealized_pnl")
-                        pnl_pct = row.get("unrealized_pnl_pct")
-                        delta_str = f"{pnl_pct:+.1f}%" if pnl_pct else None
-                        st.metric("Unrealized P&L", fmt_large(pnl) if pnl else "—", delta=delta_str)
-                    with p5:
-                        # Portfolio weight
-                        total_val = pd.to_numeric(enriched.get("market_value"), errors="coerce").sum()
-                        if total_val and mv:
-                            weight = (float(mv) / float(total_val)) * 100
-                            st.metric("Portfolio Weight", f"{weight:.1f}%")
+                    avg = row.get("avg_cost")
+                    mv  = row.get("market_value")
+                    pnl = row.get("unrealized_pnl")
+                    pnl_pct = row.get("unrealized_pnl_pct")
+                    total_val = pd.to_numeric(enriched.get("market_value"), errors="coerce").sum()
+                    weight = (float(mv) / float(total_val) * 100) if (total_val and mv) else None
+
+                    hero_metric(
+                        "Market value",
+                        fmt_compact(mv, "USD") if mv else "—",
+                        delta=(f"{fmt_compact(pnl, 'USD')} ({pnl_pct:+.1f}%)"
+                               if (pnl and pnl_pct) else ""),
+                        delta_value=pnl,
+                        sub=f"{row.get('quantity', 0):,.2f} shares"
+                            + (f" · {weight:.1f}% of portfolio" if weight else ""),
+                        title=f"USD {mv:,.2f}" if mv else "",
+                    )
+                    stat_grid([
+                        ("Shares", f"{row.get('quantity', 0):,.2f}"),
+                        ("Avg cost", f"USD {avg:,.2f}" if avg else "—"),
+                        ("Weight", f"{weight:.1f}%" if weight else "—"),
+                    ], columns=3)
 
                     st.divider()
 

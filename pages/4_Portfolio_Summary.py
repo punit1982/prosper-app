@@ -22,7 +22,9 @@ from core.data_engine import (
 )
 from core.settings import SETTINGS, enriched_cache_key
 
-st.header("📊 Portfolio Summary")
+from core.ui_components import (page_header, hero_metric, stat_grid,
+                                fmt_compact, render_responsive_table)
+page_header("Portfolio Summary", "Where the money actually sits")
 
 holdings = get_all_holdings()
 if holdings.empty:
@@ -205,7 +207,14 @@ try:
 
     # ── Summary metrics ──
     total_val = enriched[weight_col].sum() if weight_col in enriched.columns else 0
-    st.metric("Total Portfolio Value", f"{base_currency} {total_val:,.0f}" if total_val else "—")
+    _n_pos = len(enriched)
+    _n_ccy = enriched["currency"].nunique() if "currency" in enriched.columns else 1
+    hero_metric(
+        "Total Portfolio Value",
+        fmt_compact(total_val, base_currency) if total_val else "—",
+        sub=f"{_n_pos} positions · {_n_ccy} currencies",
+        title=f"{base_currency} {total_val:,.2f}" if total_val else "",
+    )
 
     # ── Charts with drill-down ──
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["By Sector", "By Industry", "By Currency", "By Country", "By Market Cap"])
@@ -219,17 +228,23 @@ try:
             return
         fig = px.pie(grouped, names=group_col, values="Value", title=title,
                      hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
-        fig.update_traces(textposition="inside", textinfo="percent+label")
-        fig.update_layout(margin=dict(t=40, b=20, l=20, r=20), height=420,
-                          plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+        fig.update_traces(textposition="inside", textinfo="percent+label",
+                          insidetextorientation="horizontal")
+        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+        # Kept as st.plotly_chart because it returns a selection event, but run
+        # through the same mobile treatment: uniformtext hides slice labels that
+        # would render below 10px instead of stacking them on top of each other,
+        # which is what a 14-sector allocation did at 375px.
+        from core.ui_components import mobile_chart, _CHART_CONFIG
+        fig = mobile_chart(fig, height=330, legend=False, min_text=10)
         event = st.plotly_chart(fig, use_container_width=True, on_select="rerun",
-                                key=f"pie_{tab_key}")
+                                key=f"pie_{tab_key}", config=_CHART_CONFIG)
 
         # Summary table
         grouped["% of Portfolio"] = (grouped["Value"] / grouped["Value"].sum() * 100).round(1)
         grouped["Value"] = grouped["Value"].apply(lambda x: f"{base_currency} {x:,.0f}")
         from core.data_engine import clean_nan
-        st.dataframe(clean_nan(grouped), hide_index=True, use_container_width=True)
+        render_responsive_table(clean_nan(grouped), title_col=group_col)
 
         # Drill-down: show holdings in selected segment
         selected_segment = None
@@ -411,7 +426,9 @@ try:
                 pass
             return ""
         styled_perf = perf_df.style.map(_perf_color, subset=["Return", "CAGR"])
-        st.dataframe(styled_perf, hide_index=True, use_container_width=True)
+        # 9 rows x 3 columns — a card-per-row table reads fine on a phone and
+        # does not need the sortable grid widget.
+        render_responsive_table(perf_df, title_col="Period")
     elif not perf_tickers or weight_col not in enriched.columns:
         st.caption("Market value data needed — ensure prices are loaded.")
 
@@ -473,38 +490,26 @@ try:
                     port_beta = calc_portfolio_beta(risk_tickers, risk_weights, risk_period)
                     port_vol = calc_portfolio_volatility(risk_tickers, risk_weights, risk_period)
 
-                    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-                    with rc1:
-                        if port_beta is not None:
-                            st.metric("Portfolio Beta", f"{port_beta:.2f}",
-                                      help="Weighted avg beta vs market. 1.0 = same as market, >1 = more volatile.")
-                        else:
-                            st.metric("Portfolio Beta", "—")
-                    with rc2:
-                        if max_dd is not None:
-                            st.metric("Max Drawdown", f"{max_dd*100:.1f}%",
-                                      help="Largest peak-to-trough decline in the period.")
-                        else:
-                            st.metric("Max Drawdown", "—")
-                    with rc3:
-                        if port_vol is not None:
-                            st.metric("Volatility (Ann.)", f"{port_vol*100:.1f}%",
-                                      help="Annualized standard deviation of daily returns.")
-                        else:
-                            st.metric("Volatility (Ann.)", "—")
-                    with rc4:
-                        if sharpe is not None:
-                            st.metric("Sharpe Ratio", f"{sharpe:.2f}",
-                                      help="Risk-adjusted return. >1 is good, >2 is excellent.")
-                        else:
-                            st.metric("Sharpe Ratio", "—")
-                    with rc5:
-                        if sortino is not None:
-                            st.metric("Sortino Ratio", f"{sortino:.2f}",
-                                      help="Like Sharpe but only penalizes downside risk. Higher is better.")
-                        else:
-                            st.metric("Sortino Ratio", "—")
-
+                    # Five risk figures. As st.columns(5) each track was ~65px
+                    # wide on a phone and the values collided; below ~640px they
+                    # stacked into five separate rows instead. Two grids keep
+                    # them side by side and grouped by what they measure —
+                    # exposure first, then reward-for-risk.
+                    _pc = lambda v: f"{v*100:.1f}%" if v is not None else "—"
+                    stat_grid([
+                        ("Beta", f"{port_beta:.2f}" if port_beta is not None else "—"),
+                        ("Max drawdown", _pc(max_dd), "", max_dd),
+                        ("Volatility", _pc(port_vol)),
+                    ], columns=3)
+                    stat_grid([
+                        ("Sharpe", f"{sharpe:.2f}" if sharpe is not None else "—", "", sharpe),
+                        ("Sortino", f"{sortino:.2f}" if sortino is not None else "—", "", sortino),
+                    ], columns=2)
+                    st.caption(
+                        "Beta 1.0 = moves with the market. Max drawdown is the worst "
+                        "peak-to-trough fall in the period. Sharpe/Sortino above 1 is good; "
+                        "Sortino only counts downside moves."
+                    )
                     st.caption("ℹ️ Beta uses individual stock betas from market data. Sharpe/Sortino use 5% risk-free rate (US T-bills).")
                 else:
                     st.info("Not enough price history to calculate risk metrics. Ensure prices are loaded on the Dashboard.")

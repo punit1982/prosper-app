@@ -7,6 +7,7 @@ performance attribution, FORTRESS regime, alerts, and AI briefing.
 
 import time
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -304,7 +305,7 @@ with col_attrib:
                 yaxis=dict(showgrid=False, tickfont=dict(size=12)),
                 font=dict(size=11),
             )
-            st.plotly_chart(fig_attr, use_container_width=True, key="cmd_attrib")
+            show_chart(fig_attr, key="cmd_attrib")
         else:
             st.caption("No P&L changes today.")
     else:
@@ -440,7 +441,7 @@ with col_hm:
                     paper_bgcolor="rgba(0,0,0,0)",
                 )
                 fig.update_traces(textfont=dict(size=13, color="white"), textposition="middle center")
-                st.plotly_chart(fig, use_container_width=True, key="cmd_heatmap")
+                show_chart(fig, key="cmd_heatmap")
             except Exception:
                 # Fallback: simple bar chart if treemap fails
                 hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
@@ -456,7 +457,7 @@ with col_hm:
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     xaxis_title="Market Value", yaxis_title="",
                 )
-                st.plotly_chart(fig, use_container_width=True, key="cmd_heatmap_fallback")
+                show_chart(fig, key="cmd_heatmap_fallback")
 
 with col_alloc:
     st.markdown("#### Allocation by Sector")
@@ -488,7 +489,7 @@ with col_alloc:
                 yaxis=dict(showgrid=False, tickfont=dict(size=11)),
                 font=dict(size=11),
             )
-            st.plotly_chart(fig_alloc, use_container_width=True, key="cmd_alloc")
+            show_chart(fig_alloc, key="cmd_alloc")
     elif "market_value" in enriched.columns:
         # Simple top-10 bar chart if no sector data
         top10 = enriched.nlargest(10, "market_value")[["ticker", "market_value"]]
@@ -497,7 +498,7 @@ with col_alloc:
         fig_t10.update_layout(height=350, margin=dict(t=5, l=5, r=5, b=5),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               showlegend=False)
-        st.plotly_chart(fig_t10, use_container_width=True, key="cmd_top10")
+        show_chart(fig_t10, key="cmd_top10")
 
 st.divider()
 
@@ -680,7 +681,7 @@ with col_nav:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_nav, use_container_width=True, key="cmd_nav_hist")
+        show_chart(fig_nav, key="cmd_nav_hist")
     else:
         st.caption("NAV snapshots accumulate daily when you visit the Dashboard. Check back soon.")
 

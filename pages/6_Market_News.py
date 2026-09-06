@@ -17,8 +17,8 @@ from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 NEWS_TTL = 900  # 15 minutes
 
-st.header("🌍 Market & Industry News")
-
+from core.ui_components import page_header
+page_header('Market News', 'The wider tape')
 focus_map = {
     "🌐 Global Markets":         ["^GSPC", "^NDX", "^DJI", "^NSEI", "^FTSE", "^HSI"],
     "🇺🇸 US Markets":            ["^GSPC", "^NDX", "^DJI"],

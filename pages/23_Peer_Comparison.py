@@ -5,6 +5,8 @@ Auto-detect sector peers for any portfolio holding and compare key metrics.
 """
 
 import streamlit as st
+from core.ui_components import page_header
+from core.ui_components import show_chart, hero_metric, stat_grid
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -16,11 +18,7 @@ from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
 from core.ui_components import render_responsive_table
 
-st.markdown(
-    "<h2 style='margin-bottom:0'>🔍 Peer Comparison</h2>"
-    "<p style='color:#888;margin-top:0'>Side-by-side fundamental analysis against sector peers</p>",
-    unsafe_allow_html=True,
-)
+page_header('Peer Comparison', 'Side by side against sector peers')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -252,19 +250,24 @@ if sel_row is not None:
     st.markdown(f"### {sel_row['Ticker']} — {sel_row['Company']}")
     st.caption(f"{sel_row['Sector']} / {sel_row['Industry']}")
 
-    hero_cols = st.columns(6)
-    with hero_cols[0]:
-        st.metric("Price", f"${sel_row['Price']:,.2f}" if sel_row['Price'] else "—")
-    with hero_cols[1]:
-        st.metric("Market Cap", fmt_large(sel_row['Market Cap']) if sel_row['Market Cap'] else "—")
-    with hero_cols[2]:
-        st.metric("P/E (Fwd)", f"{sel_row['P/E (Fwd)']:.1f}" if sel_row['P/E (Fwd)'] else "—")
-    with hero_cols[3]:
-        st.metric("ROE", f"{sel_row['ROE']*100:.1f}%" if sel_row['ROE'] else "—")
-    with hero_cols[4]:
-        st.metric("Div Yield", f"{sel_row['Div Yield']*100:.2f}%" if sel_row['Div Yield'] else "—")
-    with hero_cols[5]:
-        st.metric("Beta", f"{sel_row['Beta']:.2f}" if sel_row['Beta'] else "—")
+    # Six metrics in st.columns(6) gave each track ~55px on a phone (values
+    # collided) and stacked into six rows below 640px. Price leads; the rest
+    # are supporting ratios, so they belong in a grid, not six hero slots.
+    _px = sel_row['Price']
+    hero_metric(
+        "Price",
+        f"${_px:,.2f}" if _px else "—",
+        sub=f"{sel_row['Sector']} / {sel_row['Industry']}",
+    )
+    stat_grid([
+        ("Market cap", fmt_large(sel_row['Market Cap']) if sel_row['Market Cap'] else "—"),
+        ("P/E (fwd)", f"{sel_row['P/E (Fwd)']:.1f}" if sel_row['P/E (Fwd)'] else "—"),
+        ("ROE", f"{sel_row['ROE']*100:.1f}%" if sel_row['ROE'] else "—"),
+    ], columns=3)
+    stat_grid([
+        ("Div yield", f"{sel_row['Div Yield']*100:.2f}%" if sel_row['Div Yield'] else "—"),
+        ("Beta", f"{sel_row['Beta']:.2f}" if sel_row['Beta'] else "—"),
+    ], columns=2)
 
 st.divider()
 
@@ -344,7 +347,7 @@ with tab_valuation:
             median_val = peer_vals.median()
             fig.add_hline(y=median_val, line_dash="dash", line_color="rgba(255,255,255,0.5)",
                           annotation_text=f"Peer Median: {median_val:.1f}")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     # Valuation summary
     st.markdown("#### Valuation Verdict")
@@ -414,7 +417,7 @@ with tab_quality:
             paper_bgcolor="rgba(0,0,0,0)",
             title="Quality Comparison (Normalized)",
         )
-        st.plotly_chart(fig_radar, use_container_width=True)
+        show_chart(fig_radar)
 
     # Quality metrics bar charts
     for metric, (label, higher_better) in quality_metrics.items():
@@ -430,7 +433,7 @@ with tab_quality:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False, yaxis_title="%" if metric != "Current Ratio" else "Ratio",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
 # ── TAB 4: Growth ──
 with tab_growth:
@@ -455,7 +458,7 @@ with tab_growth:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False, yaxis_title="%",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     # PEG-like comparison: forward PE vs earnings growth
     peg_data = comp_df[comp_df["P/E (Fwd)"].notna() & comp_df["Earnings Growth"].notna()].copy()
@@ -473,7 +476,7 @@ with tab_growth:
             height=400, margin=dict(t=40, l=50, r=20, b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_peg, use_container_width=True)
+        show_chart(fig_peg)
 
 # ── TAB 5: Risk ──
 with tab_risk:
@@ -504,7 +507,7 @@ with tab_risk:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     # Risk summary
     st.markdown("#### Risk Profile Summary")

@@ -5,6 +5,8 @@ Single-stock technical analysis with key indicators overlaid on price charts.
 """
 
 import streamlit as st
+from core.ui_components import page_header
+from core.ui_components import show_chart, hero_metric, stat_grid
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -14,11 +16,7 @@ from core.database import get_all_holdings
 from core.data_engine import get_history, get_ticker_info_batch
 from core.settings import enriched_cache_key
 
-st.markdown(
-    "<h2 style='margin-bottom:0'>📉 Technical Analysis</h2>"
-    "<p style='color:#888;margin-top:0'>Moving averages, RSI, Bollinger Bands & volume analysis</p>",
-    unsafe_allow_html=True,
-)
+page_header('Technical Analysis', 'Moving averages, RSI, Bollinger Bands and volume')
 
 # ── Ticker Selection ──
 holdings = get_all_holdings()
@@ -305,34 +303,28 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
 )
 
-st.plotly_chart(fig, use_container_width=True)
+show_chart(fig)
 
 # ── Key Metrics Table ──
 st.divider()
 st.markdown("### 📊 Key Technical Metrics")
-met_cols = st.columns(5)
-with met_cols[0]:
-    st.metric("Current Price", f"{current_price:.2f}")
-with met_cols[1]:
-    if pd.notna(latest.get("SMA_50")):
-        dist = (current_price - latest["SMA_50"]) / latest["SMA_50"] * 100
-        st.metric("vs 50-DMA", f"{dist:+.1f}%")
-    else:
-        st.metric("vs 50-DMA", "—")
-with met_cols[2]:
-    if pd.notna(latest.get("SMA_200")):
-        dist = (current_price - latest["SMA_200"]) / latest["SMA_200"] * 100
-        st.metric("vs 200-DMA", f"{dist:+.1f}%")
-    else:
-        st.metric("vs 200-DMA", "—")
-with met_cols[3]:
-    st.metric("RSI (14)", f"{latest['RSI']:.1f}" if pd.notna(latest.get("RSI")) else "—")
-with met_cols[4]:
-    if pd.notna(latest.get("ATR")):
-        atr_pct = latest["ATR"] / current_price * 100
-        st.metric("ATR (14)", f"{latest['ATR']:.2f} ({atr_pct:.1f}%)")
-    else:
-        st.metric("ATR (14)", "—")
+_d50 = ((current_price - latest["SMA_50"]) / latest["SMA_50"] * 100
+        if pd.notna(latest.get("SMA_50")) else None)
+_d200 = ((current_price - latest["SMA_200"]) / latest["SMA_200"] * 100
+         if pd.notna(latest.get("SMA_200")) else None)
+_rsi = latest["RSI"] if pd.notna(latest.get("RSI")) else None
+_atr = latest["ATR"] if pd.notna(latest.get("ATR")) else None
+
+hero_metric("Current price", f"{current_price:,.2f}")
+stat_grid([
+    ("vs 50-DMA", f"{_d50:+.1f}%" if _d50 is not None else "—", "", _d50),
+    ("vs 200-DMA", f"{_d200:+.1f}%" if _d200 is not None else "—", "", _d200),
+    ("RSI (14)", f"{_rsi:.1f}" if _rsi is not None else "—"),
+], columns=3)
+stat_grid([
+    ("ATR (14)", f"{_atr:.2f}" if _atr is not None else "—"),
+    ("ATR %", f"{_atr / current_price * 100:.1f}%" if _atr is not None else "—"),
+], columns=2)
 
 # ── Actionable Trading Summary ──────────────────────────────────────────────
 st.divider()

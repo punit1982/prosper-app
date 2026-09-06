@@ -6,6 +6,7 @@ for every holding in the portfolio.
 """
 
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -17,8 +18,8 @@ from core.data_engine import (
 )
 from core.settings import SETTINGS, enriched_cache_key
 
-st.header("🎯 Analyst Consensus")
-
+from core.ui_components import page_header
+page_header('Analyst Consensus', 'What the street thinks, across your holdings')
 holdings = get_all_holdings()
 if holdings.empty:
     st.info("Add holdings via **Upload Portal** to see analyst data.")
@@ -151,7 +152,7 @@ try:
         ))
         fig.update_layout(height=300, margin=dict(t=50, b=20),
                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     st.divider()
 
@@ -227,7 +228,7 @@ try:
                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                                   font=dict(color="#FAFAFA"),
                                   legend=dict(font=dict(color="#FAFAFA")))
-                st.plotly_chart(fig, use_container_width=True)
+                show_chart(fig)
         except Exception:
             pass
 

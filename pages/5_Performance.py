@@ -8,6 +8,7 @@ Optimized: parallel history fetching + skips tickers with no live price.
 """
 
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,8 +18,8 @@ from core.data_engine import get_history, get_benchmark_history, BENCHMARKS, cal
 from core.cio_engine import enrich_portfolio
 from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
-st.header("📈 Performance")
-
+from core.ui_components import page_header
+page_header('Performance', 'How the portfolio has actually done')
 holdings = get_all_holdings()
 if holdings.empty:
     st.info("Add holdings via **Upload Portal** to see performance analysis.")
@@ -168,7 +169,7 @@ try:
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
     )
     fig.add_hline(y=100, line_dash="dot", line_color="gray", annotation_text="Start = 100")
-    st.plotly_chart(fig, use_container_width=True)
+    show_chart(fig)
 
     # ── Summary table ──
     st.subheader("Return Summary")
@@ -263,7 +264,7 @@ try:
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
         )
-        st.plotly_chart(nav_fig, use_container_width=True)
+        show_chart(nav_fig)
 
         st.caption(f"ℹ️ {len(nav_data)} snapshots recorded since {nav_data['date'].iloc[0].strftime('%Y-%m-%d')}.")
 

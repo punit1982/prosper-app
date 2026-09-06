@@ -38,27 +38,36 @@ def fmt_age(secs: float) -> str:
 
 _RESPONSIVE_TABLE_CSS = """
 <style>
+/* Colors here are theme-NEUTRAL on purpose. The first version used
+   var(--secondary-background-color,#f6f6f6) for the mobile card, but Streamlit
+   does not define that custom property in this version, so the fallback won
+   and every card rendered a light-grey panel under the app's light-on-dark
+   text — unreadable. A translucent grey reads correctly on either ground
+   because it tints whatever is behind it instead of replacing it, and
+   currentColor-derived borders do the same. */
 .ptable-wrap{overflow-x:auto;margin:0 0 0.5rem;}
 .ptable{width:100%;border-collapse:collapse;font-size:0.86rem;
-  font-variant-numeric:tabular-nums;}
-.ptable thead th{text-align:left;padding:8px 10px;border-bottom:2px solid var(--line,#d8dee6);
-  font-size:0.72rem;letter-spacing:0.03em;text-transform:uppercase;color:var(--text-color,#31333f);
-  opacity:0.65;white-space:nowrap;}
-.ptable tbody td{padding:8px 10px;border-bottom:1px solid var(--line,#e6e6e6);white-space:nowrap;}
+  color:inherit;font-variant-numeric:tabular-nums;}
+.ptable thead th{text-align:left;padding:8px 10px;border-bottom:2px solid rgba(128,128,128,0.4);
+  font-size:0.72rem;letter-spacing:0.03em;text-transform:uppercase;color:inherit;
+  opacity:0.6;white-space:nowrap;}
+.ptable tbody td{padding:8px 10px;border-bottom:1px solid rgba(128,128,128,0.22);
+  color:inherit;white-space:nowrap;}
 .ptable tbody td.ptable-title{font-weight:600;}
 @media (max-width:767px){
   .ptable-wrap{overflow-x:visible;}
   .ptable, .ptable tbody, .ptable tr, .ptable td{display:block;width:100%;}
   .ptable thead{position:absolute;left:-9999px;}
-  .ptable tr{border:1px solid var(--line,#d8dee6);border-radius:8px;margin-bottom:10px;
-    padding:6px 4px;background:var(--secondary-background-color,#f6f6f6);}
-  .ptable tbody td{border:none;border-bottom:1px dashed var(--line,#e0e0e0);
-    display:flex;justify-content:space-between;gap:12px;white-space:normal;padding:7px 10px;}
+  .ptable tr{border:1px solid rgba(128,128,128,0.28);border-radius:8px;margin-bottom:10px;
+    padding:4px 2px;background:rgba(128,128,128,0.07);}
+  .ptable tbody td{border:none;border-bottom:1px dashed rgba(128,128,128,0.18);
+    display:flex;justify-content:space-between;gap:12px;white-space:normal;padding:7px 10px;
+    min-height:38px;align-items:center;}
   .ptable tbody td:last-child{border-bottom:none;}
-  .ptable tbody td.ptable-title{font-size:1rem;background:transparent;
-    border-bottom:1px solid var(--line,#d0d0d0);margin-bottom:2px;}
-  .ptable tbody td::before{content:attr(data-label);font-weight:600;opacity:0.6;
-    flex:0 0 auto;text-align:left;}
+  .ptable tbody td.ptable-title{font-size:0.95rem;background:transparent;
+    border-bottom:1px solid rgba(128,128,128,0.3);margin-bottom:2px;font-weight:650;}
+  .ptable tbody td::before{content:attr(data-label);font-weight:600;opacity:0.55;
+    flex:0 0 auto;text-align:left;font-size:0.78rem;}
   .ptable tbody td.ptable-title::before{content:none;}
 }
 </style>
@@ -202,8 +211,13 @@ _MOBILE_CSS = """
   [data-testid="stMain"] .modebar{display:none !important;}
 
   /* The floating chat button sits over the bottom-right of every table and
-     chart; give the page enough tail to scroll clear of it. */
+     chart; give the page enough tail to scroll clear of it, and lift it above
+     the bottom navigation bar. */
   [data-testid="stMain"] .block-container > div:last-child{margin-bottom:2rem;}
+  [data-testid="stMain"] [data-testid="stPopover"],
+  div[class*="chat-fab"], div[class*="floating"]{
+    bottom:calc(60px + env(safe-area-inset-bottom,0px)) !important;
+  }
 }
 
 /* ── Hero: the one number the page exists to show ───────────────────────── */
@@ -497,3 +511,197 @@ def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
             "change_value": pct_f,
         })
     return rows
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHARTS ON A 375px CANVAS  (v7.16)
+# ═══════════════════════════════════════════════════════════════════════════
+# Measured failures on the real Command Center at 375px, before this existed:
+#   · P&L attribution — y-axis tick labels clipped to "00 (-4.7%)", and the
+#     value annotations overlapped the bars they belonged to
+#   · sector treemap — leaf labels rendered at 4-6px, pure noise
+#   · allocation bars — ~40% of the width spent on the category column and
+#     ~5% on the bars themselves
+#   · every chart — Plotly's 8-control modebar drawn ON TOP of the data
+#
+# Streamlit cannot read the viewport, so a figure has to work at 375px AND at
+# 1280px from one definition. Everything below is width-independent rather
+# than a phone special case:
+#   automargin lets the axis claim exactly the room its labels need at any
+#   width instead of being clipped by a fixed margin; uniformtext HIDES text
+#   that would render below the legibility floor rather than drawing it at
+#   4px; a horizontal legend below the plot costs height (cheap, we scroll)
+#   instead of width (scarce). The modebar is hidden via config here and via
+#   CSS in mobile_shell, because Streamlit's own toolbar can re-add it.
+
+_CHART_FONT = ('"IBM Plex Sans", -apple-system, BlinkMacSystemFont, '
+               '"Segoe UI", sans-serif')
+
+
+def mobile_chart(fig, *, height: int | None = None, legend: bool = True,
+                 min_text: int = 9, tick_chars: int = 0):
+    """Make a Plotly figure legible at 375px without breaking it at 1280px.
+
+    ``height``     explicit pixel height; defaults to Plotly's own.
+    ``legend``     False hides it entirely — prefer this when the marks are
+                   already labelled, since a legend on a phone is pure cost.
+    ``min_text``   text below this many px is hidden rather than drawn (the
+                   treemap fix). 0 disables.
+    ``tick_chars`` truncate categorical tick labels to this many characters
+                   (adds an ellipsis). 0 leaves them alone — automargin will
+                   make room, which is right until the labels are so long the
+                   plot area collapses.
+
+    Returns the same figure, mutated, so it can be used inline.
+    """
+    layout = {
+        "margin": dict(l=8, r=8, t=28, b=8),
+        "font": dict(family=_CHART_FONT, size=11),
+        "hoverlabel": dict(font=dict(family=_CHART_FONT, size=12)),
+        "xaxis": dict(automargin=True, title=None),
+        "yaxis": dict(automargin=True, title=None),
+        "dragmode": False,
+    }
+    if height:
+        layout["height"] = height
+    if legend:
+        layout["legend"] = dict(orientation="h", yanchor="bottom", y=1.02,
+                                xanchor="left", x=0, font=dict(size=10),
+                                title=None)
+    else:
+        layout["showlegend"] = False
+    if min_text:
+        layout["uniformtext"] = dict(minsize=min_text, mode="hide")
+
+    try:
+        fig.update_layout(**layout)
+    except Exception:
+        # Treemaps/pies have no cartesian axes; retry without them.
+        layout.pop("xaxis", None)
+        layout.pop("yaxis", None)
+        try:
+            fig.update_layout(**layout)
+        except Exception:
+            return fig
+
+    # Pie/donut slice labels default to following the slice angle, so on a
+    # narrow canvas the thin slices print their labels sideways and run them
+    # over the chart edge (measured on Portfolio Summary: "Energy 4.53%" set
+    # vertically and clipped). Horizontal is always readable; uniformtext above
+    # then hides the ones that no longer fit rather than shrinking them.
+    try:
+        for tr in fig.data:
+            if getattr(tr, "type", "") == "pie":
+                tr.insidetextorientation = "horizontal"
+    except Exception:
+        pass
+
+    if tick_chars:
+        def _clip(v):
+            t = str(v)
+            return t if len(t) <= tick_chars else t[: tick_chars - 1] + "…"
+        try:
+            for axis in ("xaxis", "yaxis"):
+                vals = getattr(fig.layout, axis).ticktext
+                if vals:
+                    fig.update_layout(**{axis: dict(
+                        ticktext=[_clip(v) for v in vals])})
+        except Exception:
+            pass
+        # Category axes usually carry their labels on the traces instead.
+        try:
+            for tr in fig.data:
+                for attr in ("y", "x", "labels"):
+                    vals = getattr(tr, attr, None)
+                    if vals is not None and len(vals) and isinstance(vals[0], str):
+                        setattr(tr, attr, [_clip(v) for v in vals])
+                        break
+        except Exception:
+            pass
+    return fig
+
+
+_CHART_CONFIG = {
+    "displayModeBar": False,
+    "scrollZoom": False,
+    "responsive": True,
+    "doubleClick": False,
+}
+
+
+def show_chart(fig, *, key: str | None = None, height: int | None = None,
+               legend: bool = True, min_text: int = 9, tick_chars: int = 0):
+    """``mobile_chart`` + ``st.plotly_chart`` with the modebar off.
+
+    One call so no page has to remember the config dict — the modebar
+    reappearing over the data was the single most common chart complaint."""
+    import streamlit as st
+    fig = mobile_chart(fig, height=height, legend=legend,
+                       min_text=min_text, tick_chars=tick_chars)
+    st.plotly_chart(fig, use_container_width=True, key=key,
+                    config=_CHART_CONFIG)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BOTTOM NAVIGATION  (v7.16)
+# ═══════════════════════════════════════════════════════════════════════════
+# The sidebar lists 24 pages in five groups. On a phone that is a drawer you
+# must open, scroll and read before you can go anywhere, so the four screens
+# actually used day to day cost the same effort as the twenty that are not.
+# This is the standard phone answer: a fixed bar with the few real
+# destinations, always one tap away. Everything else stays in the sidebar,
+# which Streamlit's own header button still opens.
+#
+# Plain anchors rather than st.page_link because a fixed bar has to be ONE
+# element — Streamlit wraps every widget in its own container, so a row of
+# page_links cannot be positioned as a unit. The hrefs are the same URLs
+# st.navigation registers, so they resolve identically.
+
+_NAV_ITEMS = [
+    ("Home",      "/",                   "M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"),
+    ("Portfolio", "/Portfolio_Dashboard", "M4 19V9h4v10zm6 0V5h4v14zm6 0v-7h4v7z"),
+    ("Research",  "/Research_Hub",       "M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14m9 16-4.5-4.5"),
+    ("Risk",      "/Risk_Strategy",      "M12 3 4 6.5v5c0 4.5 3.4 8.7 8 9.5 4.6-.8 8-5 8-9.5v-5z"),
+    ("Ask",       "/AI_Chat",            "M4 5h16v10H8l-4 4z"),
+]
+
+_BOTTOM_NAV_CSS = """
+<style>
+.p-nav{display:none;}
+@media (max-width:767px){
+  .p-nav{
+    display:grid;grid-template-columns:repeat(5,1fr);
+    position:fixed;left:0;right:0;bottom:0;z-index:999;
+    background:var(--background-color,#0e1117);
+    border-top:1px solid rgba(128,128,128,0.28);
+    padding-bottom:env(safe-area-inset-bottom,0);
+    backdrop-filter:blur(10px);
+  }
+  .p-nav a{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;min-height:52px;text-decoration:none;color:inherit;opacity:0.62;
+    font-size:0.63rem;font-weight:600;letter-spacing:0.02em;padding:6px 2px;
+  }
+  .p-nav a:hover,.p-nav a:focus-visible{opacity:1;}
+  .p-nav a:focus-visible{outline:2px solid var(--p-accent,#0984e3);outline-offset:-2px;}
+  .p-nav svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;
+    stroke-linecap:round;stroke-linejoin:round;}
+}
+</style>
+"""
+
+
+def bottom_nav() -> None:
+    """Fixed bottom navigation bar, phones only.
+
+    Call once per run, after the page body — ``mobile_shell`` already reserves
+    the matching bottom padding so the bar never covers the last row."""
+    import streamlit as st
+    links = "".join(
+        f'<a href="{href}" target="_self" aria-label="{label}">'
+        f'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="{path}"/></svg>'
+        f'<span>{label}</span></a>'
+        for label, href, path in _NAV_ITEMS
+    )
+    st.markdown(_BOTTOM_NAV_CSS + f'<nav class="p-nav">{links}</nav>',
+                unsafe_allow_html=True)

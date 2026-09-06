@@ -5,6 +5,7 @@ Shows earnings dates, expected EPS, and how close each holding is to reporting.
 """
 
 import streamlit as st
+from core.ui_components import page_header
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -13,11 +14,7 @@ from core.settings import SETTINGS, enriched_cache_key
 from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch
 
-st.markdown(
-    "<h2 style='margin-bottom:0'>📅 Earnings Calendar</h2>"
-    "<p style='color:#888;margin-top:0'>Upcoming earnings dates for your portfolio holdings</p>",
-    unsafe_allow_html=True,
-)
+page_header('Earnings', 'What reports next, and what you hold into it')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -114,23 +111,23 @@ if not has_date.empty:
 else:
     upcoming = pd.DataFrame()
 
-# ── Summary Metrics ──
-m1, m2, m3, m4 = st.columns(4)
 this_week = upcoming[upcoming["days_until"].between(0, 7)] if not upcoming.empty else pd.DataFrame()
 next_2_weeks = upcoming[upcoming["days_until"].between(0, 14)] if not upcoming.empty else pd.DataFrame()
+_tw_weight = this_week["weight_pct"].sum() if not this_week.empty else 0.0
 
-with m1:
-    st.metric("Reporting This Week", len(this_week))
-with m2:
-    st.metric("Next 2 Weeks", len(next_2_weeks))
-with m3:
-    if not this_week.empty:
-        tw_weight = this_week["weight_pct"].sum()
-        st.metric("Weight Reporting", f"{tw_weight:.1f}%")
-    else:
-        st.metric("Weight Reporting", "0%")
-with m4:
-    st.metric("No Date Available", len(no_date))
+from core.ui_components import hero_metric, stat_grid
+hero_metric(
+    "Reporting this week",
+    str(len(this_week)),
+    delta=f"{_tw_weight:.1f}% of portfolio value" if _tw_weight else "",
+    delta_value=_tw_weight or None,
+    sub="Positions with a confirmed date in the next 7 days",
+)
+stat_grid([
+    ("Next 2 weeks", str(len(next_2_weeks))),
+    ("Weight reporting", f"{_tw_weight:.1f}%"),
+    ("No date", str(len(no_date))),
+], columns=3)
 
 st.divider()
 

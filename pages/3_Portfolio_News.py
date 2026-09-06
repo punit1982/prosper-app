@@ -18,8 +18,8 @@ from core.cio_engine import enrich_portfolio
 from core.data_engine import get_portfolio_news, summarize_news_with_ai, apply_global_filter
 from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
-st.header("📰 Portfolio News")
-
+from core.ui_components import page_header
+page_header('Portfolio News', 'Headlines on names you own')
 holdings = get_all_holdings()
 if holdings.empty:
     st.info("Add holdings via **Upload Portal** to see related news.")

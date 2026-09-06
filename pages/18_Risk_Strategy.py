@@ -7,6 +7,9 @@ comparison, and concentration checks — all in one place.
 """
 
 import streamlit as st
+from core.ui_components import page_header
+from core.ui_components import (show_chart, stat_grid, hero_metric,
+                                render_responsive_table, fmt_compact)
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -53,11 +56,7 @@ _GEO_SIMPLE = {GEO_GREEN: "Calm", GEO_AMBER: "Elevated", GEO_RED: "Critical"}
 # ─────────────────────────────────────────
 # PAGE SETUP
 # ─────────────────────────────────────────
-st.markdown(
-    "<h2 style='margin-bottom:0'>Risk & Strategy</h2>"
-    "<p style='color:#888;margin-top:0'>Portfolio governance, regime awareness, position sizing & optimization</p>",
-    unsafe_allow_html=True,
-)
+page_header('Risk & Strategy', 'Regime, position sizing and portfolio governance')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -382,11 +381,20 @@ with tab_health:
         }
         dim_icons = {"green": "🟢", "amber": "🟡", "red": "🔴"}
 
-        cols = st.columns(5)
-        for i, (key, label) in enumerate(dim_labels.items()):
-            with cols[i % 5]:
-                status = dims.get(key, "green")
-                st.markdown(f"{dim_icons.get(status, '⚪')} {label}")
+        # Five one-line status readouts. st.columns(5) gave each ~65px on a
+        # phone (label truncated) and stacked them into five rows below 640px;
+        # a wrapping flex row fits them in two lines at any width.
+        _chips = "".join(
+            f"<span style='display:inline-flex;align-items:center;gap:5px;"
+            f"padding:4px 9px;border-radius:6px;background:rgba(128,128,128,0.09);"
+            f"font-size:0.78rem;white-space:nowrap'>"
+            f"{dim_icons.get(dims.get(key, 'green'), '⚪')}{label}</span>"
+            for key, label in dim_labels.items()
+        )
+        st.markdown(
+            f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px'>{_chips}</div>",
+            unsafe_allow_html=True,
+        )
 
     st.divider()
 
@@ -531,7 +539,7 @@ with tab_health:
                 "Max": f"{v['limit_max']:.0f}%",
                 "Status": f"{status_icon} {v['status'].replace('_', ' ')}",
             })
-        st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
+        render_responsive_table(pd.DataFrame(exp_rows))
         st.caption("Limits auto-adjust based on market regime. In 'Slowing Down' mode, limits get tighter (more defensive).")
         for name, explain in _param_explain.items():
             st.markdown(f"- **{name}:** {explain}")
@@ -600,18 +608,25 @@ with tab_sizing:
 
     _action_colors = {"Hold": "#4CAF50", "Add": "#2196F3", "Trim": "#FF9800", "Sell": "#f44336"}
     _action_icons = {"Hold": "✅", "Add": "📈", "Trim": "✂️", "Sell": "🚫"}
-    action_cols = st.columns(4)
-    for i, (act, cnt) in enumerate(action_counts.items()):
-        with action_cols[i]:
-            st.markdown(
-                f"<div style='text-align:center;padding:10px;border-radius:8px;"
-                f"border:2px solid {_action_colors[act]};background:rgba(255,255,255,0.02)'>"
-                f"<div style='font-size:1.5rem'>{_action_icons[act]}</div>"
-                f"<div style='font-size:1.4rem;font-weight:700;color:{_action_colors[act]}'>{cnt}</div>"
-                f"<div style='font-size:0.8rem;color:#999'>{act}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+    # Four counts. As st.columns(4) they became four stacked full-width cards
+    # ~90px tall on a phone; as a grid they stay four across and shrink to two
+    # only when the screen genuinely cannot hold four.
+    _acards = "".join(
+        f"<div style='text-align:center;padding:9px 6px;border-radius:8px;"
+        f"border:1.5px solid {_action_colors[act]};background:rgba(128,128,128,0.05)'>"
+        f"<div style='font-size:1.15rem;line-height:1.2'>{_action_icons[act]}</div>"
+        f"<div style='font-size:1.25rem;font-weight:700;line-height:1.25;"
+        f"font-variant-numeric:tabular-nums;color:{_action_colors[act]}'>{cnt}</div>"
+        f"<div style='font-size:0.68rem;opacity:0.65;text-transform:uppercase;"
+        f"letter-spacing:0.04em;font-weight:600'>{act}</div></div>"
+        for act, cnt in action_counts.items()
+    )
+    st.markdown(
+        "<div style='display:grid;gap:8px;margin:4px 0 12px;"
+        "grid-template-columns:repeat(auto-fit,minmax(78px,1fr))'>"
+        f"{_acards}</div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Visual chart: action-colored scatter plot ──
     if not sizing_df.empty:
@@ -640,7 +655,7 @@ with tab_sizing:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.15),
         )
-        st.plotly_chart(fig_guide, use_container_width=True)
+        show_chart(fig_guide)
         st.caption("*Stocks above the line need adding, below need trimming.*")
 
     st.divider()
@@ -696,11 +711,13 @@ with tab_sizing:
 with tab_alloc:
     # Current allocation (single set of pie charts — no duplication)
     st.markdown("#### Your Current Allocation")
-    ac_cols = st.columns(4)
-    for i, (dim, label) in enumerate([
-        ("asset_class", "Asset Class"), ("sector", "Sector"),
-        ("geography", "Geography"), ("cap_size", "Market Cap"),
-    ]):
+    # Four pies in st.columns(4) were ~85px wide each on desktop and stacked
+    # into four 250px blocks on a phone — 1,000px of scroll to compare four
+    # breakdowns. Tabs give each one the full width and cost one tap.
+    _ac_dims = [("asset_class", "Asset Class"), ("sector", "Sector"),
+                ("geography", "Geography"), ("cap_size", "Market Cap")]
+    ac_cols = st.tabs([lbl for _, lbl in _ac_dims])
+    for i, (dim, label) in enumerate(_ac_dims):
         with ac_cols[i]:
             alloc = current_alloc.get(dim, {})
             # Filter out meaningless "Unknown" if it's the only entry
@@ -715,11 +732,11 @@ with tab_alloc:
                                   paper_bgcolor="rgba(0,0,0,0)")
                 fig.update_traces(textposition="inside", textinfo="percent+label",
                                   textfont_size=10)
-                st.plotly_chart(fig, use_container_width=True)
+                show_chart(fig)
             elif alloc:
                 # Single category — show as metric instead of pie
                 k, v = list(alloc.items())[0]
-                st.metric(label, k, f"{v*100:.0f}%")
+                stat_grid([(label, k, f"{v*100:.0f}%", 1)], columns=2)
 
     st.divider()
 
@@ -742,7 +759,7 @@ with tab_alloc:
         fig_compare.add_trace(go.Bar(name=f"Target ({selected_model})", x=reb_df["category"], y=reb_df["target_pct"], marker_color="#FF9800"))
         fig_compare.update_layout(barmode="group", height=320, margin=dict(t=20, l=40, r=20, b=20),
                                   paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_compare, use_container_width=True)
+        show_chart(fig_compare)
 
         # Summary actions
         overweight = [r for r in rebalance if r["action"] == "Overweight"]
@@ -766,7 +783,7 @@ with tab_alloc:
     fig_w.add_vline(x=10, line_dash="dash", line_color="red", annotation_text="10% limit")
     fig_w.update_layout(height=380, margin=dict(t=10, l=10, r=10, b=10),
                         showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig_w, use_container_width=True)
+    show_chart(fig_w)
 
     # HHI with explanation
     if total_mv > 0:
@@ -872,24 +889,28 @@ with tab_advanced:
                     xaxis_title="Volatility (%)", yaxis_title="Return (%)",
                     height=450, margin=dict(t=10, l=50, r=20, b=50),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_ef, use_container_width=True)
+                show_chart(fig_ef)
 
                 if current_pts and optimal and optimal.get("risk"):
                     cp = current_pts[0]
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown("**Your Portfolio**")
-                        st.metric("Return", f"{cp['return_']*100:.1f}%")
-                        st.metric("Risk", f"{cp['risk']*100:.1f}%")
-                        st.metric("Sharpe", f"{cp['sharpe']:.2f}")
-                    with c2:
-                        st.markdown("**Optimal Portfolio**")
-                        st.metric("Return", f"{optimal['return_']*100:.1f}%",
-                                  f"{(optimal['return_']-cp['return_'])*100:+.1f}%")
-                        st.metric("Risk", f"{optimal['risk']*100:.1f}%",
-                                  f"{(optimal['risk']-cp['risk'])*100:+.1f}%")
-                        st.metric("Sharpe", f"{optimal['sharpe']:.2f}",
-                                  f"{optimal['sharpe']-cp['sharpe']:+.2f}")
+                    st.markdown("**Your portfolio**")
+                    stat_grid([
+                        ("Return", f"{cp['return_']*100:.1f}%"),
+                        ("Risk", f"{cp['risk']*100:.1f}%"),
+                        ("Sharpe", f"{cp['sharpe']:.2f}"),
+                    ], columns=3)
+                    st.markdown("**Optimal portfolio**")
+                    stat_grid([
+                        ("Return", f"{optimal['return_']*100:.1f}%",
+                         f"{(optimal['return_']-cp['return_'])*100:+.1f}%",
+                         optimal['return_']-cp['return_']),
+                        ("Risk", f"{optimal['risk']*100:.1f}%",
+                         f"{(optimal['risk']-cp['risk'])*100:+.1f}%",
+                         -(optimal['risk']-cp['risk'])),
+                        ("Sharpe", f"{optimal['sharpe']:.2f}",
+                         f"{optimal['sharpe']-cp['sharpe']:+.2f}",
+                         optimal['sharpe']-cp['sharpe']),
+                    ], columns=3)
 
     elif adv_section == "Factor Exposure":
         st.markdown(
@@ -915,7 +936,7 @@ with tab_advanced:
                     "Status": status,
                     "What it means": _factor_explain.get(factor, ""),
                 })
-            st.dataframe(pd.DataFrame(factor_rows), use_container_width=True, hide_index=True)
+            render_responsive_table(pd.DataFrame(factor_rows))
 
             # Radar chart for visual overview
             f_names = [f.replace("_", " ").title() for f in factor_analysis["factors"].keys()]
@@ -931,7 +952,7 @@ with tab_advanced:
                     height=300, margin=dict(t=20, l=40, r=40, b=20),
                     paper_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(fig_radar, use_container_width=True)
+                show_chart(fig_radar)
         else:
             st.info(
                 "No factor data available yet. Visit the **Portfolio Dashboard** and click "
@@ -972,7 +993,7 @@ with tab_advanced:
             fig_corr = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale="RdYlGn_r",
                                  zmin=-1, zmax=1, aspect="auto")
             fig_corr.update_layout(height=400, margin=dict(t=10, l=10, r=10, b=10))
-            st.plotly_chart(fig_corr, use_container_width=True)
+            show_chart(fig_corr)
 
             zone = corr_data["overall_zone"]
             zone_labels = {
@@ -1006,7 +1027,7 @@ with tab_advanced:
             text=score_df["Score"].apply(lambda x: f"{x:.1f}"), textposition="outside"))
         fig_regime.update_layout(height=250, margin=dict(t=10, l=10, r=40, b=10),
                                  paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_regime, use_container_width=True)
+        show_chart(fig_regime)
 
         # Show which signals drove the decision
         if regime_result.get("signals_used"):

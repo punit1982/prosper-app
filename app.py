@@ -38,6 +38,13 @@ if not _is_authed_early:
 st.session_state.pop("_google_auth_rendered_this_rerun", None)
 
 # ── Global Styling ───────────────────────────────────────────────────────────
+# The mobile design system ships app-wide from here, so every page — including
+# the ones never individually converted (Settings, Upload Portal, IBKR Sync,
+# Users, News) — gets the 44px tap targets, reclaimed block padding, hidden
+# Plotly modebar and faded tab strips without needing to be edited.
+from core.ui_components import mobile_shell as _mobile_shell
+_mobile_shell()
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -280,6 +287,14 @@ pg = st.navigation({
         st.Page("pages/26_Onboarding.py", title="Onboarding", icon="🚀"),
     ],
 })
+
+# ── Mobile bottom navigation ───────────────────────────────────────────────
+# Rendered BEFORE pg.run(), not after: 21 of the 24 pages call st.stop() on an
+# empty state or a missing prerequisite, and st.stop() halts the whole script —
+# so anything after pg.run() never renders on exactly the pages where the user
+# most needs a way out. The bar is position:fixed, so DOM order costs nothing.
+from core.ui_components import bottom_nav as _bottom_nav
+_bottom_nav()
 
 pg.run()
 

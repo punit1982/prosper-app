@@ -17,7 +17,8 @@ from core.grow_engine import GROW_TIERS, GROW_VERSION, run_grow, framework_avail
 from core.grow_render import ENTRY_COLORS, durability_color
 from core.data_engine import get_ticker_info_batch
 
-st.header("GROW Engine")
+from core.ui_components import page_header
+page_header('GROW Engine', 'Two verdicts per name: durability and entry')
 st.caption(
     f"**{GROW_VERSION}** — two questions, answered separately: *is this worth owning* (Durability, no price in it) "
     f"and *is it worth buying today* (Entry, from expected return vs the return the risk demands). "

@@ -6,6 +6,7 @@ Supports: PNG/JPG (AI vision), CSV, XLSX, PDF (AI vision).
 """
 
 import streamlit as st
+from core.ui_components import page_header
 import pandas as pd
 from PIL import Image
 from core.screenshot_parser import parse_brokerage_image
@@ -13,12 +14,7 @@ from core.database import save_holdings, get_all_holdings, save_cash_position
 from core.ui_errors import unexpected
 
 # ── Page Header ──────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='margin-bottom:0'>Upload Portal</h1>"
-    "<p style='color:#888;font-size:1.05rem;margin-top:0'>"
-    "Import holdings from any broker — screenshots, CSVs, Excel, or PDFs</p>",
-    unsafe_allow_html=True,
-)
+page_header('Upload Portal', 'Import holdings from any broker — screenshots, CSV, Excel or PDF')
 
 SUPPORTED_CURRENCIES = [
     "USD", "AED", "INR", "EUR", "GBP", "CHF", "SGD", "HKD",

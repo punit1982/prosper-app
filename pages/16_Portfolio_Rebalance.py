@@ -7,6 +7,7 @@ Two modes:
 """
 
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -31,7 +32,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
-st.title("⚖️ Portfolio Rebalance & Optimization")
+from core.ui_components import (page_header, hero_metric, stat_grid,
+                                render_responsive_table, fmt_compact)
+page_header("Rebalance", "Where you are vs. where the model says you should be")
 
 try:
     # -------------------------------------------------------------------
@@ -144,7 +147,7 @@ try:
                 hole=0.4,
             )
             fig_ac.update_layout(**_pie_layout)
-            st.plotly_chart(fig_ac, use_container_width=True)
+            show_chart(fig_ac)
         else:
             st.caption("No asset class data available.")
 
@@ -157,7 +160,7 @@ try:
                 hole=0.4,
             )
             fig_sec.update_layout(**_pie_layout)
-            st.plotly_chart(fig_sec, use_container_width=True)
+            show_chart(fig_sec)
         else:
             st.caption("No sector data available.")
 
@@ -170,7 +173,7 @@ try:
                 hole=0.4,
             )
             fig_geo.update_layout(**_pie_layout)
-            st.plotly_chart(fig_geo, use_container_width=True)
+            show_chart(fig_geo)
         else:
             st.caption("No geography data available.")
 
@@ -219,7 +222,15 @@ try:
                 "Diff %": "{:+.1f}%",
             })
 
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            # render_responsive_table does no formatting of its own (by design —
+            # it takes display-ready strings), so build the formatted frame here
+            # rather than handing it the Styler's raw numeric data.
+            reb_display = df_sug.copy()
+            for _c, _f in (("Current %", "{:.1f}%"), ("Target %", "{:.1f}%"),
+                           ("Diff %", "{:+.1f}%")):
+                reb_display[_c] = df_sug[_c].apply(
+                    lambda v, _f=_f: _f.format(v) if pd.notna(v) else "—")
+            render_responsive_table(reb_display, title_col="Category")
 
             # Suggested actions summary
             st.subheader("Suggested Actions")
@@ -347,15 +358,16 @@ try:
             yaxis=dict(tickformat=".0%", gridcolor="rgba(255,255,255,0.1)"),
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
         # Optimal weights table
         if optimal:
             st.subheader("Optimal Portfolio Weights (Max Sharpe Ratio)")
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Expected Return", f"{optimal['return_']:.2%}")
-            col_b.metric("Risk (Volatility)", f"{optimal['risk']:.2%}")
-            col_c.metric("Sharpe Ratio", f"{optimal['sharpe']:.2f}")
+            stat_grid([
+                ("Expected return", f"{optimal['return_']:.2%}"),
+                ("Volatility", f"{optimal['risk']:.2%}"),
+                ("Sharpe", f"{optimal['sharpe']:.2f}"),
+            ], columns=3)
 
             opt_df = pd.DataFrame(
                 [
@@ -368,7 +380,7 @@ try:
                     if w > 0.001
                 ]
             )
-            st.dataframe(opt_df, use_container_width=True, hide_index=True)
+            render_responsive_table(opt_df, title_col="Ticker")
 
             # Suggested actions
             st.subheader("Suggested Actions")

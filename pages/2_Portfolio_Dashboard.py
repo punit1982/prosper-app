@@ -165,19 +165,14 @@ with st.sidebar:
             pos_cash = float(converted[converted["amount_base"] >= 0]["amount_base"].sum())
             neg_cash = float(converted[converted["amount_base"] < 0]["amount_base"].sum())
             st.markdown("---")
-            sc1, sc2, sc3 = st.columns(3)
-            with sc1:
-                st.metric("Net Cash", f"{base_currency} {net_cash:,.0f}")
-            with sc2:
-                if neg_cash < 0:
-                    st.metric("Margin Debt", f"{base_currency} {neg_cash:,.0f}")
-                else:
-                    st.metric("Margin Debt", "None")
-            with sc3:
-                if total_margin_cost > 0:
-                    st.metric("Annual Margin Cost", f"{base_currency} {total_margin_cost:,.0f}")
-                else:
-                    st.metric("Annual Margin Cost", "—")
+            from core.ui_components import stat_grid as _sg2, fmt_compact as _fc2
+            _sg2([
+                ("Net cash", _fc2(net_cash, base_currency), "", net_cash),
+                ("Margin debt", _fc2(neg_cash, base_currency) if neg_cash < 0 else "None",
+                 "", neg_cash if neg_cash < 0 else None),
+                ("Margin cost / yr", _fc2(total_margin_cost, base_currency)
+                 if total_margin_cost > 0 else "—"),
+            ], columns=3)
         else:
             st.caption("No cash positions added yet.")
 

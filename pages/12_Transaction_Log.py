@@ -13,7 +13,9 @@ from core.database import (
     delete_transaction, get_realized_pnl_summary, get_total_realized_pnl,
 )
 
-st.header("📝 Transaction Log")
+from core.ui_components import (page_header, hero_metric, stat_grid,
+                                render_responsive_table, fmt_compact)
+page_header("Transactions", "Every buy and sell, and what it actually earned")
 
 # ─────────────────────────────────────────
 # ADD TRANSACTION FORM
@@ -94,13 +96,18 @@ if not pnl_summary.empty:
     total_losses = pnl_summary[pnl_summary["realized_pnl"] < 0]["realized_pnl"].sum()
     total_fees = pnl_summary["total_fees"].sum()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Net Realized P&L",
-              f"${total_realized:+,.2f}",
-              delta=f"{'Profit' if total_realized >= 0 else 'Loss'}")
-    c2.metric("Total Gains", f"${total_gains:,.2f}")
-    c3.metric("Total Losses", f"${abs(total_losses):,.2f}")
-    c4.metric("Total Fees Paid", f"${total_fees:,.2f}")
+    hero_metric(
+        "Net realized P&L",
+        fmt_compact(total_realized, "USD"),
+        delta="Profit" if total_realized >= 0 else "Loss",
+        delta_value=total_realized,
+        title=f"USD {total_realized:,.2f}",
+    )
+    stat_grid([
+        ("Gains", fmt_compact(total_gains, "USD"), "", 1),
+        ("Losses", fmt_compact(abs(total_losses), "USD"), "", -1),
+        ("Fees", fmt_compact(total_fees, "USD")),
+    ], columns=3)
 
     # Per-ticker breakdown
     st.markdown("**Per-Ticker Breakdown**")
@@ -131,7 +138,7 @@ if not pnl_summary.empty:
     show_cols = [c for c in show_cols if c in display_pnl.columns]
 
     from core.data_engine import clean_nan
-    st.dataframe(clean_nan(display_pnl[show_cols]), use_container_width=True, hide_index=True)
+    render_responsive_table(clean_nan(display_pnl[show_cols]), title_col="Ticker")
 else:
     st.info("No transactions recorded yet. Add buy/sell trades above to see realized P&L.")
 
@@ -198,7 +205,7 @@ if not txns.empty:
     show_cols = [c for c in show_cols if c in display_txns.columns]
 
     from core.data_engine import clean_nan
-    st.dataframe(clean_nan(display_txns[show_cols]), use_container_width=True, hide_index=True)
+    render_responsive_table(clean_nan(display_txns[show_cols]))
 
     # Export transactions
     csv_data = txns.to_csv(index=False)

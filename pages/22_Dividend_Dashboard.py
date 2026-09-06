@@ -5,6 +5,8 @@ Portfolio dividend income, ex-dates, yield analysis, and income projections.
 """
 
 import streamlit as st
+from core.ui_components import page_header
+from core.ui_components import show_chart, hero_metric, stat_grid, fmt_compact
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -17,11 +19,7 @@ from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
 from core.ui_components import status_chip, render_responsive_table
 
-st.markdown(
-    "<h2 style='margin-bottom:0'>💰 Dividend Dashboard</h2>"
-    "<p style='color:#888;margin-top:0'>Income tracking, yield analysis & dividend projections</p>",
-    unsafe_allow_html=True,
-)
+page_header('Dividends', 'Income, yield and projections')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -154,20 +152,21 @@ total_annual_income = payers["annual_income"].sum()
 portfolio_yield = (total_annual_income / total_mv * 100) if total_mv > 0 else 0
 
 # ── Hero Metrics ──
-m1, m2, m3, m4, m5 = st.columns(5)
-with m1:
-    st.metric("Annual Dividend Income",
-              f"{base_currency} {total_annual_income:,.0f}" if total_annual_income > 0 else "—")
-with m2:
-    st.metric("Portfolio Yield", f"{portfolio_yield:.2f}%" if portfolio_yield > 0 else "—")
-with m3:
-    st.metric("Monthly Income",
-              f"{base_currency} {total_annual_income/12:,.0f}" if total_annual_income > 0 else "—")
-with m4:
-    st.metric("Dividend Payers", f"{len(payers)}/{len(div_df)}")
-with m5:
-    payer_weight = payers["market_value"].sum() / total_mv * 100 if total_mv > 0 else 0
-    st.metric("Payer Weight", f"{payer_weight:.1f}%")
+payer_weight = payers["market_value"].sum() / total_mv * 100 if total_mv > 0 else 0
+hero_metric(
+    "Annual dividend income",
+    fmt_compact(total_annual_income, base_currency) if total_annual_income > 0 else "—",
+    delta=f"{portfolio_yield:.2f}% portfolio yield" if portfolio_yield > 0 else "",
+    delta_value=portfolio_yield,
+    sub=f"{len(payers)} of {len(div_df)} holdings pay a dividend",
+    title=f"{base_currency} {total_annual_income:,.2f}" if total_annual_income > 0 else "",
+)
+stat_grid([
+    ("Per month", fmt_compact(total_annual_income / 12, base_currency)
+     if total_annual_income > 0 else "—"),
+    ("Yield", f"{portfolio_yield:.2f}%" if portfolio_yield > 0 else "—"),
+    ("Payer weight", f"{payer_weight:.1f}%"),
+], columns=3)
 
 st.divider()
 
@@ -209,7 +208,7 @@ with tab_income:
                          title="Dividend Income by Sector", hole=0.4)
             fig.update_layout(height=300, margin=dict(t=40, l=10, r=10, b=10),
                               paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
         # Top contributors bar chart
         top10 = income_df.head(10)
@@ -219,7 +218,7 @@ with tab_income:
         fig_bar.update_layout(height=300, margin=dict(t=40, l=40, r=20, b=20),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               xaxis_title="", yaxis_title=f"Annual Income ({base_currency})")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        show_chart(fig_bar)
     else:
         st.info("None of your holdings currently pay dividends.")
 
@@ -264,7 +263,7 @@ with tab_yield:
                                   annotation_text="75% payout (caution)")
             fig_scatter.update_layout(height=400, margin=dict(t=40, l=40, r=20, b=40),
                                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            show_chart(fig_scatter)
 
         # Sustainability flags
         high_payout = payers[payers["payout_ratio"].notna() & (payers["payout_ratio"] > 0.90)]
@@ -339,7 +338,7 @@ with tab_growth:
         fig_proj.update_layout(height=350, margin=dict(t=40, l=40, r=20, b=20),
                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                                yaxis_title=f"Annual Income ({base_currency})")
-        st.plotly_chart(fig_proj, use_container_width=True)
+        show_chart(fig_proj)
 
         # Summary
         st.markdown(

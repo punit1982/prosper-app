@@ -13,6 +13,7 @@ import io
 import logging
 
 import streamlit as st
+from core.ui_components import page_header
 import pandas as pd
 from datetime import datetime
 from core.settings import get_api_key, load_user_settings, save_user_settings
@@ -41,12 +42,7 @@ except ImportError:
 
 
 # ── Page Header ──────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='margin-bottom:0'>🔗 Interactive Brokers Sync</h1>"
-    "<p style='color:#888;font-size:1.05rem;margin-top:0'>"
-    "Import your IBKR portfolio — Choose the easiest method for you</p>",
-    unsafe_allow_html=True,
-)
+page_header('IBKR Sync', 'Import your Interactive Brokers portfolio')
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
 def parse_ibkr_csv(csv_file) -> pd.DataFrame:
@@ -465,15 +461,14 @@ else:  # "🔗 Flex Query API (Automatic)"
     try:
         last_sync = get_last_sync_info()
         if last_sync:
-            col_ls1, col_ls2, col_ls3 = st.columns(3)
-            with col_ls1:
-                st.metric("Last Sync", last_sync.get("timestamp", "Never"))
-            with col_ls2:
-                st.metric("Holdings Synced", last_sync.get("count", 0))
-            with col_ls3:
-                status = last_sync.get("status", "Unknown")
-                icon = "✅" if status == "Success" else "⚠️"
-                st.metric("Status", f"{icon} {status}")
+            status = last_sync.get("status", "Unknown")
+            icon = "✅" if status == "Success" else "⚠️"
+            from core.ui_components import stat_grid as _sg3
+            _sg3([
+                ("Last sync", str(last_sync.get("timestamp", "Never"))),
+                ("Holdings", str(last_sync.get("count", 0))),
+                ("Status", f"{icon} {status}"),
+            ], columns=3)
             st.divider()
     except Exception:
         pass  # No last sync info available

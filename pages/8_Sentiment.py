@@ -13,6 +13,7 @@ Optimized:
 
 import time
 import streamlit as st
+from core.ui_components import show_chart
 import pandas as pd
 import plotly.express as px
 
@@ -23,8 +24,8 @@ from core.settings import SETTINGS, enriched_cache_key
 
 SENT_TTL = 1800  # 30 minutes — re-fetch sentiment every 30 min
 
-st.header("💬 Sentiment Score")
-
+from core.ui_components import page_header
+page_header('Sentiment', 'How the news is leaning on each position')
 holdings = get_all_holdings()
 if holdings.empty:
     st.info("Add holdings via **Upload Portal** to see sentiment analysis.")
@@ -173,7 +174,7 @@ if not sdf.empty:
         paper_bgcolor="rgba(0,0,0,0)",
     )
     fig.update_traces(textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
+    show_chart(fig)
 
     avg_raw = sdf["Composite"].mean()
     avg_display = round(avg_raw)

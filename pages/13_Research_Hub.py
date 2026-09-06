@@ -13,7 +13,8 @@ so it loads instantly.
 
 import streamlit as st
 
-st.header("🔭 Research Hub")
+from core.ui_components import page_header
+page_header('Research Hub', 'Everything Prosper knows about one stock, in order')
 st.caption(
     "Everything Prosper can tell you about a single stock, in the order "
     "that usually makes sense. Start at the top and drill down only where "
