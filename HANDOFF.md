@@ -330,6 +330,44 @@ container, so the document's own `scrollHeight` is always just the viewport heig
   · Rebalance's suggestion table was being handed the Styler's raw numeric frame (unformatted floats);
   `render_responsive_table` does no formatting by design, so the display frame is now built explicitly.
 
+- **v7.17 (6 Sep 2026) — four reported issues**:
+  1. **Local currency.** Per-share figures hard-coded `USD`/`$`, so a Tokyo listing read "USD 6731.0"
+     — a ~150x misstatement, not a formatting nit. New
+     `core/currency_normalizer.instrument_currency(ticker, info)`: quote source's own `currency`
+     field first (**the only thing that gets `U03A.L` right — an `.L` suffix that trades in USD**),
+     then exchange suffix, then stored value. Applied to Equity Deep Dive (price, div/share, mean
+     target + range, SMA levels, avg cost), Peer Comparison (hero + the per-row Price column, which
+     can span exchanges) and Earnings Calendar EPS. **Portfolio-level totals deliberately keep the
+     base currency** — market_value is already FX-converted by `enrich_portfolio`; only per-share
+     numbers take the instrument's currency. Transaction Log now names the base currency instead of "$".
+  2. **IBKR-style tappable rows.** `ui_components.position_rows()` — two lines per holding, identity
+     left / figures hard-right (ticker · last price + day %, then name · market value + unrealised
+     P&L %), colour-coded, ~10 per screen. Each row is a real `st.button`, and tapping it opens
+     Equity Deep Dive on that holding via `open_deep_dive()`, which seeds the picker's session key
+     `dd_ticker_select`. **The trick that makes it look like a table: Streamlit runs a button label
+     through its full markdown pipeline** — `\n\n` gives two `<p>`, `:green[…]` gives `<span>`, so
+     writing each line as exactly two markdown nodes lets `justify-content:space-between` produce the
+     left/right split. Deep Dive gained a **Peers** tab (peers drawn from the user's own holdings in
+     the same sector), so Analyst / Sentiment / Technical / Peers are one screen per name.
+  3. **Daily IBKR price backfill** (`core/ibkr_prices.py`). Pulls IBKR's own `markPrice` for every
+     position on the first run of each calendar day into `price_cache`, covering UAE (ADX/DFM),
+     European/offshore funds and suspended lines. **Uses the Flex Query WEB SERVICE (token + query
+     id) — the IBKR MCP connector authenticates as the user's own Claude connector and can never be
+     called by the deployed app.** Widened past `parse_positions`' STK-only filter to
+     FUND/ETF/BOND — that filter is what was dropping the European funds. Never overwrites a live
+     quote (an IBKR mark is a previous close); **stamps the date BEFORE the fetch** so a Flex timeout
+     cannot re-trigger on every rerun for the rest of the day (IBKR rate-limits report generation
+     hard). Dashboard states whether it is configured.
+  4. **Bottom tabs did nothing.** They were plain `<a href>` anchors — a real navigation that reloads
+     the app, builds a NEW Streamlit session and destroys the price cache and active portfolio.
+     Replaced with `st.page_link` (client-side, session preserved; verified by clicking through with
+     prices still cached). A fixed bar cannot be one element when Streamlit wraps every widget, so a
+     marker is emitted and CSS pins the FOLLOWING horizontal block and forces it back to 5-across.
+  **Gotcha repeated from v7.16, worth internalising:** `st.markdown("<div class=…>")` never wraps the
+  widgets that follow it — Streamlit closes every element it opens. Scope CSS off a marker element's
+  following siblings (`:has(.marker) ~ …`), which is what `position_rows`, `mobile_only_start/end`
+  and `bottom_nav` all now do.
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
