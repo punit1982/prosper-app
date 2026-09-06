@@ -15,7 +15,7 @@ Why yfinance?
 
 import math
 import pandas as pd
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.settings import SETTINGS
 from core.currency_normalizer import detect_currency_from_ticker, get_exchange_rate, normalise_currency
@@ -45,13 +45,63 @@ def clear_failed_tickers():
     _failed_tickers.clear()
 
 
+# Tickers with NO live quote on any source Prosper can reach, for a reason that
+# is a property of the instrument rather than a transient fetch failure. These
+# skip the whole fetch cascade and go straight to the broker's own last mark
+# (holdings.last_known_price), and the UI reports them as "priced from the
+# broker's mark", not as an error the user could fix by correcting a ticker.
+# Each entry records WHY, because the right answer changes if the reason does.
+NO_LIVE_SOURCE: Dict[str, str] = {
+    # Ozon Holdings PLC ADR (ISIN US69269L1044). Nasdaq listing suspended;
+    # IBKR carries the position on its internal "VALUE" exchange and marks it
+    # by hand. Verified 2026-09-06: Yahoo returns "symbol may be delisted" for
+    # both OZON and the OZONY OTC line.
+    "OZON":         "Listing suspended — no public quote; IBKR's own mark is used",
+    # Balasore Alloys Ltd (NSE ISPATALLOY / BSE 513142). Verified 2026-09-06:
+    # no data on Yahoo for ISPATALLOY.NS, ISPATALLOY.BO or 513142.BO, and
+    # Trendlyne's own export reports a blank Day Change % — i.e. the source
+    # Prosper imports from has no live quote either.
+    "ISPATALLOY.NS": "Trading suspended on NSE/BSE — last reported price is used",
+    "ISPATALLOY":    "Trading suspended on NSE/BSE — last reported price is used",
+}
+
+
+def _is_unlisted_india_fund(ticker: str) -> bool:
+    """Legacy rows where Trendlyne's Morningstar fund id was written straight
+    into a ".NS" ticker (e.g. "F0GBR06R8K.NS"). Open-ended Indian mutual funds
+    are not exchange-listed, so no NSE/BSE symbol exists and no quote API can
+    ever price them. parse_trendlyne() now emits "MF:<id>" for these, but
+    holdings saved before that fix still carry the ".NS" form — recognising it
+    here self-heals them without needing a re-upload."""
+    t = str(ticker).upper()
+    base = t.split(".")[0]
+    return t.endswith((".NS", ".BO")) and base.startswith("F0") and len(base) >= 8
+
+
 def _is_synthetic_ticker(ticker) -> bool:
     """True for placeholder tickers with no real exchange symbol to price live —
-    "MF:..." (Morningstar-ID-only mutual funds, core/file_parsers.py) and
-    "RESTRICTED:..." (unvested RSU/PSU stock-plan awards, core/screenshot_parser.py).
+    "MF:..." (Morningstar-ID-only mutual funds, core/file_parsers.py),
+    "RESTRICTED:..." (unvested RSU/PSU stock-plan awards, core/screenshot_parser.py),
+    legacy Morningstar-id-as-".NS" fund rows, and instruments in NO_LIVE_SOURCE.
     These always rely on last_known_price instead."""
     t = str(ticker)
-    return t.startswith("MF:") or t.startswith("RESTRICTED:")
+    return (
+        t.startswith("MF:")
+        or t.startswith("RESTRICTED:")
+        or _is_unlisted_india_fund(t)
+        or t.upper() in NO_LIVE_SOURCE
+    )
+
+
+def no_live_source_reason(ticker) -> Optional[str]:
+    """Plain-English reason this holding has no live quote, or None if it
+    should be priceable and a missing price is a real failure."""
+    t = str(ticker)
+    if t.startswith("RESTRICTED:"):
+        return "Unvested stock-plan award — valued at the plan's reported price"
+    if t.startswith("MF:") or _is_unlisted_india_fund(t):
+        return "Open-ended mutual fund — not exchange-listed; NAV from the broker"
+    return NO_LIVE_SOURCE.get(t.upper())
 
 
 # ─────────────────────────────────────────
@@ -111,12 +161,20 @@ def _fetch_one_quote(sym: str) -> tuple:
     """
     import yfinance as yf
 
-    # Source 0a: Mubasher intraday CSV — for ADX stocks (.AE suffix, static chart IDs)
+    # Source 0a: Mubasher intraday CSV — the ONLY working free source for UAE
+    # (ADX + DFM) prices. Gated on is_uae_symbol(), not is_adx_ticker(): the
+    # latter is an exact-key lookup in a 7-entry static chart-ID map, so
+    # ALDAR.AE / BURJEEL.AE / PUREHEALTH.AE and every ":DFM"/":ADX" colon form
+    # never reached Mubasher at all and fell through to sources with no UAE
+    # coverage. adx_client discovers chart IDs at runtime for anything not in
+    # the map, so the map is an optimisation, not the supported-ticker list.
     try:
-        from core.adx_client import get_quote as adx_quote, is_adx_ticker
-        if is_adx_ticker(sym):
+        from core.adx_client import get_quote as adx_quote, is_uae_symbol
+        if is_uae_symbol(sym):
             adx = adx_quote(sym)
             if adx and adx.get("price", 0) > 0:
+                adx["symbol"] = sym
+                adx.setdefault("currency", "AED")
                 return sym, adx
     except Exception:
         pass
@@ -178,6 +236,48 @@ def _fetch_one_quote(sym: str) -> tuple:
             if yf_currency:
                 result["currency"] = yf_currency.upper()
             return sym, result
+    except Exception:
+        pass
+
+    # Source 1b: Yahoo's public `chart` endpoint, called directly.
+    # The reliability audit (5 Sep 2026) confirmed live that `chart` still
+    # serves quotes with no auth and no crumb, while the `quoteSummary` and v7
+    # `quote` endpoints yfinance also relies on now return "Unauthorized /
+    # Invalid Crumb" on a raw call — yfinance only works because of an internal
+    # crumb workaround that has already broken once (v7.4). This is the same
+    # data from the same vendor without that fragility, and it covers the
+    # non-US exchanges Finnhub below does not (Borsa Italiana, BSE, SGX, SIX).
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+            # range=1d: meta.chartPreviousClose is then the PREVIOUS SESSION's
+            # close, which is what a day change is measured against. Over a
+            # longer range it is instead the close before the window starts
+            # (5d gave Prysmian a "+0.16%" and an SME line a "-47%" day move).
+            params={"range": "1d", "interval": "1d"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            meta = ((r.json().get("chart") or {}).get("result") or [{}])[0].get("meta") or {}
+            price = meta.get("regularMarketPrice")
+            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+            if prev is not None and float(prev) <= 0:
+                prev = None
+            if price and _price_sanity_check(sym, price, "yahoo-chart"):
+                price = float(price)
+                change = round(price - float(prev), 6) if prev else None
+                result = {
+                    "symbol":            sym,
+                    "price":             price,
+                    "change":            change,
+                    "changesPercentage": round((change / float(prev)) * 100, 4) if (prev and change is not None) else None,
+                    "source":            "yahoo-chart",
+                }
+                if meta.get("currency"):
+                    result["currency"] = str(meta["currency"]).upper()
+                return sym, result
     except Exception:
         pass
 

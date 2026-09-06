@@ -895,12 +895,39 @@ def portfolio_section():
 
     # ── Footer ─────────────────────────────
     st.divider()
-    missing = df[pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").isna()]["ticker"].tolist()
-    if missing:
+    # Two different things used to be reported identically as "No live price":
+    # a holding whose ticker genuinely failed to fetch (actionable — the ticker
+    # may be wrong), and a holding no quote API can ever price (a suspended
+    # listing, an unlisted mutual fund, an unvested award). The second group is
+    # working as designed and is valued from the broker's own mark, so telling
+    # the user to go fix its ticker was wrong advice.
+    from core.cio_engine import no_live_source_reason
+    _priced = pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce")
+
+    by_design, unpriced = {}, []
+    for _tkr, _has_price in zip(df["ticker"].tolist(), _priced.notna().tolist()):
+        reason = no_live_source_reason(_tkr)
+        if reason:
+            if not _has_price:
+                by_design.setdefault(reason, []).append(str(_tkr))
+        elif not _has_price:
+            unpriced.append(str(_tkr))
+
+    if unpriced:
         st.warning(
-            f"**No live price for: {', '.join(missing)}**  \n"
-            "Ticker resolution tried common exchange suffixes (.AE, .AD, .SW, .SI, etc.) but these weren't found.  \n"
-            "For UAE: try `EMAAR.AE` (DFM) or `ADCB.AD` (ADX) · Swiss: `NESN.SW` · Singapore: `D05.SI`"
+            f"**Couldn't fetch a price for: {', '.join(unpriced)}**  \n"
+            "Every source was tried. This usually means the stored ticker is missing or has the "
+            "wrong exchange suffix — check it in **Edit Holdings** above.  \n"
+            "Examples: Swiss `NESN.SW` · Singapore `D05.SI` · India NSE `TCS.NS`, BSE-only `543895.BO`. "
+            "UAE holdings are priced from ADX/DFM directly and need no suffix change."
+        )
+    if by_design:
+        lines = "  \n".join(f"· **{', '.join(t)}** — {r}" for r, t in by_design.items())
+        st.info(
+            "**No market quote exists for these — and none is expected:**  \n"
+            f"{lines}  \n"
+            "They show no value because the broker's last reported price is also missing. "
+            "Re-upload that account in **Upload Portal** to capture it."
         )
     if "52w_high" not in df.columns:
         st.caption("ℹ️ Click **📊 Load Extended Metrics** for Analyst Consensus, 52W H/L, Growth data, Fund metrics, and more.")

@@ -72,11 +72,11 @@ _price_cache: Dict[str, Tuple[float, float, float]] = {}
 _CACHE_TTL = 60   # 1 minute — intraday data refreshes every 5 minutes on Mubasher
 
 
-def _parse_csv_last_row(csv_text: str) -> Optional[Tuple[float, float]]:
+def _parse_csv_last_row(csv_text: str) -> Optional[Tuple[float, float, str]]:
     """
-    Parse the last and second-to-last rows of a CSV to get (close, prev_close).
+    Parse the last and second-to-last rows of an intraday CSV.
     CSV format: datetime, open, high, low, close, volume
-    Returns (close, prev_close) or None if unparseable.
+    Returns (close, prev_bar_close, session_date "YYYY-MM-DD") or None.
     """
     lines = [l.strip() for l in csv_text.strip().split("\n") if l.strip()]
     if not lines:
@@ -84,29 +84,106 @@ def _parse_csv_last_row(csv_text: str) -> Optional[Tuple[float, float]]:
     try:
         last_close = float(lines[-1].split(",")[4])
         prev_close = float(lines[-2].split(",")[4]) if len(lines) >= 2 else last_close
-        return last_close, prev_close
+        session_date = lines[-1].split(",")[0].split("/")[0]
+        return last_close, prev_close, session_date
     except (IndexError, ValueError):
         return None
 
 
+# Chart IDs discovered at runtime for tickers not in the static map. Permanent
+# per security, so once found they are reused for the life of the process.
+_discovered_chart_ids: Dict[str, str] = {}
+
+
+def _mubasher_slug(ticker: str) -> str:
+    """The exact slug Mubasher uses in its stock-page URL for this ticker,
+    resolved the same way get_fundamentals() does: explicit override →
+    curated slug in ADX_CHART_IDS → the bare normalised symbol."""
+    norm = _normalise_uae_symbol(ticker)
+    known = ADX_CHART_IDS.get(ticker) or ADX_CHART_IDS.get(norm + ".AE")
+    return _MUBASHER_SLUG_OVERRIDES.get(norm) or (known[0] if known else norm)
+
+
 def _fetch_chart_id(ticker: str) -> Optional[str]:
     """
-    Discover the chart ID for an ADX ticker by loading its Mubasher stock page.
-    Used only for tickers not yet in ADX_CHART_IDS.
+    Discover the chart ID for a UAE ticker by loading its Mubasher stock page.
+    Used for tickers not in the static ADX_CHART_IDS map.
+
+    Tries BOTH market paths (ADX and DFM) and resolves the slug through the
+    same override map get_fundamentals() uses — previously this stripped only
+    ".AE"/".AD" and looked at /markets/ADX/ alone, so a DFM listing or any
+    ticker whose Mubasher slug differs from the bare symbol (PUREHEALT →
+    PUREHEALTH, EMIRATESN → EMIRATESNBD) could never be discovered.
     """
-    # Derive slug: strip .AE suffix
-    slug = ticker.upper().replace(".AE", "").replace(".AD", "")
-    url = f"{MUBASHER_STOCK_BASE}/{slug}"
+    cached = _discovered_chart_ids.get(ticker)
+    if cached:
+        return cached
+    slug = _mubasher_slug(ticker)
+    for market in _UAE_MUBASHER_MARKETS:
+        url = f"https://english.mubasher.info/markets/{market}/stocks/{slug}"
+        try:
+            r = _SESSION.get(url, timeout=12)
+            if r.status_code != 200:
+                continue
+            ids = re.findall(
+                r"File\.Delay_Stock_Intraday_Charts_Dir/([a-f0-9]+)\.csv", r.text
+            )
+            if ids:
+                _discovered_chart_ids[ticker] = ids[0]
+                return ids[0]
+        except Exception:
+            continue
+    return None
+
+
+def _previous_session_close(chart_id: str, session_date: str) -> Optional[float]:
+    """
+    Close of the last completed session BEFORE `session_date` (format
+    "YYYY-MM-DD"), read from the daily history CSV.
+
+    The intraday CSV only covers the current session, so its second-to-last row
+    is the previous *bar* (a minute ago), not the previous *day* — using it made
+    every UAE holding report a 0.00% day change. The daily file's own last row
+    is that same current session, so the day's reference close is the last row
+    strictly older than it.
+    """
     try:
-        r = _SESSION.get(url, timeout=12)
-        if r.status_code != 200:
+        r = _SESSION.get(f"{HISTORY_BASE}/{chart_id}.csv", timeout=15)
+        if r.status_code != 200 or not r.text.strip():
             return None
-        ids = re.findall(
-            r"File\.Delay_Stock_Intraday_Charts_Dir/([a-f0-9]+)\.csv", r.text
-        )
-        return ids[0] if ids else None
+        # Only the tail matters; the file carries 20+ years of daily bars.
+        lines = [l.strip() for l in r.text.strip().split("\n")[-30:] if l.strip()]
+        for line in reversed(lines):
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            row_date = parts[0].split("/")[0]
+            if session_date and row_date >= session_date:
+                continue   # same session as the intraday file, or newer
+            try:
+                close = float(parts[4])
+            except ValueError:
+                continue
+            if close > 0:
+                return close
+        return None
     except Exception:
         return None
+
+
+_prev_close_cache: Dict[str, Tuple[Optional[float], float]] = {}
+_PREV_CLOSE_TTL = 6 * 3600  # daily bar — no point refetching intraday
+
+
+def _cached_previous_close(chart_id: str, session_date: str) -> Optional[float]:
+    now = time.time()
+    key = f"{chart_id}|{session_date}"
+    hit = _prev_close_cache.get(key)
+    if hit and (now - hit[1]) < _PREV_CLOSE_TTL:
+        return hit[0]
+    value = _previous_session_close(chart_id, session_date)
+    _prev_close_cache[key] = (value, now)
+    return value
 
 
 def get_quote(ticker: str) -> Optional[Dict]:
@@ -133,8 +210,10 @@ def get_quote(ticker: str) -> Optional[Dict]:
                 "source": "mubasher",
             }
 
-    # Look up chart ID — static map first, then live discovery
-    info = ADX_CHART_IDS.get(ticker)
+    # Look up chart ID — static map (in whatever form the ticker is stored),
+    # then live discovery across both UAE markets.
+    norm = _normalise_uae_symbol(ticker)
+    info = ADX_CHART_IDS.get(ticker) or ADX_CHART_IDS.get(norm + ".AE")
     if info:
         _, chart_id = info
     else:
@@ -151,9 +230,15 @@ def get_quote(ticker: str) -> Optional[Dict]:
         result = _parse_csv_last_row(r.text)
         if result is None:
             return None
-        price, prev_close = result
+        price, intraday_prev, session_date = result
         if price <= 0:
             return None
+
+        # Day change is measured against the previous SESSION's close, not the
+        # previous intraday bar (which is seconds old and made every UAE
+        # holding read as 0.00%). Fall back to the intraday bar only if the
+        # daily history file is unavailable.
+        prev_close = _cached_previous_close(chart_id, session_date) or intraday_prev
 
         # Store in cache
         _price_cache[ticker] = (price, prev_close, now)
@@ -176,10 +261,11 @@ def get_history_csv(ticker: str) -> Optional[str]:
     Fetch raw historical daily OHLCV CSV for an ADX ticker.
     Returns CSV text (date, open, high, low, close, volume) or None.
     """
-    info = ADX_CHART_IDS.get(ticker)
-    if not info:
+    norm = _normalise_uae_symbol(ticker)
+    info = ADX_CHART_IDS.get(ticker) or ADX_CHART_IDS.get(norm + ".AE")
+    chart_id = info[1] if info else _fetch_chart_id(ticker)
+    if not chart_id:
         return None
-    _, chart_id = info
     url = f"{HISTORY_BASE}/{chart_id}.csv"
     try:
         r = _SESSION.get(url, timeout=15)
@@ -228,6 +314,15 @@ _MUBASHER_SLUG_OVERRIDES: Dict[str, str] = {
     "ALDAR":      "ALDAR",
     "ADCB":       "ADCB",
     "BURJEEL":    "BURJEEL",
+    "PUREHEALTH": "PUREHEALTH",
+    "ADNOCLS":    "ADNOCLS",
+    "ADNOCGAS":   "ADNOCGAS",
+    "ADPORTS":    "ADPORTS",
+    "BOROUGE":    "BOROUGE",
+    "SPACE42":    "SPACE42",
+    "FAB":        "FAB",
+    "DEWA":       "DEWA",
+    "SALIK":      "SALIK",
 }
 
 

@@ -85,6 +85,23 @@ TICKER_OVERRIDES: Dict[str, str] = {
     "HYDD.SI":       "HYDD.SI",
     "S08":           "S08.SI",    # Seatown Holdings (Singapore)
     "S08.SI":        "S08.SI",
+    # Prysmian SpA. IBKR's Activity Statement writes the symbol as "PRYm" —
+    # the trailing lowercase letter is IBKR's own share-class marker, not part
+    # of the ticker. The statement's "Financial Instrument Information" section
+    # gives the real one: symbol PRY, exchange BVME, ISIN IT0004176001. The
+    # parser upper-cased "PRYm" and appended ".MI", producing a symbol that
+    # exists nowhere. Verified 2026-09-06: PRY.MI quotes EUR 122.25 on Yahoo,
+    # exactly matching the statement's own 122.25 mark for this position.
+    "PRYM.MI":       "PRY.MI",
+    "PRYM":          "PRY.MI",
+    # Exhicon Events Media Solutions Ltd. Trendlyne's NSEcode column holds an
+    # internal numeric id (17041163) for this BSE-only SME listing; the real
+    # symbol is its BSE scrip code, 543895. parse_trendlyne() already prefers
+    # BSEcode for numeric NSEcodes, so this only rescues holdings saved before
+    # that fix — verified 2026-09-06: 543895.BO returns "Exhicon Events Media
+    # Solutions Limited" live on Yahoo.
+    "17041163.NS":   "543895.BO",
+    "17041163":      "543895.BO",
 }
 
 # ─────────────────────────────────────────
@@ -226,11 +243,16 @@ def resolve_ticker(ticker: str, currency: str = "USD") -> str:
         _cache_set(f"resolved_{ticker}", crypto_sym)
         return crypto_sym
 
-    # ── ADX tickers — resolve immediately, skip yfinance probing (it hangs) ──
-    # Prices come from Mubasher (adx_client), not yfinance.
+    # ── UAE tickers — resolve to themselves, skip every probe ────────────────
+    # Prices AND fundamentals come from Mubasher (adx_client), never yfinance
+    # or Twelve Data. Previously gated on is_adx_ticker() (exact match against
+    # a 7-entry static map), so most UAE holdings fell through to the cascade
+    # below, where Twelve Data rewrote them into "TICKER:DFM"/"TICKER:ADX" —
+    # a form Mubasher can't match and Twelve Data's plan won't quote. That
+    # rewrite is what produced "No live price" for tickers Mubasher serves fine.
     try:
-        from core.adx_client import is_adx_ticker
-        if is_adx_ticker(ticker):
+        from core.adx_client import is_uae_symbol
+        if is_uae_symbol(ticker):
             _cache_set(f"resolved_{ticker}", ticker)
             return ticker
     except Exception:
@@ -319,6 +341,23 @@ def resolve_tickers_batch(tickers_with_currency: List[Tuple[str, str]]) -> Dict[
     for ticker, currency in tickers_with_currency:
         if ticker in TICKER_OVERRIDES:
             result[ticker] = TICKER_OVERRIDES[ticker]
+
+    # Layer 0b: UAE tickers resolve to themselves — Mubasher (core/adx_client)
+    # keys off the stored symbol, so there is nothing to resolve and nothing
+    # any probe could improve. This MUST run before the SQLite cache read
+    # below: resolve_ticker()'s own UAE fast-path is never reached for a
+    # ticker that already has a cached resolution, so a single bad run that
+    # cached "ADCB.AE" -> "ADCB:DFM" (Twelve Data's format, which Mubasher
+    # cannot match and Twelve Data's plan will not quote) kept that holding
+    # unpriceable for the full 24h cache TTL and re-armed itself on every
+    # refresh. Pinning here also self-heals any such entry already stored.
+    try:
+        from core.adx_client import is_uae_symbol
+        for ticker, _currency in tickers_with_currency:
+            if ticker not in result and is_uae_symbol(ticker):
+                result[ticker] = ticker
+    except Exception:
+        pass
 
     remaining = [(t, c) for t, c in tickers_with_currency if t not in result]
     remaining_tickers = [t for t, _ in remaining]
@@ -1345,8 +1384,8 @@ def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 
     # ── ADX tickers: use Mubasher CSV history ──
     try:
-        from core.adx_client import is_adx_ticker, get_history_csv
-        if is_adx_ticker(ticker):
+        from core.adx_client import is_uae_symbol, get_history_csv
+        if is_uae_symbol(ticker):
             csv_text = get_history_csv(ticker)
             if csv_text:
                 hist = _adx_history_to_df(csv_text)
