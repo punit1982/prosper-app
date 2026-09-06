@@ -132,6 +132,35 @@ def detect_currency_from_ticker(ticker: str) -> str:
     return "USD"
 
 
+def instrument_currency(ticker: str, info: dict | None = None,
+                        stored: str | None = None) -> str:
+    """The currency an instrument actually TRADES in — not the user's base.
+
+    Order of trust:
+      1. the quote source's own ``currency`` field (yfinance/.info, Mubasher,
+         the Yahoo chart meta) — authoritative, and the only thing that gets
+         cases like U03A.L right (an .L suffix that trades in USD)
+      2. the exchange suffix
+      3. whatever the broker file stored
+      4. USD
+
+    Pages were printing "USD 6731.0" against a Tokyo-listed name because they
+    hard-coded the prefix. A price is meaningless without the right unit, so
+    every per-share figure on a security page must use this, and only
+    portfolio-level totals use the base currency.
+    """
+    if info:
+        raw = info.get("currency") or info.get("financialCurrency")
+        if raw and str(raw).strip():
+            return normalise_currency(str(raw))
+    detected = detect_currency_from_ticker(ticker)
+    if detected != "USD":
+        return detected
+    if stored and str(stored).strip():
+        return normalise_currency(str(stored))
+    return "USD"
+
+
 def normalise_currency(code: str) -> str:
     """
     Convert a currency string to a proper ISO 4217 code.

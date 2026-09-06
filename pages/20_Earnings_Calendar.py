@@ -116,6 +116,7 @@ next_2_weeks = upcoming[upcoming["days_until"].between(0, 14)] if not upcoming.e
 _tw_weight = this_week["weight_pct"].sum() if not this_week.empty else 0.0
 
 from core.ui_components import hero_metric, stat_grid
+from core.currency_normalizer import instrument_currency as _ec_ccy
 hero_metric(
     "Reporting this week",
     str(len(this_week)),
@@ -159,8 +160,11 @@ if not upcoming.empty:
             "Earnings Date": row["earnings_dt"].strftime("%b %d, %Y") if pd.notna(row["earnings_dt"]) else "—",
             "Days": f"{int(days)}" if pd.notna(days) else "—",
             "Weight %": f"{row['weight_pct']:.1f}%",
-            "Trail EPS": f"${row['trailing_eps']:.2f}" if pd.notna(row['trailing_eps']) else "—",
-            "Fwd EPS": f"${row['forward_eps']:.2f}" if pd.notna(row['forward_eps']) else "—",
+            # EPS is per-share, so it carries the listing's own currency.
+            "Trail EPS": (f"{_ec_ccy(str(row.get('ticker','')))} {row['trailing_eps']:.2f}"
+                          if pd.notna(row['trailing_eps']) else "—"),
+            "Fwd EPS": (f"{_ec_ccy(str(row.get('ticker','')))} {row['forward_eps']:.2f}"
+                        if pd.notna(row['forward_eps']) else "—"),
             "Sector": row["sector"],
         })
 

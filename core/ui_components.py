@@ -482,11 +482,13 @@ def responsive_holdings(rows, *, group: str = "", limit: int = 25) -> int:
 
 
 def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
-    """Turn an enriched holdings slice into :func:`responsive_holdings` rows.
+    """Turn an enriched holdings slice into row data, biggest position first.
 
-    Shows what a phone actually needs per position — what it is, what it is
-    worth, how it moved today — and leaves quantity, average cost, analyst
-    target and the rest to the desktop table."""
+    Carries the fields IBKR's own positions list leads with — last price, day
+    change, market value, unrealised P&L% — because "what is it worth and what
+    did it do" is the whole reason for opening the screen. Quantity, average
+    cost and the ratios stay on the desktop table and the deep dive.
+    """
     import pandas as pd
     # Biggest positions first — a phone shows a couple of dozen rows before the
     # user gives up scrolling, so they should be the ones that move the total.
@@ -494,21 +496,29 @@ def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
         sub_df = sub_df.assign(
             _mv=pd.to_numeric(sub_df["market_value"], errors="coerce")
         ).sort_values("_mv", ascending=False, na_position="last")
+
+    def _num(v):
+        try:
+            f = float(v)
+            return None if pd.isna(f) else f
+        except (TypeError, ValueError):
+            return None
+
     rows = []
     for _, r in sub_df.iterrows():
-        mv = r.get("market_value")
-        pct = r.get("change_pct")
-        try:
-            pct_f = float(pct)
-            pct_txt = f"{pct_f:+.2f}%"
-        except (TypeError, ValueError):
-            pct_f, pct_txt = None, ""
+        mv  = _num(r.get("market_value"))
+        px  = _num(r.get("current_price"))
+        chg = _num(r.get("change_pct"))
         rows.append({
-            "symbol": str(r.get("ticker", "")),
-            "name": str(r.get(name_col, "") or "")[:34],
-            "value": fmt_compact(mv, symbol) if pd.notna(mv) else "—",
-            "change": pct_txt,
-            "change_value": pct_f,
+            "symbol":     str(r.get("ticker", "")),
+            "name":       str(r.get(name_col, "") or "")[:38],
+            "price":      f"{px:,.2f}" if px is not None else "",
+            "change_pct": chg,
+            "value":      fmt_compact(mv, symbol) if mv is not None else "—",
+            "pnl_pct":    _num(r.get("unrealized_pnl_pct")),
+            # consumed by the older read-only responsive_holdings list
+            "change":       f"{chg:+.2f}%" if chg is not None else "",
+            "change_value": chg,
         })
     return rows
 
@@ -657,35 +667,58 @@ def show_chart(fig, *, key: str | None = None, height: int | None = None,
 # page_links cannot be positioned as a unit. The hrefs are the same URLs
 # st.navigation registers, so they resolve identically.
 
+# Streamlit's own page_link is used, NOT plain anchors. The first version used
+# <a href="/Portfolio_Dashboard">, which is a real navigation: the browser
+# reloads the app, Streamlit builds a brand-new session, and every bit of
+# session state — the enriched-portfolio cache, the active portfolio id, the
+# loaded prices — is gone. On Render's free tier that also means waiting out a
+# fresh script run. It reads as "the tabs don't work".
+#
+# page_link routes client-side and keeps the session, but Streamlit wraps each
+# widget in its own container, so the bar cannot be one element. Instead a
+# marker element is emitted and CSS pins the horizontal block that FOLLOWS it,
+# then forces it back into a 5-across grid (st.columns would otherwise stack
+# below ~640px — the same rule this whole design system exists to work around).
 _NAV_ITEMS = [
-    ("Home",      "/",                   "M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"),
-    ("Portfolio", "/Portfolio_Dashboard", "M4 19V9h4v10zm6 0V5h4v14zm6 0v-7h4v7z"),
-    ("Research",  "/Research_Hub",       "M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14m9 16-4.5-4.5"),
-    ("Risk",      "/Risk_Strategy",      "M12 3 4 6.5v5c0 4.5 3.4 8.7 8 9.5 4.6-.8 8-5 8-9.5v-5z"),
-    ("Ask",       "/AI_Chat",            "M4 5h16v10H8l-4 4z"),
+    ("pages/00_Command_Center.py",     "Home",      ":material/home:"),
+    ("pages/2_Portfolio_Dashboard.py", "Portfolio", ":material/table_chart:"),
+    ("pages/13_Research_Hub.py",       "Research",  ":material/search:"),
+    ("pages/18_Risk_Strategy.py",      "Risk",      ":material/shield:"),
+    ("pages/24_AI_Chat.py",            "Ask",       ":material/forum:"),
 ]
 
 _BOTTOM_NAV_CSS = """
 <style>
-.p-nav{display:none;}
 @media (max-width:767px){
-  .p-nav{
-    display:grid;grid-template-columns:repeat(5,1fr);
+  [data-testid="stElementContainer"]:has(.p-navmark){display:none;}
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]{
     position:fixed;left:0;right:0;bottom:0;z-index:999;
+    display:grid !important;grid-template-columns:repeat(5,1fr) !important;
+    gap:0 !important;margin:0 !important;padding-bottom:env(safe-area-inset-bottom,0);
     background:var(--background-color,#0e1117);
     border-top:1px solid rgba(128,128,128,0.28);
-    padding-bottom:env(safe-area-inset-bottom,0);
-    backdrop-filter:blur(10px);
   }
-  .p-nav a{
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:2px;min-height:52px;text-decoration:none;color:inherit;opacity:0.62;
-    font-size:0.63rem;font-weight:600;letter-spacing:0.02em;padding:6px 2px;
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
+    [data-testid="stColumn"]{width:auto !important;min-width:0 !important;flex:none !important;}
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
+    a[data-testid="stPageLink-NavLink"]{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:1px;min-height:52px;padding:6px 2px;margin:0;border-radius:0;opacity:0.65;
+    }
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
+    a[data-testid="stPageLink-NavLink"] p{font-size:0.62rem !important;font-weight:600 !important;
+      margin:0 !important;line-height:1.1;}
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
+    a[data-testid="stPageLink-NavLink"] span[data-testid="stIconMaterial"]{
+      font-size:20px !important;margin:0 !important;}
+}
+/* Above 767px the bar is not a bar at all — the sidebar already has every
+   page, so the links simply do not render. */
+@media (min-width:768px){
+  [data-testid="stElementContainer"]:has(.p-navmark),
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]{
+    display:none !important;
   }
-  .p-nav a:hover,.p-nav a:focus-visible{opacity:1;}
-  .p-nav a:focus-visible{outline:2px solid var(--p-accent,#0984e3);outline-offset:-2px;}
-  .p-nav svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;
-    stroke-linecap:round;stroke-linejoin:round;}
 }
 </style>
 """
@@ -694,14 +727,241 @@ _BOTTOM_NAV_CSS = """
 def bottom_nav() -> None:
     """Fixed bottom navigation bar, phones only.
 
-    Call once per run, after the page body — ``mobile_shell`` already reserves
-    the matching bottom padding so the bar never covers the last row."""
+    Call once per run, BEFORE ``pg.run()`` — 21 of the 24 pages call
+    ``st.stop()`` on an empty state, and ``st.stop()`` halts the whole script,
+    so anything rendered after the page body disappears on exactly the screens
+    where a way out matters most."""
     import streamlit as st
-    links = "".join(
-        f'<a href="{href}" target="_self" aria-label="{label}">'
-        f'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="{path}"/></svg>'
-        f'<span>{label}</span></a>'
-        for label, href, path in _NAV_ITEMS
-    )
-    st.markdown(_BOTTOM_NAV_CSS + f'<nav class="p-nav">{links}</nav>',
+    st.markdown(_BOTTOM_NAV_CSS + "<div class='p-navmark'></div>",
                 unsafe_allow_html=True)
+    cols = st.columns(5, gap="small")
+    for col, (page, label, icon) in zip(cols, _NAV_ITEMS):
+        with col:
+            st.page_link(page, label=label, icon=icon)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TAPPABLE POSITION ROWS  (v7.17)
+# ═══════════════════════════════════════════════════════════════════════════
+# The IBKR mobile positions list is the reference: two lines per holding, the
+# identity on the left and the numbers hard-right, and the whole row opens the
+# instrument. The read-only HTML row list could not do the second part —
+# Streamlit has no click handler for injected markup — so each row is now a
+# real st.button whose *label* is markdown.
+#
+# Streamlit renders a button label through its full markdown pipeline: "\n\n"
+# becomes two <p> elements, and :green[…] / :gray[…] become <span>s. Writing
+# each line as exactly two markdown nodes (a **strong** and a coloured span)
+# means `display:flex; justify-content:space-between` on the <p> puts the
+# identity left and the figure right — the IBKR split, from a button label.
+#
+# A full-page anchor was rejected for the same reason the bottom bar was: it
+# reloads the app and destroys the session (the price cache, the active
+# portfolio). A button reruns in place.
+
+# Scoped off the marker element, not a wrapper div: st.markdown closes every
+# element it opens, so "<div class=…>" before a run of widgets never actually
+# contains them. The marker's following siblings inside the same vertical
+# block are the row buttons, so that is what gets styled.
+_TAP_ROWS_CSS = """
+<style>
+[data-testid="stElementContainer"]:has(.p-rowmark){display:none;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button{
+  width:100%;text-align:left;border:none;border-radius:0;
+  border-bottom:1px solid rgba(128,128,128,0.22);
+  background:transparent;padding:8px 11px;min-height:52px;
+  color:inherit;box-shadow:none;
+}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button:hover,
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button:focus-visible{
+  background:rgba(128,128,128,0.10);color:inherit;
+}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button
+  [data-testid="stMarkdownContainer"]{width:100%;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  margin:0 !important;font-variant-numeric:tabular-nums;line-height:1.34;
+  text-align:left;
+}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:first-child{
+  font-size:0.88rem;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:last-child{
+  font-size:0.73rem;opacity:0.75;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p > span{
+  white-space:nowrap;flex:0 0 auto;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p > strong{
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+/* Kill the gap Streamlit puts between stacked widgets so rows sit flush. */
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"]:has([data-testid="stButton"]){margin-bottom:0 !important;}
+.p-group{position:sticky;top:0;z-index:2;}
+</style>
+"""
+
+
+def _sr(text: str) -> str:
+    """Escape the few characters Streamlit's markdown would otherwise eat
+    inside a button label (tickers legitimately contain '.', '-' and '&')."""
+    return (str(text).replace("[", "(").replace("]", ")")
+            .replace("*", "").replace("_", " ").replace("$", ""))
+
+
+def _colour_wrap(text: str, value) -> str:
+    """Streamlit colour-span markdown, chosen by sign."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return f":gray[{text}]"
+    if v > 0:
+        return f":green[{text}]"
+    if v < 0:
+        return f":red[{text}]"
+    return f":gray[{text}]"
+
+
+def position_rows(rows, *, key_prefix: str, limit: int = 25,
+                  group: str = "") -> tuple:
+    """Tappable IBKR-style position rows. Returns (clicked_ticker, hidden_count).
+
+    ``rows``: dicts with keys ``symbol``, ``name``, ``price``, ``change_pct``,
+    ``value``, ``pnl_pct``. Everything except ``symbol`` is optional.
+    """
+    import streamlit as st
+
+    rows = list(rows)
+    hidden = max(0, len(rows) - limit) if limit else 0
+    shown = rows[:limit] if limit else rows
+
+    if group:
+        label = group if not hidden else f"{group} · top {len(shown)} by value"
+        st.markdown(f"<div class='p-group'>{label}</div>", unsafe_allow_html=True)
+    # The marker must be the LAST element before the rows — the CSS styles its
+    # following siblings.
+    st.markdown(_TAP_ROWS_CSS + "<div class='p-rowmark'></div>",
+                unsafe_allow_html=True)
+
+    clicked = None
+    for i, r in enumerate(shown):
+        sym = _sr(r.get("symbol", ""))
+        name = _sr(r.get("name", "") or "")[:38]
+        price = r.get("price")
+        chg = r.get("change_pct")
+        value = r.get("value") or ""
+        pnl = r.get("pnl_pct")
+
+        right_top = []
+        if price:
+            right_top.append(str(price))
+        if chg is not None:
+            right_top.append(f"{float(chg):+.2f}%")
+        line1_right = _colour_wrap(_sr("  ".join(right_top)), chg) if right_top else ":gray[—]"
+
+        right_bot = [str(value)] if value else []
+        if pnl is not None:
+            right_bot.append(f"{float(pnl):+.1f}%")
+        line2_right = _colour_wrap(_sr("  ".join(right_bot)), pnl) if right_bot else ":gray[ ]"
+
+        label = f"**{sym}** {line1_right}\n\n{name or ' '} {line2_right}"
+        if st.button(label, key=f"{key_prefix}_row_{i}_{sym}",
+                     use_container_width=True):
+            clicked = r.get("symbol", "")
+    return clicked, hidden
+
+
+def open_deep_dive(ticker: str) -> None:
+    """Send the user to Equity Deep Dive with ``ticker`` already selected.
+
+    Deep Dive's picker is a selectbox keyed ``dd_ticker_select``; seeding that
+    key before the widget is built makes it the widget's initial value, so the
+    page opens on the tapped holding instead of whatever was there last."""
+    import streamlit as st
+    st.session_state["dd_source"] = "Portfolio"
+    st.session_state["dd_ticker_select"] = ticker
+    st.session_state["research_ticker"] = ticker
+    st.switch_page("pages/18_Equity_Deep_Dive.py")
+
+
+_MOBILE_ONLY_CSS = """
+<style>
+/* Everything between the open and close markers is phone-only, and the
+   st.dataframe that follows the close marker is desktop-only. Streamlit gives
+   no way to put a class on a widget's own container in 1.41, so the boundary
+   is expressed with marker elements and :has() sibling selectors. */
+[data-testid="stElementContainer"]:has(.p-monly-a),
+[data-testid="stElementContainer"]:has(.p-monly-b){display:none;}
+@media (min-width:768px){
+  [data-testid="stElementContainer"]:has(.p-monly-a)
+    ~ [data-testid="stElementContainer"]{display:none;}
+  [data-testid="stElementContainer"]:has(.p-monly-b)
+    ~ [data-testid="stElementContainer"]{display:block;}
+}
+@media (max-width:767px){
+  [data-testid="stElementContainer"]:has(.p-monly-b)
+    + [data-testid="stElementContainer"]:has([data-testid="stDataFrame"]){display:none;}
+}
+</style>
+"""
+
+
+def mobile_only_start() -> None:
+    """Open a phone-only region (see :func:`mobile_only_end`)."""
+    import streamlit as st
+    st.markdown(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>",
+                unsafe_allow_html=True)
+
+
+def mobile_only_end() -> None:
+    """Close a phone-only region. The immediately following ``st.dataframe``
+    becomes desktop-only, so the same data has one presentation per width."""
+    import streamlit as st
+    st.markdown("<div class='p-monly-b'></div>", unsafe_allow_html=True)
+
+
+_MOBILE_ONLY_CSS = """
+<style>
+/* Everything between the open and close markers is phone-only, and the
+   st.dataframe that follows the close marker is desktop-only. Streamlit gives
+   no way to put a class on a widget's own container in 1.41, so the boundary
+   is expressed with marker elements and :has() sibling selectors. */
+[data-testid="stElementContainer"]:has(.p-monly-a),
+[data-testid="stElementContainer"]:has(.p-monly-b){display:none !important;}
+@media (min-width:768px){
+  [data-testid="stElementContainer"]:has(.p-monly-a)
+    ~ [data-testid="stElementContainer"]:has(.p-taprows),
+  [data-testid="stElementContainer"]:has(.p-monly-a)
+    ~ [data-testid="stElementContainer"]:has([data-testid="stButton"]),
+  [data-testid="stElementContainer"]:has(.p-monly-a)
+    ~ [data-testid="stElementContainer"]:has([data-testid="stCheckbox"]),
+  [data-testid="stElementContainer"]:has(.p-monly-a)
+    ~ [data-testid="stElementContainer"]:has(.p-group){display:none !important;}
+}
+@media (max-width:767px){
+  [data-testid="stElementContainer"]:has(.p-monly-b)
+    ~ [data-testid="stElementContainer"]:has([data-testid="stDataFrame"]){
+      display:none !important;}
+}
+</style>
+"""
+
+
+def mobile_only_start() -> None:
+    """Open a phone-only region (see :func:`mobile_only_end`)."""
+    import streamlit as st
+    st.markdown(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>",
+                unsafe_allow_html=True)
+
+
+def mobile_only_end() -> None:
+    """Close a phone-only region. The ``st.dataframe`` that follows becomes
+    desktop-only, so the same data has exactly one presentation per width."""
+    import streamlit as st
+    st.markdown("<div class='p-monly-b'></div>", unsafe_allow_html=True)

@@ -98,15 +98,15 @@ if not pnl_summary.empty:
 
     hero_metric(
         "Net realized P&L",
-        fmt_compact(total_realized, "USD"),
+        fmt_compact(total_realized, _base_ccy),
         delta="Profit" if total_realized >= 0 else "Loss",
         delta_value=total_realized,
-        title=f"USD {total_realized:,.2f}",
+        title=f"{_base_ccy} {total_realized:,.2f}",
     )
     stat_grid([
-        ("Gains", fmt_compact(total_gains, "USD"), "", 1),
-        ("Losses", fmt_compact(abs(total_losses), "USD"), "", -1),
-        ("Fees", fmt_compact(total_fees, "USD")),
+        ("Gains", fmt_compact(total_gains, _base_ccy), "", 1),
+        ("Losses", fmt_compact(abs(total_losses), _base_ccy), "", -1),
+        ("Fees", fmt_compact(total_fees, _base_ccy)),
     ], columns=3)
 
     # Per-ticker breakdown
@@ -128,11 +128,13 @@ if not pnl_summary.empty:
             display_pnl[col] = display_pnl[col].apply(lambda x: f"{x:,.2f}")
     for col in ["Avg Buy Price", "Avg Sell Price"]:
         if col in display_pnl.columns:
-            display_pnl[col] = display_pnl[col].apply(lambda x: f"${x:,.4f}" if x > 0 else "—")
+            display_pnl[col] = display_pnl[col].apply(
+                lambda x: f"{_base_ccy} {x:,.4f}" if x > 0 else "—")
     if "Realized P&L" in display_pnl.columns:
-        display_pnl["Realized P&L"] = display_pnl["Realized P&L"].apply(lambda x: f"${x:+,.2f}")
+        display_pnl["Realized P&L"] = display_pnl["Realized P&L"].apply(
+            lambda x: f"{_base_ccy} {x:+,.2f}")
     if "Fees" in display_pnl.columns:
-        display_pnl["Fees"] = display_pnl["Fees"].apply(lambda x: f"${x:,.2f}")
+        display_pnl["Fees"] = display_pnl["Fees"].apply(lambda x: f"{_base_ccy} {x:,.2f}")
 
     show_cols = ["Ticker", "Total Bought", "Total Sold", "Avg Buy Price", "Avg Sell Price", "Realized P&L", "Fees"]
     show_cols = [c for c in show_cols if c in display_pnl.columns]
@@ -199,7 +201,8 @@ if not txns.empty:
     if "Price" in display_txns.columns:
         display_txns["Price"] = display_txns["Price"].apply(lambda x: f"{x:,.4f}")
     if "Fees" in display_txns.columns:
-        display_txns["Fees"] = display_txns["Fees"].apply(lambda x: f"${x:,.2f}" if x > 0 else "—")
+        display_txns["Fees"] = display_txns["Fees"].apply(
+            lambda x: f"{_base_ccy} {x:,.2f}" if x > 0 else "—")
 
     show_cols = ["Date", "Ticker", "Name", "Type", "Quantity", "Price", "Currency", "Fees", "Broker", "Notes"]
     show_cols = [c for c in show_cols if c in display_txns.columns]

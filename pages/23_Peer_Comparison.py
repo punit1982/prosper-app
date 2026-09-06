@@ -254,9 +254,13 @@ if sel_row is not None:
     # collided) and stacked into six rows below 640px. Price leads; the rest
     # are supporting ratios, so they belong in a grid, not six hero slots.
     _px = sel_row['Price']
+    # Per-share price in the instrument's own currency — "$" was wrong for
+    # every non-US peer (a Tokyo or ADX line is not quoted in dollars).
+    from core.currency_normalizer import instrument_currency as _ic
+    _pccy = _ic(str(sel_row.get("Ticker", "")) or selected_ticker)
     hero_metric(
         "Price",
-        f"${_px:,.2f}" if _px else "—",
+        f"{_pccy} {_px:,.2f}" if _px else "—",
         sub=f"{sel_row['Sector']} / {sel_row['Industry']}",
     )
     stat_grid([
@@ -304,7 +308,12 @@ with tab_table:
         "Ticker": display_df["Ticker"],
         "Company": display_df["Company"],
         "Mkt Cap": display_df["Market Cap"].apply(_fmt_cap),
-        "Price": display_df["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) and x else "—"),
+        # Peers can span exchanges, so tag each row's own currency rather than
+        # implying they are all quoted in dollars.
+        "Price": [
+            (f"{_ic(str(t))} {v:,.2f}" if pd.notna(v) and v else "—")
+            for t, v in zip(display_df.get("Ticker", display_df.index), display_df["Price"])
+        ],
         "P/E (TTM)": display_df["P/E (TTM)"].apply(lambda x: _fmt_num(x)),
         "P/E (Fwd)": display_df["P/E (Fwd)"].apply(lambda x: _fmt_num(x)),
         "P/B": display_df["P/B"].apply(lambda x: _fmt_num(x)),

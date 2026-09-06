@@ -288,6 +288,18 @@ pg = st.navigation({
     ],
 })
 
+# ── IBKR daily price backfill ──────────────────────────────────────────────
+# First authenticated run of each calendar day, pull IBKR's own mark price for
+# every position and write it into price_cache where nothing live exists.
+# This is what puts a number on the UAE (ADX/DFM), European fund and offshore
+# lines that no free quote API covers — see core/ibkr_prices for why it uses
+# the Flex Query web service and not the IBKR MCP connector.
+try:
+    from core.ibkr_prices import maybe_daily_refresh as _ibkr_daily
+    _ibkr_daily()
+except Exception:
+    pass
+
 # ── Mobile bottom navigation ───────────────────────────────────────────────
 # Rendered BEFORE pg.run(), not after: 21 of the 24 pages call st.stop() on an
 # empty state or a missing prerequisite, and st.stop() halts the whole script —

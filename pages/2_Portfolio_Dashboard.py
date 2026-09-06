@@ -632,19 +632,27 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
         st.caption(f"**{label}**")
-        # Phones get a card list, desktop keeps the full sortable table. See
-        # core/ui_components.responsive_holdings — measured on a 375px viewport
-        # this table showed 3 of its 12 columns inside a nested scroll-box.
-        from core.ui_components import responsive_holdings, holdings_rows
+        # Phones get tappable IBKR-style rows; desktop keeps the full sortable
+        # table. Tapping a row opens Equity Deep Dive on that holding.
+        from core.ui_components import (position_rows, holdings_rows,
+                                        open_deep_dive, mobile_only_start,
+                                        mobile_only_end)
         # Key must be per-tab: _render_currency_section runs once for every
         # currency/country tab, so a fixed key raised StreamlitDuplicateElementKey.
         _show_key = f"{tab_key}_show_all_stocks"
-        _hidden = responsive_holdings(holdings_rows(stocks_df, sym),
-                                      group=label.replace("📈 ", ""),
-                                      limit=None if st.session_state.get(_show_key) else 25)
+        mobile_only_start()
+        _clicked, _hidden = position_rows(
+            holdings_rows(stocks_df, sym),
+            key_prefix=f"{tab_key}_stk",
+            group=label.replace("📈 ", ""),
+            limit=None if st.session_state.get(_show_key) else 25,
+        )
         if _hidden:
             st.checkbox(f"Show all {len(stocks_df)} stocks", key=_show_key,
                         help="Phones show the 25 largest positions by value first.")
+        mobile_only_end()
+        if _clicked:
+            open_deep_dive(_clicked)
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # ── Funds & ETFs table ──
@@ -657,9 +665,17 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
                        if fund_signed else fund_display.style)
 
         st.caption(f"**📊 Funds & ETFs — {len(funds_df)}**")
-        from core.ui_components import responsive_holdings, holdings_rows
-        responsive_holdings(holdings_rows(funds_df, sym),
-                            group=f"Funds & ETFs — {len(funds_df)}", limit=25)
+        from core.ui_components import (position_rows, holdings_rows,
+                                        open_deep_dive, mobile_only_start,
+                                        mobile_only_end)
+        mobile_only_start()
+        _fclicked, _ = position_rows(holdings_rows(funds_df, sym),
+                                     key_prefix=f"{tab_key}_fnd",
+                                     group=f"Funds & ETFs — {len(funds_df)}",
+                                     limit=25)
+        mobile_only_end()
+        if _fclicked:
+            open_deep_dive(_fclicked)
         st.dataframe(fund_styled, use_container_width=True, hide_index=True)
 
 
@@ -902,6 +918,29 @@ def portfolio_section():
     # listing, an unlisted mutual fund, an unvested award). The second group is
     # working as designed and is valued from the broker's own mark, so telling
     # the user to go fix its ticker was wrong advice.
+    def _ibkr_backfill_notice():
+        """Say whether the once-a-day IBKR mark backfill is actually running.
+
+        Holdings with no free quote (UAE, European/offshore funds) are valued
+        from IBKR's own markPrice — but only if a Flex token and query id are
+        configured. Silence here used to look identical to "it is set up and
+        still not working", so state which it is."""
+        try:
+            from core.ibkr_prices import is_configured as _ibkr_ready
+            ready = _ibkr_ready()
+        except Exception:
+            ready = False
+        if ready:
+            st.caption(
+                "🔗 IBKR backfill is on — these value from your broker's mark price, "
+                "refreshed once on the first visit each day."
+            )
+        else:
+            st.caption(
+                "🔗 Set up **IBKR Sync** (Flex token + query id) to have these priced "
+                "automatically from your broker's own mark, once a day."
+            )
+
     from core.cio_engine import no_live_source_reason
     _priced = pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce")
 
@@ -926,8 +965,11 @@ def portfolio_section():
             "requests from cloud servers, so the app can't reach it directly — the ticker is fine, "
             "nothing to change in Edit Holdings.  \n"
             "**Fix:** run **IBKR Sync** (or re-upload the account in **Upload Portal**) and they'll "
-            "value from your broker's own price. A daily background job also refreshes these when set up."
+            "value from your broker's own price."
         )
+        _ibkr_backfill_notice()
+    if by_design and not uae_unpriced:
+        _ibkr_backfill_notice()
     if unpriced:
         st.warning(
             f"**Couldn't fetch a price for: {', '.join(unpriced)}**  \n"

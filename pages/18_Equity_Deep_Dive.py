@@ -24,7 +24,7 @@ from core.data_engine import (
 )
 from core.grow_engine import run_grow, GROW_TIERS
 from core.settings import SETTINGS, enriched_cache_key
-from core.ui_errors import fetch_failed
+from core.ui_errors import fetch_failed, empty_state
 
 from core.ui_components import (page_header, hero_metric, stat_grid,
                                 fmt_compact, render_responsive_table)
@@ -198,6 +198,12 @@ st.divider()
 # ═══════════════════════════════════════════════════════════════════
 # SECTION 2 — PRICE & VALUATION SNAPSHOT
 # ═══════════════════════════════════════════════════════════════════
+# Every per-share figure on this page is quoted in the instrument's OWN
+# currency, not the user's base. Printing "USD 6731.0" for a Tokyo listing was
+# not a formatting nit — it silently misstated the price by ~150x.
+from core.currency_normalizer import instrument_currency as _instr_ccy
+ccy = _instr_ccy(ticker, info)
+
 price = info.get("currentPrice") or info.get("regularMarketPrice")
 prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
 day_change = None
@@ -216,7 +222,7 @@ fwd_pe = info.get("forwardPE")
 # a phone, putting the tab strip below the fold on the app's densest page.
 hero_metric(
     "Price",
-    f"USD {price:,.2f}" if price else "—",
+    f"{ccy} {price:,.2f}" if price else "—",
     delta=(f"{day_change:+.2f} ({day_pct:+.1f}%) today"
            if day_change is not None else ""),
     delta_value=day_change,
@@ -261,10 +267,68 @@ st.divider()
 # ═══════════════════════════════════════════════════════════════════
 # TABBED LAYOUT
 # ═══════════════════════════════════════════════════════════════════
-tab_chart, tab_fundamentals, tab_analyst, tab_ownership, tab_technical, tab_ai = st.tabs([
-    "Price & Chart", "Fundamentals", "Analyst & Sentiment",
+# One screen per name. "Peers" closes the last gap that still sent the user to
+# a separate page for research on the same ticker — Analyst, Sentiment and
+# Technical already live here as tabs.
+(tab_chart, tab_fundamentals, tab_analyst, tab_peers,
+ tab_ownership, tab_technical, tab_ai) = st.tabs([
+    "Price & Chart", "Fundamentals", "Analyst & Sentiment", "Peers",
     "Ownership", "Technical Signals", "GROW",
 ])
+
+with tab_peers:
+    try:
+        from core.data_engine import get_ticker_info_batch as _peer_info_batch
+        st.markdown("#### Sector peers")
+        _sector = info.get("sector") or ""
+        _industry = info.get("industry") or ""
+        if not _sector:
+            empty_state("sector data for this ticker",
+                        action="Peer comparison needs a sector, which this listing does not report.")
+        else:
+            st.caption(f"{_sector}{' · ' + _industry if _industry else ''}")
+            # Peers are drawn from the user's OWN holdings in the same sector —
+            # a comparison against names they actually own is more useful than
+            # an arbitrary index slice, and it costs no extra API calls.
+            _peer_pool = []
+            if _enriched_cache is not None and not _enriched_cache.empty:
+                _ec = _enriched_cache
+                if "sector" in _ec.columns:
+                    _peer_pool = [t for t in _ec[_ec["sector"] == _sector]["ticker_resolved"].dropna().unique()
+                                  if str(t) != str(ticker)][:11]
+            if not _peer_pool:
+                _tk_col = "ticker_resolved" if (_enriched_cache is not None
+                                               and "ticker_resolved" in _enriched_cache.columns) else None
+                _all = list(_enriched_cache[_tk_col].dropna().unique()) if _tk_col else []
+                _pinfo = _peer_info_batch([t for t in _all if str(t) != str(ticker)][:40])
+                _peer_pool = [t for t, i in _pinfo.items() if (i or {}).get("sector") == _sector][:11]
+
+            if not _peer_pool:
+                empty_state("peers in this sector",
+                            action="No other holding in your portfolio shares this sector yet.")
+            else:
+                _pi = _peer_info_batch([ticker] + list(_peer_pool))
+                _rows = []
+                for _t in [ticker] + list(_peer_pool):
+                    _i = _pi.get(_t) or {}
+                    _rows.append({
+                        "Ticker": _t + (" ←" if _t == ticker else ""),
+                        "Name": (_i.get("shortName") or "")[:22],
+                        "Price": (f"{_instr_ccy(_t, _i)} {_i['currentPrice']:,.2f}"
+                                  if _i.get("currentPrice") else "—"),
+                        "P/E": f"{_i['trailingPE']:.1f}" if _i.get("trailingPE") else "—",
+                        "Fwd P/E": f"{_i['forwardPE']:.1f}" if _i.get("forwardPE") else "—",
+                        "Mkt Cap": fmt_large(_i["marketCap"]) if _i.get("marketCap") else "—",
+                        "Div Yld": (f"{_i['dividendYield']*100:.2f}%"
+                                    if _i.get("dividendYield") else "—"),
+                    })
+                render_responsive_table(pd.DataFrame(_rows), title_col="Ticker")
+                st.caption(
+                    "Peers are the other holdings in your portfolio that share this sector. "
+                    "For a wider screen against non-holdings, use **Peer Comparison**."
+                )
+    except Exception as e:
+        fetch_failed("peer data", e)
 
 # ═══════════════════════════════════════════════════════════════════
 # TAB 1 — PRICE CHART (wrapped in container for tab context)
@@ -374,7 +438,7 @@ with tab_chart:
                 except Exception:
                     _ed = "—"
             stat_grid([
-                ("Div / share", f"USD {_div_rate_f:.2f}" if _div_rate_f is not None else "—"),
+                ("Div / share", f"{ccy} {_div_rate_f:.2f}" if _div_rate_f is not None else "—"),
                 ("Yield", f"{_dy:.2f}%" if _dy is not None else "—"),
                 ("Payout", f"{_payout_f*100:.0f}%" if _payout_f is not None else "—"),
             ], columns=3)
@@ -584,11 +648,11 @@ with tab_analyst:
                 upside = ((target_mean - price) / price * 100) if target_mean and price else None
                 stat_grid([
                     ("Consensus", consensus or "—"),
-                    ("Mean target", f"USD {target_mean:,.2f}" if target_mean else "—",
+                    ("Mean target", f"{ccy} {target_mean:,.2f}" if target_mean else "—",
                      f"{upside:+.1f}% upside" if upside else "", upside),
                 ], columns=2)
                 if target_low and target_high:
-                    st.caption(f"Range: USD {target_low:,.2f} — USD {target_high:,.2f}")
+                    st.caption(f"Range: {ccy} {target_low:,.2f} — {ccy} {target_high:,.2f}")
 
             # Recent upgrades/downgrades
             upgrades = get_upgrade_downgrade(ticker)
@@ -903,12 +967,12 @@ with tab_technical:
             _sma50_val = _sf(_sma50.iloc[-1]) if not _sma50.empty else None
             if _sma50_val is not None:
                 above50 = _last > _sma50_val
-                _signals.append(("SMA 50", f"USD {_sma50_val:,.2f}", "Above" if above50 else "Below", "#00C853" if above50 else "#DD2C00"))
+                _signals.append(("SMA 50", f"{ccy} {_sma50_val:,.2f}", "Above" if above50 else "Below", "#00C853" if above50 else "#DD2C00"))
             if _sma200 is not None and not _sma200.empty:
                 _sma200_val = _sf(_sma200.iloc[-1])
                 if _sma200_val is not None:
                     above200 = _last > _sma200_val
-                    _signals.append(("SMA 200", f"USD {_sma200_val:,.2f}", "Above" if above200 else "Below", "#00C853" if above200 else "#DD2C00"))
+                    _signals.append(("SMA 200", f"{ccy} {_sma200_val:,.2f}", "Above" if above200 else "Below", "#00C853" if above200 else "#DD2C00"))
                     if _sma50_val is not None:
                         cross = "Golden Cross" if _sma50_val > _sma200_val else "Death Cross"
                         _signals.append(("SMA Cross", cross, "", "#00C853" if "Golden" in cross else "#DD2C00"))
@@ -988,19 +1052,22 @@ with tab_ai:
                     total_val = pd.to_numeric(enriched.get("market_value"), errors="coerce").sum()
                     weight = (float(mv) / float(total_val) * 100) if (total_val and mv) else None
 
+                    # market_value is already converted to the user's base
+                    # currency by enrich_portfolio — this one is NOT the
+                    # instrument's own currency, unlike everything above.
                     hero_metric(
                         "Market value",
-                        fmt_compact(mv, "USD") if mv else "—",
-                        delta=(f"{fmt_compact(pnl, 'USD')} ({pnl_pct:+.1f}%)"
+                        fmt_compact(mv, base_currency) if mv else "—",
+                        delta=(f"{fmt_compact(pnl, base_currency)} ({pnl_pct:+.1f}%)"
                                if (pnl and pnl_pct) else ""),
                         delta_value=pnl,
                         sub=f"{row.get('quantity', 0):,.2f} shares"
                             + (f" · {weight:.1f}% of portfolio" if weight else ""),
-                        title=f"USD {mv:,.2f}" if mv else "",
+                        title=f"{base_currency} {mv:,.2f}" if mv else "",
                     )
                     stat_grid([
                         ("Shares", f"{row.get('quantity', 0):,.2f}"),
-                        ("Avg cost", f"USD {avg:,.2f}" if avg else "—"),
+                        ("Avg cost", f"{ccy} {avg:,.2f}" if avg else "—"),
                         ("Weight", f"{weight:.1f}%" if weight else "—"),
                     ], columns=3)
 
