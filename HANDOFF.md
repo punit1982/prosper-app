@@ -276,6 +276,26 @@ here (no watchdog) — restart on a new port and clear `__pycache__` after every
 against `[data-testid="stMain"]`, **not** `document.documentElement`: Streamlit scrolls an inner
 container, so the document's own `scrollHeight` is always just the viewport height.
 
+- **v7.15 (6 Sep 2026) — UAE prices: the real root cause + workarounds**: `adx_client.get_quote()`
+  is correct and prices every UAE name in local testing — but **Mubasher is behind Cloudflare and
+  returns 403 to datacenter IPs**, so the scrape fails on Render. Every prior "verified live against
+  Mubasher" was run from a residential IP. Twelve Data's "Basic" plan does NOT cover ADX/DFM either
+  ("available starting with Pro or Venture"). So there is **no free UAE price source reachable from
+  Render.** Workarounds shipped: (1) `ibkr_client.parse_positions` now persists IBKR Flex `markPrice`
+  → `last_known_price` (was parsed and dropped); `ibkr_sync` merge path + `database.update_holding`
+  pass it through. (2) `screenshot_parser` prompt now captures the per-share current-price column →
+  `last_known_price`. (3) `cio_engine._fetch_one_quote` serves the newest `price_cache` row for a UAE
+  symbol whose live scrape failed, without the 30-min cooldown. (4) `scripts/prewarm.py` fetches all
+  UAE quotes via `adx_client` and writes `price_cache` — it runs on a **GitHub Actions runner**, whose
+  Azure IPs Cloudflare does not block like Render's. (5) Portfolio Dashboard shows UAE-specific
+  unpriced copy ("ticker is fine; Mubasher blocks cloud servers; run IBKR Sync") instead of the
+  misleading "wrong suffix" message. **What the user must do for existing holdings:** run IBKR Sync
+  or re-upload the account so `last_known_price` is populated (nothing back-fills it). **Proper
+  long-term fix:** IBKR Client Portal / OAuth1.0a integration — IBKR covers ADX/DFM natively and is
+  datacenter-friendly; the app already has Flex-Query plumbing in `core/ibkr_client.py`.
+  Also: `ISPATALLOY.NS/.BO` → `BALASORE.NS/.BO` (correct NSE symbol for Balasore Alloys) in
+  `TICKER_OVERRIDES`; `NO_LIVE_SOURCE` message softened.
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
