@@ -296,6 +296,40 @@ container, so the document's own `scrollHeight` is always just the viewport heig
   Also: `ISPATALLOY.NS/.BO` → `BALASORE.NS/.BO` (correct NSE symbol for Balasore Alloys) in
   `TICKER_OVERRIDES`; `NO_LIVE_SOURCE` message softened.
 
+- **v7.16 (6 Sep 2026) — mobile redesign across every page**: executes the page-by-page plan from the
+  v7.14 design review. All 24 pages loaded at 375×812 against the real 182-holding portfolio; none
+  raises a traceback. Two changes carry most of the benefit:
+  (1) **`mobile_shell()` is now called once globally in `app.py`**, before the nav — so pages never
+  individually converted (Settings, Upload Portal, IBKR Sync, Users, News) still get 44px tap targets,
+  reclaimed padding, hidden Plotly modebars and faded tab strips. (2) **`show_chart()` / `mobile_chart()`
+  replaces all 39 `st.plotly_chart` calls.** Streamlit cannot read the viewport, so every fix is
+  width-independent rather than a phone branch: `automargin` (axis labels were clipped to `00 (-4.7%)`),
+  `uniformtext` minsize 9 (the treemap was drawing 4–6px text — now hidden rather than illegible),
+  horizontal legends, horizontal pie slice labels (thin slices printed sideways off the edge), modebar off.
+  **`st.metric` is now gone from every page** (was 78) — replaced by `hero_metric` + `stat_grid`.
+  Biggest conversions: Equity Deep Dive (19 metrics / 6 clusters; the 4-up price header is now a hero +
+  3-grid + full-width 52-week bar, signal cards are one CSS grid), Risk & Strategy (5-up regime chips →
+  wrapping chip row, 4-up action cards → grid, **4 allocation pies in `st.columns(4)` → tabs** so each
+  gets full width), Portfolio Summary (11 metrics; the `st.columns(5)` risk block → two grids),
+  Peer Comparison / Technical Analysis / Dividend Dashboard / Transaction Log / Earnings Calendar
+  (`st.columns(4-6)` → hero + grid). Wide tables → `render_responsive_table` on Summary, Deep Dive (5),
+  Risk (2), Rebalance (2), Transaction Log (2). **New `bottom_nav()`**: fixed 5-item bar (Home /
+  Portfolio / Research / Risk / Ask), phones only, plain anchors because a fixed bar must be ONE element
+  and Streamlit wraps every widget in its own container. Page headers unified on `page_header()` across
+  all 24 pages. Desktop verified unchanged at 1280px.
+  **Three bugs found by running it, not reading it:**
+  · `render_responsive_table`'s mobile card used `var(--secondary-background-color,#f6f6f6)`; **Streamlit
+  1.41 does not define that property**, so the light fallback won and every card rendered a light panel
+  under light-on-dark text — invisible. Shipped broken in v7.10 (Peer Comparison, Dividend Dashboard).
+  Now theme-neutral translucent greys. **Rule: never rely on a Streamlit CSS custom property; use
+  `rgba(128,128,128,α)` and `color:inherit`, which read correctly on either ground.**
+  · `bottom_nav()` was first rendered after `pg.run()`. **21 of the 24 pages call `st.stop()`**, which
+  halts the whole script — so the bar vanished on exactly the empty-state pages where a way out matters
+  most. Moved before `pg.run()` (it is `position:fixed`, so DOM order is free). **The floating chat
+  widget has the same pre-existing defect and was left alone — it branches on `pg.title`.**
+  · Rebalance's suggestion table was being handed the Styler's raw numeric frame (unformatted floats);
+  `render_responsive_table` does no formatting by design, so the display frame is now built explicitly.
+
 ## Verification note (important limitation)
 This session verified all v7.x changes via: `py_compile` on every touched file, live production Render logs
 (`list_logs`/`list_deploys`/`get_deploy` via the Render MCP connector — confirmed each deploy reaches `status:
