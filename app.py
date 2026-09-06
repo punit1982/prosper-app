@@ -300,6 +300,17 @@ try:
 except Exception:
     pass
 
+# Committed IBKR mark snapshot (data/ibkr_marks.json, refreshed by hand with
+# scripts/refresh_ibkr_marks.py). Writes those marks into
+# holdings.last_known_price once a day so UAE / fund / suspended lines that no
+# free quote API can reach still show a value. Independent of the Flex web
+# service above — this is the path that actually runs today.
+try:
+    from core.ibkr_prices import apply_static_marks_to_holdings as _ibkr_static
+    _ibkr_static()
+except Exception:
+    pass
+
 # ── Mobile bottom navigation ───────────────────────────────────────────────
 # Rendered BEFORE pg.run(), not after: 21 of the 24 pages call st.stop() on an
 # empty state or a missing prerequisite, and st.stop() halts the whole script —

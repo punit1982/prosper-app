@@ -1231,6 +1231,80 @@ def save_failed_tickers(tickers: List[str]) -> None:
     save_price_cache({t: None for t in tickers})
 
 
+def _split_ticker(t: str):
+    """'EMAAR.AE' -> ('EMAAR', '.AE'). '4519.T' -> ('4519', '.T'). 'ADBE' -> ('ADBE', '')."""
+    t = (t or "").strip().upper()
+    if "." in t[1:]:
+        base, _, suf = t.rpartition(".")
+        return base, "." + suf
+    return t, ""
+
+
+def backfill_last_known_prices(marks: Dict[str, dict]) -> int:
+    """Write broker mark prices into holdings.last_known_price.
+
+    ``marks`` is ``{ticker: {"price": float, "currency": str}}`` — IBKR's own
+    mark for each position (see data/ibkr_marks.json). This is the durable home
+    for a broker mark on a holding no live quote API can reach (UAE ADX/DFM
+    lines, offshore funds): core/cio_engine.py's price cascade falls back to
+    last_known_price when every live source returns nothing, and — unlike a
+    price_cache row — it is never wiped by a failed live-fetch retry.
+
+    Matching is exact ticker first, then base-symbol prefix + same suffix
+    (IBKR's position feed truncates some symbols — 'PUREHEALT' vs the
+    statement's 'PUREHEALTH', 'EMIRATESN' vs 'EMIRATESNBD'). Never touches a
+    live price: last_known_price is only ever a fallback. Returns rows updated.
+    """
+    if not marks:
+        return 0
+    updated = 0
+    try:
+        conn = _get_connection()
+        now = datetime.now().isoformat()
+
+        # Normalise the marks once.
+        norm = {}
+        for tk, m in marks.items():
+            try:
+                p = float(m.get("price")) if isinstance(m, dict) else float(m)
+            except (TypeError, ValueError):
+                continue
+            if p <= 0:
+                continue
+            base, suf = _split_ticker(tk)
+            norm[tk.strip().upper()] = (p, base, suf)
+
+        rows = conn.execute("SELECT id, ticker FROM holdings").fetchall()
+        for row in rows:
+            hticker = (row["ticker"] or "").strip().upper()
+            if not hticker or hticker in ("CASH", "MARGIN"):
+                continue
+            price = None
+            if hticker in norm:
+                price = norm[hticker][0]
+            else:
+                hbase, hsuf = _split_ticker(hticker)
+                for _p, mbase, msuf in norm.values():
+                    if msuf != hsuf or not hsuf:
+                        continue
+                    a, b = sorted((hbase, mbase), key=len)
+                    if len(a) >= 5 and b.startswith(a):
+                        price = _p
+                        break
+            if price is not None:
+                cur = conn.execute(
+                    "UPDATE holdings SET last_known_price = ?, updated_at = ? WHERE id = ?",
+                    (price, now, row["id"]),
+                )
+                updated += cur.rowcount or 0
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger("prosper").warning("backfill_last_known_prices failed: %s", e)
+    return updated
+
+
 FAILED_TICKER_COOLDOWN = 600  # 10 min — retry sooner (was 30 min)
 
 

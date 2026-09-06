@@ -119,21 +119,46 @@ section[data-testid="stSidebar"] {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
 }
+/* The fixed bottom navigation belongs only to the signed-in app. If a session
+   drops mid-use, Streamlit can briefly paint the old authenticated page behind
+   the login form — this keeps its chrome off the login screen. */
+[data-testid="stElementContainer"]:has(.p-navmark),
+[data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"] {
+    display: none !important;
+}
 </style>
 """
 
 _HEADER_HTML = (
-    "<div style='text-align:center;margin-top:3rem;margin-bottom:0.5rem'>"
-    "<div style='font-size:2.8rem;font-weight:700;letter-spacing:-1.5px;"
-    "background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);"
+    "<div style='text-align:center;margin-top:1.5rem;margin-bottom:0.5rem'>"
+    # Was a dark navy gradient (#1a1a2e→#0f3460) that is almost invisible on the
+    # app's dark theme — a light-on-light bug in reverse. Lightened so it reads.
+    "<div style='font-size:2.6rem;font-weight:700;letter-spacing:-1.5px;"
+    "background:linear-gradient(135deg,#5aa9ff 0%,#3d7de0 50%,#2c6fd6 100%);"
     "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
     "background-clip:text'>Prosper</div>"
-    "<p style='color:#888;margin-top:6px;font-size:1rem;letter-spacing:0.3px'>"
+    "<p style='color:#8a8f98;margin-top:6px;font-size:0.95rem;letter-spacing:0.3px'>"
     "AI-Native Investment Operating System</p>"
     "</div>"
 )
 
 _MIN_PASSWORD_LENGTH = 8
+
+# Login-screen layout. st.columns([1,2,1]) leaves only ~180px of usable width
+# at 375px, which crushed the "Continue with Google" button and the form into
+# the distorted state Punit reported. Constrain the whole main block to a
+# phone-friendly card instead, and make sure a dropped session that briefly
+# paints an authenticated page (bottom nav, "Loading portfolio data…") behind
+# the form cannot show any of that chrome.
+_LOGIN_CSS = """
+<style>
+  [data-testid="stMain"] .block-container{max-width:430px !important;margin:0 auto !important;
+    padding-top:1.2rem !important;padding-left:1rem !important;padding-right:1rem !important;}
+  [data-testid="stElementContainer"]:has(.p-navmark),
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"],
+  [data-testid="stAppDeployButton"]{display:none !important;}
+</style>
+"""
 
 
 # ─────────────────────────────────────────
@@ -488,6 +513,11 @@ def _handle_google_user(user_info: dict) -> bool:
     st.session_state["name"] = g_name or first_name
     st.session_state["user_id"] = g_email
     st.session_state["auth_method"] = "google"
+    # Tell run_auth() to write the 30-day re-auth cookie on the next run (it
+    # holds the `authenticator` object; this function does not). Without this
+    # the Google session lives only in server memory and every refresh or
+    # free-tier cold start drops it.
+    st.session_state["_persist_cookie_pending"] = True
     return True
 
 
@@ -620,7 +650,9 @@ def _show_google_signin() -> bool:
             justify-content: center;
             gap: 10px;
             width: 100%;
+            min-height: 46px;
             padding: 11px 16px;
+            white-space: nowrap;
             background: #fff;
             color: #3c4043;
             border: 1px solid #dadce0;
@@ -707,7 +739,7 @@ def _show_google_signin() -> bool:
         </html>
         """
 
-        _components.html(popup_html, height=52, scrolling=False)
+        _components.html(popup_html, height=54, scrolling=False)
 
     except Exception as google_err:
         _auth_log.warning("Google sign-in error: %s", google_err)
@@ -781,6 +813,7 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
                 st.session_state["name"] = f"{first.strip()} {last.strip()}".strip()
                 st.session_state["user_id"] = email.strip()
                 st.session_state["auth_method"] = "email"
+                st.session_state["_persist_cookie_pending"] = True
                 st.balloons()
                 st.success(f"Welcome to Prosper, **{first.strip()}**! Your account is ready.")
                 st.rerun()
@@ -941,11 +974,31 @@ def run_auth() -> Dict[str, Any]:
     _build_google_creds_file()
     _apply_env_recovery()
 
-    db_users = _db_get_all_users()
-    if db_users:
-        auth_config = _rebuild_yaml_from_db()
+    # Building the credential config hits Turso (_db_get_all_users) on every
+    # script run. A login involves several reruns — the cookie-component mount,
+    # every keystroke in the form, the OAuth relay — so on the free tier that
+    # is where "slow after a few attempts" comes from. Serve a recent build
+    # from session cache; always rebuild fresh mid-transition (OAuth params
+    # present, a pending cookie write, or a just-completed logout) so a new
+    # account or a sign-in is never missed.
+    import time as _t
+    _AUTH_CFG_TTL = 45
+    _in_transition = (
+        bool(set(st.query_params.keys()) & {"code", "state", "_ga_email", "_ga_token", "_ga_error"})
+        or st.session_state.get("_persist_cookie_pending")
+        or st.session_state.get("logout")
+    )
+    _cached = st.session_state.get("_auth_cfg_cache")
+    if _cached and not _in_transition and (_t.time() - _cached[0]) < _AUTH_CFG_TTL:
+        auth_config = _cached[1]
     else:
-        auth_config = _load_yaml_config()
+        db_users = _db_get_all_users()
+        if db_users:
+            auth_config = _rebuild_yaml_from_db()
+        else:
+            auth_config = _load_yaml_config()
+        if auth_config:
+            st.session_state["_auth_cfg_cache"] = (_t.time(), auth_config)
 
     has_users = bool(
         auth_config
@@ -953,7 +1006,8 @@ def run_auth() -> Dict[str, Any]:
     )
 
     if not has_users:
-        _, center, _ = st.columns([1, 2, 1])
+        st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
+        _, center, _ = st.columns([1, 20, 1])
         with center:
             st.markdown(_HEADER_HTML, unsafe_allow_html=True)
             st.markdown("")
@@ -993,6 +1047,19 @@ def run_auth() -> Dict[str, Any]:
         user_email = user_data.get("email", username)
         st.session_state.setdefault("user_id", user_email or username)
 
+        # Persist the session so a refresh or a free-tier cold start restores it
+        # instead of bouncing to the login page. streamlit-authenticator's own
+        # login widget already sets this cookie on the email/password path — the
+        # Google-popup path never did, which is exactly why "refresh logs me
+        # out" only ever happened to Google sign-ins. Written once, not on every
+        # rerun, via a flag set by _handle_google_user / the registration form.
+        if st.session_state.pop("_persist_cookie_pending", False):
+            try:
+                st.session_state["username"] = username  # canonical — must match the DB row
+                authenticator.cookie_controller.set_cookie()
+            except Exception as _ck_err:
+                _auth_log.warning("Could not set re-auth cookie: %s", _ck_err)
+
         result.update(
             authenticated=True,
             user_id=user_email or username,
@@ -1014,8 +1081,36 @@ def run_auth() -> Dict[str, Any]:
 
         return result
 
+    # ── Cookie re-auth, WITHOUT rendering a form ──
+    # If a valid 30-day re-auth cookie exists (set on a prior Google or email
+    # login), restore the session here and rerun — so a refresh lands straight
+    # back in the app instead of flashing the login page first.
+    if st.session_state.get("authentication_status") is not True:
+        try:
+            authenticator.login(location="unrendered", sleep_time=0)
+        except Exception as _pc_err:
+            # e.g. a cookie for a username no longer in the DB → drop the cookie
+            # so it stops failing on every load.
+            _auth_log.warning("Cookie re-auth precheck failed, clearing cookie: %s", _pc_err)
+            try:
+                authenticator.cookie_controller.delete_cookie()
+            except Exception:
+                pass
+            st.session_state["authentication_status"] = None
+        if st.session_state.get("authentication_status") is True:
+            _u = st.session_state.get("username", "")
+            _ud = auth_config.get("credentials", {}).get("usernames", {}).get(_u, {})
+            if _ud.get("_canonical"):
+                _u = _ud["_canonical"]
+                st.session_state["username"] = _u
+                _ud = auth_config.get("credentials", {}).get("usernames", {}).get(_u, _ud)
+            st.session_state["user_id"] = _ud.get("email", _u)
+            st.session_state.setdefault("auth_method", "cookie")
+            st.rerun()
+
     # ── Not authenticated: Show login page ──
-    _, center, _ = st.columns([1, 2, 1])
+    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
+    _, center, _ = st.columns([1, 20, 1])
     with center:
         st.markdown(_HEADER_HTML, unsafe_allow_html=True)
         st.markdown("")
@@ -1030,10 +1125,22 @@ def run_auth() -> Dict[str, Any]:
         )
 
         try:
-            authenticator.login(fields={"Form name": "Sign in", "Username": "Email or username",
+            # sleep_time=0: streamlit-authenticator sleeps 1s on every
+            # unauthenticated render by default. The login page reruns several
+            # times per attempt (cookie mount, keystrokes, OAuth relay), so
+            # that default is a big part of "slow to log in".
+            authenticator.login(sleep_time=0,
+                                fields={"Form name": "Sign in", "Username": "Email or username",
                                         "Password": "Password", "Login": "Sign in"})
-        except TypeError:  # very old streamlit-authenticator without `fields`
+        except TypeError:  # very old streamlit-authenticator without `fields`/`sleep_time`
             authenticator.login()
+        except Exception as _login_err:  # stale cookie for a user no longer in the DB
+            _auth_log.warning("login() raised, clearing cookie: %s", _login_err)
+            try:
+                authenticator.cookie_controller.delete_cookie()
+            except Exception:
+                pass
+            st.session_state["authentication_status"] = None
         if st.session_state.get("authentication_status") is True:
             username = st.session_state.get("username", "")
             user_data = auth_config.get("credentials", {}).get("usernames", {}).get(username, {})

@@ -1,0 +1,397 @@
+{
+  "as_of": "2026-09-06T20:11:26Z",
+  "source": "IBKR connector snapshot (get_account_positions), refreshed in-session",
+  "note": "Broker mark prices, not live quotes — a previous close for most markets. Written into holdings.last_known_price on app start; never overrides a live quote. Regenerate with scripts/refresh_ibkr_marks.py.",
+  "count": 96,
+  "marks": {
+    "4519.T": {
+      "price": 6731.0,
+      "currency": "JPY"
+    },
+    "4568.T": {
+      "price": 2794.0,
+      "currency": "JPY"
+    },
+    "5631.T": {
+      "price": 7300.0,
+      "currency": "JPY"
+    },
+    "5803.T": {
+      "price": 5180.0,
+      "currency": "JPY"
+    },
+    "5E2.SI": {
+      "price": 2.16,
+      "currency": "SGD"
+    },
+    "6976.T": {
+      "price": 9560.5,
+      "currency": "JPY"
+    },
+    "7013.T": {
+      "price": 2627.0,
+      "currency": "JPY"
+    },
+    "7974.T": {
+      "price": 8845.0,
+      "currency": "JPY"
+    },
+    "AAOI": {
+      "price": 105.650002,
+      "currency": "USD"
+    },
+    "ADBE": {
+      "price": 266.5,
+      "currency": "USD"
+    },
+    "ADCB.AE": {
+      "price": 15.24,
+      "currency": "AED"
+    },
+    "ADNOCDRIL.AE": {
+      "price": 5.83,
+      "currency": "AED"
+    },
+    "ADNOCLS.AE": {
+      "price": 6.87,
+      "currency": "AED"
+    },
+    "AIY.SI": {
+      "price": 8.9,
+      "currency": "SGD"
+    },
+    "ALDAR.AE": {
+      "price": 7.72,
+      "currency": "AED"
+    },
+    "ALT": {
+      "price": 3.44,
+      "currency": "USD"
+    },
+    "AMPG": {
+      "price": 3.43,
+      "currency": "USD"
+    },
+    "APP": {
+      "price": 320.559998,
+      "currency": "USD"
+    },
+    "ASPI": {
+      "price": 4.185,
+      "currency": "USD"
+    },
+    "ASTS": {
+      "price": 62.080002,
+      "currency": "USD"
+    },
+    "BANB.SW": {
+      "price": 77.099998,
+      "currency": "CHF"
+    },
+    "BIOA": {
+      "price": 9.55,
+      "currency": "USD"
+    },
+    "BMAG.SW": {
+      "price": 30.0,
+      "currency": "CHF"
+    },
+    "BURJEEL.AE": {
+      "price": 1.26,
+      "currency": "AED"
+    },
+    "BZAI": {
+      "price": 0.4705,
+      "currency": "USD"
+    },
+    "CATX": {
+      "price": 3.13,
+      "currency": "USD"
+    },
+    "CELH": {
+      "price": 30.744499,
+      "currency": "USD"
+    },
+    "CICN.SW": {
+      "price": 126.800003,
+      "currency": "CHF"
+    },
+    "COTN.SW": {
+      "price": 343.200012,
+      "currency": "CHF"
+    },
+    "CRDO": {
+      "price": 169.537003,
+      "currency": "USD"
+    },
+    "CRM": {
+      "price": 259.230011,
+      "currency": "USD"
+    },
+    "DUOL": {
+      "price": 154.615005,
+      "currency": "USD"
+    },
+    "EMAAR.AE": {
+      "price": 11.0,
+      "currency": "AED"
+    },
+    "EMAARDEV.AE": {
+      "price": 12.92,
+      "currency": "AED"
+    },
+    "EMIRATESN.AE": {
+      "price": 30.299999,
+      "currency": "AED"
+    },
+    "ENPH": {
+      "price": 36.369999,
+      "currency": "USD"
+    },
+    "ENVX": {
+      "price": 3.34,
+      "currency": "USD"
+    },
+    "EOSE": {
+      "price": 3.92,
+      "currency": "USD"
+    },
+    "FISV": {
+      "price": 52.801399,
+      "currency": "USD"
+    },
+    "FLNC": {
+      "price": 10.34,
+      "currency": "USD"
+    },
+    "FTCHQ": {
+      "price": 1e-06,
+      "currency": "USD"
+    },
+    "GEV": {
+      "price": 941.950012,
+      "currency": "USD"
+    },
+    "HBBD.SI": {
+      "price": 3.59,
+      "currency": "SGD"
+    },
+    "HIMS": {
+      "price": 27.82,
+      "currency": "USD"
+    },
+    "HLIT": {
+      "price": 11.78,
+      "currency": "USD"
+    },
+    "HSAI": {
+      "price": 18.9676,
+      "currency": "USD"
+    },
+    "HTCD.SI": {
+      "price": 7.17,
+      "currency": "SGD"
+    },
+    "HUBB": {
+      "price": 460.720001,
+      "currency": "USD"
+    },
+    "IA": {
+      "price": 18.74,
+      "currency": "USD"
+    },
+    "IB01.L": {
+      "price": 121.739998,
+      "currency": "USD"
+    },
+    "IDN": {
+      "price": 2.78,
+      "currency": "USD"
+    },
+    "IGLN.L": {
+      "price": 86.120003,
+      "currency": "USD"
+    },
+    "IPWR": {
+      "price": 5.1,
+      "currency": "USD"
+    },
+    "IREN": {
+      "price": 44.4678,
+      "currency": "USD"
+    },
+    "ISLN.L": {
+      "price": 62.945,
+      "currency": "USD"
+    },
+    "JEPG.SW": {
+      "price": 21.610001,
+      "currency": "CHF"
+    },
+    "LEU": {
+      "price": 173.889999,
+      "currency": "USD"
+    },
+    "MELI": {
+      "price": 1978.359985,
+      "currency": "USD"
+    },
+    "MGNI": {
+      "price": 25.15,
+      "currency": "USD"
+    },
+    "MP": {
+      "price": 54.464001,
+      "currency": "USD"
+    },
+    "NAUT": {
+      "price": 0.9175,
+      "currency": "USD"
+    },
+    "NCMI": {
+      "price": 2.48,
+      "currency": "USD"
+    },
+    "NDIA.L": {
+      "price": 8.916,
+      "currency": "USD"
+    },
+    "NESN.SW": {
+      "price": 78.309998,
+      "currency": "CHF"
+    },
+    "OM": {
+      "price": 3.59,
+      "currency": "USD"
+    },
+    "ONDS": {
+      "price": 7.6109,
+      "currency": "USD"
+    },
+    "ORCL": {
+      "price": 159.699997,
+      "currency": "USD"
+    },
+    "OSS": {
+      "price": 9.8112,
+      "currency": "USD"
+    },
+    "OUST": {
+      "price": 36.43,
+      "currency": "USD"
+    },
+    "PDYN": {
+      "price": 5.71,
+      "currency": "USD"
+    },
+    "PLTR": {
+      "price": 174.399002,
+      "currency": "USD"
+    },
+    "POET": {
+      "price": 7.92,
+      "currency": "USD"
+    },
+    "PRY.MI": {
+      "price": 122.650002,
+      "currency": "EUR"
+    },
+    "PUREHEALT.AE": {
+      "price": 2.62,
+      "currency": "AED"
+    },
+    "QTEX": {
+      "price": 0.8378,
+      "currency": "USD"
+    },
+    "RDW": {
+      "price": 10.5499,
+      "currency": "USD"
+    },
+    "RHM.DE": {
+      "price": 1036.800049,
+      "currency": "EUR"
+    },
+    "SEZL": {
+      "price": 121.0,
+      "currency": "USD"
+    },
+    "SIDU": {
+      "price": 2.07,
+      "currency": "USD"
+    },
+    "SLI": {
+      "price": 2.42,
+      "currency": "USD"
+    },
+    "SPACE42.AE": {
+      "price": 2.08,
+      "currency": "AED"
+    },
+    "SQN.SW": {
+      "price": 41.939999,
+      "currency": "CHF"
+    },
+    "TE": {
+      "price": 4.6,
+      "currency": "USD"
+    },
+    "TECOM.AE": {
+      "price": 3.35,
+      "currency": "AED"
+    },
+    "TIGR": {
+      "price": 5.042,
+      "currency": "USD"
+    },
+    "U": {
+      "price": 41.66,
+      "currency": "USD"
+    },
+    "U03A.L": {
+      "price": 108.300003,
+      "currency": "USD"
+    },
+    "U96.SI": {
+      "price": 6.11,
+      "currency": "SGD"
+    },
+    "UPST": {
+      "price": 28.049999,
+      "currency": "USD"
+    },
+    "URNU.L": {
+      "price": 27.93,
+      "currency": "USD"
+    },
+    "VEEV": {
+      "price": 275.089996,
+      "currency": "USD"
+    },
+    "VNP.TO": {
+      "price": 25.540001,
+      "currency": "CAD"
+    },
+    "VOR": {
+      "price": 24.950001,
+      "currency": "USD"
+    },
+    "XE": {
+      "price": 17.7477,
+      "currency": "USD"
+    },
+    "XFAB.PA": {
+      "price": 6.055,
+      "currency": "EUR"
+    },
+    "XYZ": {
+      "price": 82.760002,
+      "currency": "USD"
+    }
+  },
+  "_skipped": [
+    "IBCID288654906 @FUNDSERV",
+    "IBCID358679986 @ALLFUNDS",
+    "OZON @VALUE"
+  ]
+}

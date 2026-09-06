@@ -69,6 +69,15 @@ credentials, no repo changes:
 - `core/auth.py` + `pages/99_OAuth_Callback.py` — Google OAuth popup. Checks `verified_email`
   (Google's REST userinfo field), **not** `email_verified` (that only exists on the OIDC path). The
   popup-close fallback button must render in an iframe with a real height (`height=180`, not 0).
+  **Persistence:** both the Google and the email path now write streamlit-authenticator's 30-day
+  re-auth cookie (`_persist_cookie_pending` flag → `authenticator.cookie_controller.set_cookie()` in
+  the authed branch of `run_auth`), and `run_auth` does an `unrendered` cookie precheck before
+  drawing the login page, so a refresh / free-tier cold start restores the session instead of
+  logging you out. Before this the Google path never touched the cookie — that was the whole "refresh
+  logs me out" bug. `login()` is called with `sleep_time=0` (its default is a 1s sleep on every
+  unauthenticated rerun). The credential rebuild (`_db_get_all_users` → Turso) is session-cached for
+  45s except mid-transition. Login screen is a 430px centred card (`_LOGIN_CSS`), not
+  `st.columns([1,2,1])` which crushed it on a phone.
 - `core/settings.py` — `SETTINGS` proxy, Claude model IDs (`claude-sonnet-5` default,
   `claude-opus-5` best, `claude-haiku-4-5` fast). `call_claude`/`call_claude_stream` default
   `thinking={"type":"disabled"}` unless the caller opts in. **Critical: `claude-opus-5` has extended
@@ -183,9 +192,19 @@ Design review + page-by-page plan (published artifact):
 | **FX** | AED/SAR/HKD hard pegs (AED 3.6725) resolve with no network call. Chain: yfinance → `open.er-api.com` → stale DB cache of any age → static table. It never silently returns 1.0 any more. |
 
 **Consequence:** UAE, European/offshore funds and suspended lines have no free live source reachable
-from Render. They are valued from IBKR's own `markPrice`, backfilled once per calendar day by
-`core/ibkr_prices.maybe_daily_refresh()` (Flex Query). `scripts/prewarm.py` also fetches UAE quotes
-and runs on a **GitHub Actions runner**, whose IPs Cloudflare does not block like Render's.
+from Render. They are valued from IBKR's own `markPrice` via two paths:
+
+  1. `core/ibkr_prices.maybe_daily_refresh()` — Flex Query web service, once per calendar day. Only
+     runs if `IBKR_FLEX_TOKEN` + a query id are set. **They are not**, so this is currently a no-op.
+  2. `core/ibkr_prices.apply_static_marks_to_holdings()` — reads `data/ibkr_marks.json`, a committed
+     snapshot of IBKR's mark for every position, and writes it into `holdings.last_known_price` (the
+     durable fallback the price cascade already uses — never wiped by a failed live fetch, unlike a
+     `price_cache` row). This is the path that actually runs today. **Refresh the file at the start
+     of a working session:** call the IBKR connector's `get_account_positions`, save its JSON, run
+     `venv/bin/python3 scripts/refresh_ibkr_marks.py <that file>`, commit, push.
+
+`scripts/prewarm.py` also fetches UAE quotes and runs on a **GitHub Actions runner**, whose IPs
+Cloudflare does not block like Render's.
 
 Instruments with genuinely no quote anywhere are listed in `cio_engine.NO_LIVE_SOURCE` (OZON —
 suspended ADR; Balasore Alloys; legacy `F0…​.NS` Morningstar fund rows) and are reported as "no market
@@ -193,12 +212,11 @@ quote exists" rather than as fetch failures.
 
 ## 7. Open items, highest value first
 
-1. **Confirm the IBKR Flex backfill is actually configured.** `core/ibkr_prices.py` only runs if
-   `IBKR_FLEX_TOKEN` + a Flex query id are set. Render's API does not expose env vars, so no session
-   has been able to verify this — **the Dashboard footer now states which mode it is in; read it.**
-   Until it is on, UAE and fund holdings show no value until a manual IBKR Sync or re-upload.
-2. **Nothing back-fills `last_known_price` for existing holdings.** Punit must run IBKR Sync or
-   re-upload each account once.
+1. **IBKR Flex web service still not configured** (`IBKR_FLEX_TOKEN` + query id). Until it is, the
+   committed `data/ibkr_marks.json` snapshot is the price source for UAE/fund/suspended lines —
+   see §6. Configuring Flex would make it self-updating; the static file is the stopgap.
+2. ~~Nothing back-fills `last_known_price`~~ — `apply_static_marks_to_holdings()` now does, on every
+   app start, from `data/ibkr_marks.json`. Keep that file fresh (§6).
 3. **Install the pre-warm GitHub Action.** `docs/prewarm-github-action.yml` needs copying to
    `.github/workflows/` plus repo secrets — the push token used in these sessions lacks `workflow`
    scope. This is what kills the slow first load of the morning.

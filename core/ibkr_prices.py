@@ -27,13 +27,19 @@ where nothing better exists.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from datetime import date
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("prosper.ibkr_prices")
 
 _STATE_KEY = "ibkr_price_refresh_date"
+_STATIC_STATE_KEY = "ibkr_static_marks_applied"
+_STATIC_MARKS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ibkr_marks.json"
+)
 
 # Flex reports carry more than equities; for PRICING purposes we want every
 # category that can hold a position, not just STK. core.ibkr_client
@@ -134,6 +140,61 @@ def refresh_prices(only_missing: bool = True) -> Dict:
         logger.warning("IBKR price refresh could not write cache: %s", e)
         out["error"] = "write_failed"
     return out
+
+
+def load_static_marks() -> Dict:
+    """Load data/ibkr_marks.json — a committed snapshot of IBKR's mark price for
+    every position, refreshed by hand with scripts/refresh_ibkr_marks.py.
+
+    This is the fallback for when the Flex Query web service is not configured
+    (it never has been on Render). Returns {} if the file is missing or bad.
+    """
+    try:
+        with open(_STATIC_MARKS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        marks = data.get("marks") or {}
+        return data if isinstance(marks, dict) and marks else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning("Could not read %s: %s", _STATIC_MARKS_PATH, e)
+        return {}
+
+
+def apply_static_marks_to_holdings() -> Optional[Dict]:
+    """Write the committed IBKR marks into holdings.last_known_price, once per
+    day (or whenever data/ibkr_marks.json changes).
+
+    last_known_price is the durable fallback the price cascade already uses
+    (core/cio_engine.py) for holdings no live quote API can price — UAE ADX/DFM
+    lines, offshore funds, suspended tickers. Nothing else back-fills it, so
+    without this those holdings show no value until a manual IBKR Sync.
+
+    Never raises. Returns {"applied", "as_of", "updated"} on the run that did
+    the work, else None.
+    """
+    try:
+        data = load_static_marks()
+        if not data:
+            return None
+        marks = data.get("marks", {})
+        as_of = str(data.get("as_of", ""))
+
+        from core.database import get_fortress_state, save_fortress_state
+        # Re-apply when the snapshot file changes, not only once per day.
+        stamp = f"{date.today().isoformat()}|{as_of}"
+        if get_fortress_state(_STATIC_STATE_KEY) == stamp:
+            return None
+        save_fortress_state(_STATIC_STATE_KEY, stamp)
+
+        from core.database import backfill_last_known_prices
+        updated = backfill_last_known_prices(marks)
+        result = {"applied": True, "as_of": as_of, "marks": len(marks), "updated": updated}
+        logger.info("IBKR static marks applied: %s", result)
+        return result
+    except Exception as e:
+        logger.warning("apply_static_marks_to_holdings skipped: %s", e)
+        return None
 
 
 def maybe_daily_refresh() -> Optional[Dict]:
