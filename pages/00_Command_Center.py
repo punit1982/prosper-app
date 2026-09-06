@@ -29,12 +29,8 @@ from core.ui_components import fmt_age
 from core.ui_errors import safe_message
 
 # ── Page Header ──────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
-    "<p style='color:#888;font-size:1.05rem;margin-top:0'>"
-    f"Command Center &nbsp;·&nbsp; {datetime.now().strftime('%A, %B %d %Y')}</p>",
-    unsafe_allow_html=True,
-)
+# Rendered after the data loads, so the date, the base currency and the
+# data-freshness age fold into ONE line instead of three stacked blocks.
 
 # ── Load Portfolio Data ──────────────────────────────────────────────────────
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -60,11 +56,16 @@ else:
 # instead of leaving the user unsure whether the numbers are live or stale.
 _refresh_ts = st.session_state.get("last_refresh_time")
 if _refresh_ts:
-    st.caption(f"📡 Data as of **{fmt_age(time.time() - _refresh_ts)}** · Base: **{base_currency}**")
+    _age_txt = fmt_age(time.time() - _refresh_ts)
 else:
     _sqlite_age = get_price_cache_age()
-    if _sqlite_age is not None and _sqlite_age > 0:
-        st.caption(f"📡 Data as of **{fmt_age(_sqlite_age)}** · Base: **{base_currency}**")
+    _age_txt = fmt_age(_sqlite_age) if (_sqlite_age is not None and _sqlite_age > 0) else "live"
+
+from core.ui_components import page_header as _page_header
+_page_header(
+    "Command Center",
+    f"{datetime.now().strftime('%a, %d %b %Y')} · {base_currency} · data {_age_txt}",
+)
 
 if enriched.empty:
     st.warning("Could not load portfolio data. Try visiting the Portfolio Dashboard first.")
@@ -161,98 +162,60 @@ _regime_icon = _rd.get("icon", "")
 _regime_explanation = _rd.get("explanation", "")
 _regime_action = _rd.get("action", "")
 
-# Market context bar
-st.markdown(
-    f"<div style='display:flex;gap:20px;padding:12px 16px;background:rgba(255,255,255,0.03);"
-    f"border-radius:10px;border:1px solid rgba(255,255,255,0.08);margin-bottom:4px;flex-wrap:wrap;align-items:center'>"
-    f"<div><span style='font-size:0.75rem;color:#777'>Market Regime</span><br>"
-    f"<span style='background:{regime_color};color:white;padding:3px 12px;border-radius:12px;"
-    f"font-weight:700;font-size:0.85rem'>{regime_name}</span></div>"
-    f"<div><span style='font-size:0.75rem;color:#777'>Holdings</span><br>"
-    f"<b style='color:#eee;font-size:0.95rem'>{holdings_count}</b></div>"
-    f"<div><span style='font-size:0.75rem;color:#777'>Currencies</span><br>"
-    f"<b style='color:#eee;font-size:0.95rem'>"
-    f"{len(enriched['currency'].unique()) if 'currency' in enriched.columns else 1}</b></div>"
-    f"<div><span style='font-size:0.75rem;color:#777'>Cash</span><br>"
-    f"<b style='color:#eee;font-size:0.95rem'>"
-    f"{base_currency} {total_cash:,.0f}</b></div>"
-    f"</div>",
-    unsafe_allow_html=True,
-)
-# Regime scale (always visible, shows where we are on the spectrum)
-_regime_phases = [
-    (REGIME_DISPLAY[REGIME_RECOVERY]["label"], REGIME_DISPLAY[REGIME_RECOVERY]["color"],
-     regime_name == REGIME_DISPLAY[REGIME_RECOVERY]["label"]),
-    (REGIME_DISPLAY[REGIME_EXPANSION]["label"], REGIME_DISPLAY[REGIME_EXPANSION]["color"],
-     regime_name == REGIME_DISPLAY[REGIME_EXPANSION]["label"]),
-    (REGIME_DISPLAY[REGIME_OVERHEATING]["label"], REGIME_DISPLAY[REGIME_OVERHEATING]["color"],
-     regime_name == REGIME_DISPLAY[REGIME_OVERHEATING]["label"]),
-    (REGIME_DISPLAY[REGIME_CONTRACTION]["label"], REGIME_DISPLAY[REGIME_CONTRACTION]["color"],
-     regime_name == REGIME_DISPLAY[REGIME_CONTRACTION]["label"]),
-]
-_phase_html = "".join(
-    f"<span style='padding:3px 10px;border-radius:10px;font-size:0.75rem;font-weight:{'700' if active else '400'};"
-    f"background:{color if active else 'rgba(255,255,255,0.04)'};color:{'white' if active else '#666'};"
-    f"border:1px solid {color if active else 'transparent'}'>{name}</span>"
-    for name, color, active in _regime_phases
-)
-# Show cycle scale + explanation + action (user complained they can't see what regime means)
-_regime_detail_html = ""
-if _regime_explanation:
-    _regime_detail_html = (
-        f"<div style='margin:6px 0 12px 0;padding:10px 14px;border-radius:8px;"
-        f"background:rgba(255,255,255,0.03);border-left:3px solid {regime_color}'>"
-        f"<div style='font-size:0.85rem;color:#ccc;margin-bottom:4px'>"
-        f"{_regime_icon} <b>{regime_name}</b> — {_regime_explanation}</div>"
-        f"<div style='font-size:0.8rem;color:#aaa'>"
-        f"<b>What to do:</b> {_regime_action}</div>"
-        f"</div>"
-    )
-st.markdown(
-    f"<div style='display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap'>"
-    f"<span style='font-size:0.75rem;color:#666;margin-right:4px'>Cycle:</span>"
-    f"{_phase_html}</div>"
-    f"{_regime_detail_html}",
-    unsafe_allow_html=True,
-)
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1+2: HERO — the portfolio first, the market context second
+# ══════════════════════════════════════════════════════════════════════════════
+# Measured before this change on a 375x812 phone: the first portfolio number
+# sat 526px down the page — 65% of the opening screen went to a title, a
+# freshness caption, a market-context bar and a four-chip cycle scale, none of
+# which is the reason anyone opens this page. Order is now value first,
+# context second, and the KPI rows use ui_components.stat_grid rather than
+# st.columns(), which stacks below ~640px with no opt-out and turned each
+# three-KPI row into three separate ~70px rows.
+from core.ui_components import mobile_shell, hero_metric, stat_grid, fmt_compact
+mobile_shell()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2: HERO METRICS ROW
-# ══════════════════════════════════════════════════════════════════════════════
-# Row 1: Primary metrics (3 cols for full-width numbers)
-m1, m2, m3 = st.columns(3)
-m1.metric(
+hero_metric(
     "Net Portfolio Value",
-    f"{base_currency} {net_portfolio:,.0f}",
-    f"{day_gain:+,.0f} today ({day_pct:+.1f}%)",
-)
-m2.metric(
-    "Today's P&L",
-    f"{base_currency} {day_gain:+,.0f}",
-    f"{day_pct:+.1f}%",
-)
-m3.metric(
-    "Unrealized P&L",
-    f"{base_currency} {unrealized_pnl:+,.0f}",
-    f"{unrealized_pct:+.1f}%",
-)
-# Row 2: Secondary metrics
-m4, m5, _m6 = st.columns(3)
-m4.metric(
-    "Realized P&L",
-    f"{base_currency} {realized_pnl:+,.0f}" if realized_pnl != 0 else "---",
+    fmt_compact(net_portfolio, base_currency),
+    delta=f"{day_gain:+,.0f} ({day_pct:+.2f}%) today",
+    delta_value=day_gain,
+    sub=f"{holdings_count} holdings · {base_currency}",
+    title=f"{base_currency} {net_portfolio:,.2f}",
 )
 
-# Dividend income estimate — use cached value or show placeholder (avoid slow batch fetch on load)
+stat_grid([
+    ("Today", fmt_compact(day_gain, base_currency), f"{day_pct:+.2f}%", day_gain),
+    ("Unrealized", fmt_compact(unrealized_pnl, base_currency), f"{unrealized_pct:+.1f}%", unrealized_pnl),
+    ("Realized", fmt_compact(realized_pnl, base_currency) if realized_pnl else "—", "", realized_pnl),
+], columns=3)
+
 _div_cache_key = f"cmd_div_income_{base_currency}"
 div_income_est = st.session_state.get(_div_cache_key, 0)
+stat_grid([
+    ("Cash", fmt_compact(total_cash, base_currency)),
+    ("Currencies", str(len(enriched["currency"].unique()) if "currency" in enriched.columns else 1)),
+    ("Div / yr", fmt_compact(div_income_est, base_currency) if div_income_est > 0 else "—"),
+], columns=3)
 
-with m5:
-    if div_income_est > 0:
-        m5.metric("Annual Div Income", f"{base_currency} {div_income_est:,.0f}",
-                  f"{div_income_est/12:,.0f}/mo")
-    else:
-        m5.metric("Annual Div Income", "---", help="Visit Dividend Dashboard for estimates")
+# Market regime — one line, with the guidance behind a tap rather than a
+# permanently-open 173px block of chips. The regime still reads at a glance;
+# what changed is that it no longer outranks the portfolio for screen space.
+from core.ui_components import status_chip as _chip
+_regime_level = {"Growing": "good", "Bouncing Back": "good",
+                 "Heating Up": "warn", "Slowing Down": "critical"}.get(regime_name, "neutral")
+st.markdown(
+    "<div style='display:flex;align-items:center;gap:8px;margin:0.1rem 0 0.5rem;"
+    "font-size:0.8rem'>"
+    "<span style='opacity:0.55;text-transform:uppercase;letter-spacing:0.05em;"
+    f"font-size:0.68rem;font-weight:600'>Market cycle</span>{_chip(regime_name, _regime_level)}"
+    "</div>",
+    unsafe_allow_html=True,
+)
+if _regime_explanation:
+    with st.expander(f"What “{regime_name}” means for you", expanded=False):
+        st.markdown(f"{_regime_icon} **{regime_name}** — {_regime_explanation}")
+        st.markdown(f"**What to do:** {_regime_action}")
 
 st.divider()
 
@@ -415,14 +378,20 @@ with col_alerts:
         pass
 
     if alerts:
+        import re as _re
         from core.ui_components import status_chip
         for level, icon, text in alerts[:8]:
             chip = status_chip(level.upper(), level)
+            # Alert text is authored with Markdown emphasis ("**ADBE** down 6.7%"),
+            # but it is injected into a raw HTML row — Streamlit does not run the
+            # Markdown parser inside unsafe_allow_html output, so the asterisks
+            # rendered literally on screen. Convert the one construct used here.
+            safe = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
             st.markdown(
                 f"<div style='display:flex;align-items:center;gap:8px;"
                 f"padding:4px 8px;margin:2px 0;border-radius:6px;"
                 f"background:rgba(255,255,255,0.03);font-size:0.9rem'>"
-                f"<span>{icon}</span>{chip}<span>{text}</span></div>",
+                f"<span>{icon}</span>{chip}<span>{safe}</span></div>",
                 unsafe_allow_html=True,
             )
     else:

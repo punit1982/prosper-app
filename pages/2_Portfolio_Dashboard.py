@@ -252,7 +252,9 @@ with st.sidebar:
 # ─────────────────────────────────────────
 # PAGE SETUP
 # ─────────────────────────────────────────
-st.header("Portfolio Dashboard")
+from core.ui_components import page_header as _ph, mobile_shell as _ms
+_ms()
+_ph("Portfolio Dashboard")
 
 holdings = get_all_holdings()
 if holdings.empty:
@@ -576,24 +578,21 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
     cur_unrealized = safe_sum(currency_df.get("unrealized_pnl"))
     cur_day_gain   = safe_sum(currency_df.get("day_gain"))
 
-    mc1, mc2, mc3 = st.columns(3)
-    with mc1:
-        st.metric(f"{currency_label} Value", f"{sym} {fmt_large(cur_value)}" if cur_value else "—")
-    with mc2:
-        if cur_day_gain is not None:
-            base_v = (cur_value - cur_day_gain) if cur_value else None
-            d_pct = (cur_day_gain / base_v * 100) if base_v else 0
-            st.metric("Today", f"{sym} {fmt_large(abs(cur_day_gain))}",
-                      delta=f"{cur_day_gain:+,.0f} ({d_pct:+.1f}%)")
-        else:
-            st.metric("Today", "—")
-    with mc3:
-        if cur_unrealized is not None and cur_cost:
-            u_pct = cur_unrealized / cur_cost * 100
-            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(cur_unrealized))}",
-                      delta=f"{cur_unrealized:+,.0f} ({u_pct:+.1f}%)")
-        else:
-            st.metric("Unrealized P&L", "—")
+    # Per-tab totals as one compact grid. As three st.metric()s in st.columns(3)
+    # these stacked into three full-width rows on a phone — directly under the
+    # page hero, which already shows the same three figures for "All". Same
+    # numbers, ~200px instead of ~210px per tab, and they stay side by side.
+    from core.ui_components import stat_grid as _sg, fmt_compact as _fc
+    _base_v = (cur_value - cur_day_gain) if (cur_value and cur_day_gain is not None) else None
+    _d_pct = (cur_day_gain / _base_v * 100) if _base_v else None
+    _u_pct = (cur_unrealized / cur_cost * 100) if (cur_unrealized is not None and cur_cost) else None
+    _sg([
+        (f"{currency_label} value", _fc(cur_value, sym) if cur_value else "—"),
+        ("Today", _fc(cur_day_gain, sym) if cur_day_gain is not None else "—",
+         f"{_d_pct:+.1f}%" if _d_pct is not None else "", cur_day_gain),
+        ("Unrealized", _fc(cur_unrealized, sym) if cur_unrealized is not None else "—",
+         f"{_u_pct:+.1f}%" if _u_pct is not None else "", cur_unrealized),
+    ], columns=3)
 
     # Split into stocks vs funds/ETFs
     has_type_info = "quote_type" in currency_df.columns
@@ -638,6 +637,19 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
         st.caption(f"**{label}**")
+        # Phones get a card list, desktop keeps the full sortable table. See
+        # core/ui_components.responsive_holdings — measured on a 375px viewport
+        # this table showed 3 of its 12 columns inside a nested scroll-box.
+        from core.ui_components import responsive_holdings, holdings_rows
+        # Key must be per-tab: _render_currency_section runs once for every
+        # currency/country tab, so a fixed key raised StreamlitDuplicateElementKey.
+        _show_key = f"{tab_key}_show_all_stocks"
+        _hidden = responsive_holdings(holdings_rows(stocks_df, sym),
+                                      group=label.replace("📈 ", ""),
+                                      limit=None if st.session_state.get(_show_key) else 25)
+        if _hidden:
+            st.checkbox(f"Show all {len(stocks_df)} stocks", key=_show_key,
+                        help="Phones show the 25 largest positions by value first.")
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # ── Funds & ETFs table ──
@@ -650,6 +662,9 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
                        if fund_signed else fund_display.style)
 
         st.caption(f"**📊 Funds & ETFs — {len(funds_df)}**")
+        from core.ui_components import responsive_holdings, holdings_rows
+        responsive_holdings(holdings_rows(funds_df, sym),
+                            group=f"Funds & ETFs — {len(funds_df)}", limit=25)
         st.dataframe(fund_styled, use_container_width=True, hide_index=True)
 
 
@@ -754,54 +769,45 @@ def portfolio_section():
     # say when they're from"). The "as of" freshness caption already printed
     # above this section (📡 Prices: ...) is what answers that for the whole
     # group, so it isn't repeated per-cluster here.
-    st.caption("NET WORTH")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if total_value is not None:
-            label = f"{sym} {fmt_large(net_portfolio_value)}" if total_cash != 0 else f"{sym} {fmt_large(total_value)}"
-            st.metric("Total Portfolio Value", label,
-                      help=f"Securities: {sym} {fmt_large(total_value)}" + (f" + Cash: {sym} {total_cash:,.0f}" if total_cash != 0 else ""))
-        else:
-            st.metric("Total Portfolio Value", f"{len(df)} holdings")
-    with c2:
-        if total_cash != 0:
-            cash_label = f"{sym} {total_cash:,.0f}"
-            margin_help = f"Margin debt: {sym} {margin_debt:,.0f}" if margin_debt < 0 else ""
-            cash_pct = (total_cash / net_portfolio_value * 100) if net_portfolio_value else 0
-            st.metric("Cash & Equivalents", cash_label,
-                      delta=f"{cash_pct:.1f}% of portfolio",
-                      help=f"Net cash across all accounts. {margin_help}".strip())
-        else:
-            st.metric("Cash & Equivalents", "—",
-                      help="Add cash positions via sidebar → 💵 Cash Positions")
-    with c3:
-        live = int(pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").notna().sum())
-        st.metric("Holdings", f"{len(df)}", help=f"{live} with live prices · {len(df)-live} missing")
+    # One hero figure plus two compact KPI grids. The previous form was two
+    # st.caption + st.columns(3) rows, which stack below ~640px: six metrics
+    # became six full-width rows ~70px tall, so the Performance cluster began
+    # below the fold on a phone. stat_grid stays a grid at 375px.
+    from core.ui_components import mobile_shell, hero_metric, stat_grid, fmt_compact
+    mobile_shell()
 
-    st.caption("PERFORMANCE")
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        if total_day_gain is not None:
-            base = (total_value - total_day_gain) if total_value else None
-            pct  = (total_day_gain / base * 100) if base else 0
-            st.metric("Today's Gain / Loss", f"{sym} {fmt_large(abs(total_day_gain))}",
-                      delta=f"{total_day_gain:+,.0f} ({pct:+.2f}%)")
-        else:
-            st.metric("Today's Gain / Loss", "—")
-    with c5:
-        if total_unrealized is not None and total_cost:
-            pct = total_unrealized / total_cost * 100
-            st.metric("Unrealized P&L", f"{sym} {fmt_large(abs(total_unrealized))}",
-                      delta=f"{total_unrealized:+,.0f} ({pct:+.1f}%)")
-        else:
-            st.metric("Unrealized P&L", "—")
-    with c6:
-        if total_realized != 0:
-            st.metric("Realized P&L", f"{sym} {fmt_large(abs(total_realized))}",
-                      delta=f"{total_realized:+,.0f}",
-                      help="Net realized gains/losses from sell transactions.")
-        else:
-            st.metric("Realized P&L", "—", help="Add sell transactions in Transaction Log to see realized P&L.")
+    _live = int(pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").notna().sum())
+    _base_for_pct = (total_value - total_day_gain) if (total_value and total_day_gain is not None) else None
+    _day_pct = (total_day_gain / _base_for_pct * 100) if _base_for_pct else 0
+    _unreal_pct = (total_unrealized / total_cost * 100) if (total_unrealized is not None and total_cost) else None
+
+    if total_value is not None:
+        hero_metric(
+            "Total Portfolio Value",
+            fmt_compact(net_portfolio_value, sym),
+            delta=(f"{total_day_gain:+,.0f} ({_day_pct:+.2f}%) today"
+                   if total_day_gain is not None else ""),
+            delta_value=total_day_gain,
+            sub=f"{len(df)} holdings · {_live} priced live"
+                + (f" · cash {sym} {total_cash:,.0f}" if total_cash else ""),
+            title=f"{sym} {net_portfolio_value:,.2f}",
+        )
+    else:
+        hero_metric("Total Portfolio Value", f"{len(df)} holdings")
+
+    stat_grid([
+        ("Today", fmt_compact(total_day_gain, sym) if total_day_gain is not None else "—",
+         f"{_day_pct:+.2f}%" if total_day_gain is not None else "", total_day_gain),
+        ("Unrealized", fmt_compact(total_unrealized, sym) if total_unrealized is not None else "—",
+         f"{_unreal_pct:+.1f}%" if _unreal_pct is not None else "", total_unrealized),
+        ("Realized", fmt_compact(total_realized, sym) if total_realized else "—", "", total_realized),
+    ], columns=3)
+
+    stat_grid([
+        ("Cash", fmt_compact(total_cash, sym) if total_cash else "—"),
+        ("Cash %", f"{(total_cash / net_portfolio_value * 100):.1f}%" if (total_cash and net_portfolio_value) else "—"),
+        ("Margin", fmt_compact(margin_debt, sym) if margin_debt else "—", "", margin_debt),
+    ], columns=3)
 
     st.divider()
 
