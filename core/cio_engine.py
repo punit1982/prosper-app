@@ -57,12 +57,15 @@ NO_LIVE_SOURCE: Dict[str, str] = {
     # by hand. Verified 2026-09-06: Yahoo returns "symbol may be delisted" for
     # both OZON and the OZONY OTC line.
     "OZON":         "Listing suspended — no public quote; IBKR's own mark is used",
-    # Balasore Alloys Ltd (NSE ISPATALLOY / BSE 513142). Verified 2026-09-06:
-    # no data on Yahoo for ISPATALLOY.NS, ISPATALLOY.BO or 513142.BO, and
-    # Trendlyne's own export reports a blank Day Change % — i.e. the source
-    # Prosper imports from has no live quote either.
-    "ISPATALLOY.NS": "Trading suspended on NSE/BSE — last reported price is used",
-    "ISPATALLOY":    "Trading suspended on NSE/BSE — last reported price is used",
+    # Balasore Alloys Ltd — real NSE symbol is BALASORE (BSE 513142), mapped in
+    # TICKER_OVERRIDES so the identity is right and any future feed that covers
+    # it will work. As of 2026-09-06 no free quote API (Yahoo NS/BO, Finnhub)
+    # returns a price and Trendlyne's export has a blank Day Change, so today
+    # it is still valued from the broker's last reported price.
+    "BALASORE.NS":   "No free quote feed covers this NSE line yet — valued from your broker's price",
+    "BALASORE":      "No free quote feed covers this NSE line yet — valued from your broker's price",
+    "ISPATALLOY.NS": "No free quote feed covers this NSE line yet — valued from your broker's price",
+    "ISPATALLOY":    "No free quote feed covers this NSE line yet — valued from your broker's price",
 }
 
 
@@ -333,6 +336,31 @@ def _fetch_one_quote(sym: str) -> tuple:
                             }
         except Exception:
             pass
+
+    # UAE last resort: Mubasher is Cloudflare-gated from datacenter IPs, so on
+    # Render the live scrape above often 403s even though it works from a
+    # residential IP and from the GitHub Actions pre-warm job. Before giving
+    # up, serve the most recent cached price (written by that job, or by an
+    # earlier request that got through) rather than showing the holding as
+    # unpriced. Do NOT _mark_failed here — a stale AED price is fine and we
+    # want to keep trying live.
+    try:
+        from core.adx_client import is_uae_symbol
+        if is_uae_symbol(sym):
+            from core.database import get_price_cache
+            cp = get_price_cache([sym]).get(sym)
+            if cp and cp.get("price"):
+                return sym, {
+                    "symbol": sym,
+                    "price": float(cp["price"]),
+                    "change": cp.get("change"),
+                    "changesPercentage": cp.get("changesPercentage"),
+                    "source": f"{cp.get('source') or 'cache'} (cached)",
+                    "currency": "AED",
+                }
+            return sym, None   # unpriced, but not cooled-down
+    except Exception:
+        pass
 
     # All sources failed — mark as failed so we skip for 30 min
     _mark_failed(sym)

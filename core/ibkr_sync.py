@@ -134,13 +134,16 @@ def _sync_merge(df: pd.DataFrame, portfolio_id: Optional[int], result: Dict) -> 
             # Update existing holding
             try:
                 holding_id = existing_map[ticker]["id"]
-                update_holding(
-                    holding_id,
+                _upd = dict(
                     quantity=float(pos.get("quantity", 0)),
                     avg_cost=float(pos.get("avg_cost", 0)),
                     currency=str(pos.get("currency", "USD")),
                     broker_source="IBKR",
                 )
+                _lkp = pos.get("last_known_price")
+                if _lkp is not None and float(_lkp) > 0:
+                    _upd["last_known_price"] = float(_lkp)
+                update_holding(holding_id, **_upd)
                 result["updated"] += 1
             except Exception as e:
                 result["errors"].append(f"Failed to update {ticker}: {e}")

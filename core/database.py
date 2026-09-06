@@ -997,7 +997,7 @@ def get_all_holdings(portfolio_id: int = None) -> pd.DataFrame:
 
 def update_holding(holding_id: int, **kwargs):
     """Update fields of a holding — scoped by current user_id (A1)."""
-    allowed = {"quantity", "avg_cost", "currency", "broker_source"}
+    allowed = {"quantity", "avg_cost", "currency", "broker_source", "last_known_price", "asset_category"}
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return

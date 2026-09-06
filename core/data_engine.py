@@ -51,6 +51,11 @@ HISTORY_TTL  = 3600   # 1 hour — price history for charts
 TICKER_OVERRIDES: Dict[str, str] = {
     # Emirates NBD stored without full name — correct Yahoo Finance ticker
     "EMIRATESN.AE":  "EMIRATESNBD.AE",
+    # Balasore Alloys Ltd — IBKR/Trendlyne write "ISPATALLOY"; the NSE symbol
+    # is BALASORE (BSE 513142). Map so identity + any future quote feed line up.
+    "ISPATALLOY.NS": "BALASORE.NS",
+    "ISPATALLOY":    "BALASORE.NS",
+    "ISPATALLOY.BO": "BALASORE.BO",
     # ETFs/funds stored without exchange suffix — correct tickers with suffix
     "JEPG":          "JEPG.L",    # JPM Global Equity Premium Income UCITS ETF (LSE, USD)
     "IEDY":          "IEDY.SW",   # iShares MSCI India ETF (SIX Swiss Exchange)

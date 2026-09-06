@@ -168,6 +168,12 @@ FIELD DEFINITIONS — READ CAREFULLY BEFORE EXTRACTING
    USD for US stocks, INR for India, AED for UAE, HKD for Hong Kong,
    GBP for UK, EUR for Europe, SGD for Singapore.
 
+6. last_known_price — OPTIONAL. The CURRENT market price PER SHARE shown in
+   the statement (the "LTP" / "Last Price" / "Current Price" / "Close Price"
+   / "Mkt Price" column — NOT market value, NOT avg cost). Include it when
+   the column exists; omit the field entirely if it doesn't. This is used to
+   value holdings that no live price feed covers (e.g. UAE ADX/DFM stocks).
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMMON BROKER COLUMN LAYOUTS (for reference)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -187,7 +193,7 @@ Return ONLY a JSON array. No markdown, no explanation, no code blocks.
 [
   {"ticker": "AAPL", "name": "Apple Inc", "quantity": 100, "avg_cost": 150.25, "currency": "USD"},
   {"ticker": "RELIANCE.NS", "name": "Reliance Industries", "quantity": 50, "avg_cost": 2450.00, "currency": "INR"},
-  {"ticker": "EMAAR.AE", "name": "Emaar Properties", "quantity": 1000, "avg_cost": 7.80, "currency": "AED"}
+  {"ticker": "EMAAR.AE", "name": "Emaar Properties", "quantity": 1000, "avg_cost": 7.80, "currency": "AED", "last_known_price": 11.02}
 ]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

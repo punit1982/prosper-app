@@ -910,22 +910,35 @@ def portfolio_section():
     from core.cio_engine import no_live_source_reason
     _priced = pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce")
 
-    by_design, unpriced = {}, []
+    try:
+        from core.adx_client import is_uae_symbol as _is_uae
+    except Exception:
+        _is_uae = lambda _t: False
+
+    by_design, unpriced, uae_unpriced = {}, [], []
     for _tkr, _has_price in zip(df["ticker"].tolist(), _priced.notna().tolist()):
         reason = no_live_source_reason(_tkr)
         if reason:
             if not _has_price:
                 by_design.setdefault(reason, []).append(str(_tkr))
         elif not _has_price:
-            unpriced.append(str(_tkr))
+            (uae_unpriced if _is_uae(_tkr) else unpriced).append(str(_tkr))
 
+    if uae_unpriced:
+        st.warning(
+            f"**No live price yet for: {', '.join(uae_unpriced)}**  \n"
+            "These are UAE (ADX / DFM) listings. Their only free live source (Mubasher) blocks "
+            "requests from cloud servers, so the app can't reach it directly — the ticker is fine, "
+            "nothing to change in Edit Holdings.  \n"
+            "**Fix:** run **IBKR Sync** (or re-upload the account in **Upload Portal**) and they'll "
+            "value from your broker's own price. A daily background job also refreshes these when set up."
+        )
     if unpriced:
         st.warning(
             f"**Couldn't fetch a price for: {', '.join(unpriced)}**  \n"
             "Every source was tried. This usually means the stored ticker is missing or has the "
             "wrong exchange suffix — check it in **Edit Holdings** above.  \n"
-            "Examples: Swiss `NESN.SW` · Singapore `D05.SI` · India NSE `TCS.NS`, BSE-only `543895.BO`. "
-            "UAE holdings are priced from ADX/DFM directly and need no suffix change."
+            "Examples: Swiss `NESN.SW` · Singapore `D05.SI` · India NSE `TCS.NS`, BSE-only `543895.BO`."
         )
     if by_design:
         lines = "  \n".join(f"· **{', '.join(t)}** — {r}" for r, t in by_design.items())

@@ -89,7 +89,29 @@ def main() -> int:
     except Exception as e:
         _log(f"fundamentals step failed: {e}")
 
-    # 3. FX — one warm rate per currency actually held
+    # 3. UAE (ADX/DFM) prices — Mubasher is Cloudflare-gated from Render's
+    #    datacenter IPs but usually reachable from a GitHub Actions runner, so
+    #    fetch here and write price_cache for the app to read.
+    try:
+        from core.adx_client import is_uae_symbol, get_quote as adx_quote
+        from core.database import save_price_cache
+        uae = [t for t in tickers if is_uae_symbol(t)]
+        warmed = {}
+        for t in uae:
+            try:
+                q = adx_quote(t)
+                if q and q.get("price", 0) > 0:
+                    warmed[t] = q
+                    _log(f"uae {t}: {q['price']} ({q.get('changesPercentage')}%)")
+            except Exception as e:
+                _log(f"uae {t} failed: {e}")
+        if warmed:
+            save_price_cache(warmed)
+            _log(f"cached {len(warmed)}/{len(uae)} UAE prices")
+    except Exception as e:
+        _log(f"UAE price step failed: {e}")
+
+    # 4. FX — one warm rate per currency actually held
     base = os.getenv("BASE_CURRENCY", "USD")
     currencies = {detect_currency_from_ticker(t) for t in tickers} - {base}
     for ccy in sorted(c for c in currencies if c):

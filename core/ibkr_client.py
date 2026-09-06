@@ -202,16 +202,21 @@ def parse_positions(xml_string: str) -> List[Dict]:
         exchange = pos.get("listingExchange", "").strip()
         ticker = _apply_exchange_suffix(symbol, exchange)
 
+        _mark = _safe_float(pos.get("markPrice", "0"))
         positions.append({
             "ticker":          ticker,
             "name":            pos.get("description", "").strip(),
             "quantity":        _safe_float(pos.get("position", "0")),
             "avg_cost":        _safe_float(pos.get("costBasisPrice", "0")),
             "currency":        pos.get("currency", "USD").strip(),
-            "market_price":    _safe_float(pos.get("markPrice", "0")),
+            "market_price":    _mark,
             "market_value":    _safe_float(pos.get("positionValue", "0")),
             "unrealized_pnl":  _safe_float(pos.get("fifoPnlUnrealized", "0")),
             "asset_category":  asset_cat,
+            # IBKR's own mark, persisted so a holding no live API can price
+            # (notably UAE ADX/DFM names — Mubasher is Cloudflare-gated from
+            # datacenter IPs) still shows a value from the broker's number.
+            "last_known_price": _mark if _mark > 0 else None,
         })
 
     if skipped:
