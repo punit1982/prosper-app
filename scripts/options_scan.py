@@ -52,6 +52,24 @@ from harvest import universe as agu          # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+def ensure_schema() -> bool:
+    """Create the tables this script writes to.
+
+    app.py calls init_db() after login; a headless runner never reaches that, so without this
+    every save_chain_snapshot / save_vol_observation raised "no such table", was swallowed as a
+    per-name warning, and the run still reported success. The IV-history clock would have looked
+    like it was ticking while writing nothing — the exact failure that makes a --vol-only run
+    worthless.
+    """
+    try:
+        from core.database import init_db
+        init_db()
+        return True
+    except Exception as e:
+        _log.error("could not create/verify the database schema: %s", e)
+        return False
+
+
 def _positions_from_db() -> dict:
     """{TICKER: {'shares': n}} for US-listed lots, from holdings.
 
@@ -112,6 +130,7 @@ def scan(tickers: list, *, scan_date: str, td_key: str, persist: bool = True) ->
     that has already spent eight minutes. Failures are collected and reported, not raised.
     """
     snapshots, metrics, failures = {}, {}, []
+    stored, persist_errors = [], []
     pacer = od._Pacer()
 
     iv_history = {}
@@ -144,8 +163,10 @@ def scan(tickers: list, *, scan_date: str, td_key: str, persist: bool = True) ->
                 from core.database import save_chain_snapshot, save_vol_observation
                 save_chain_snapshot(t, scan_date, snap, m)
                 save_vol_observation(t, scan_date, m)
+                stored.append(t)
             except Exception as e:
                 _log.warning("%-6s persist failed: %s", t, e)
+                persist_errors.append(f"{t}: {e}")
 
         _log.info("[%3d/%d] %-6s spot=%-9s iv30=%-6s hv20=%-6s vrp=%-6s %-8s oi=%s",
                   i, len(tickers), t,
@@ -153,9 +174,14 @@ def scan(tickers: list, *, scan_date: str, td_key: str, persist: bool = True) ->
                   f"{m.get('hv20') or 0:.1f}", f"{m.get('vrp') or 0:.2f}",
                   m.get("vrp_verdict"), m.get("total_oi"))
 
-    _log.info("scan complete: %d ok, %d failed, %.1f min",
-              len(snapshots), len(failures), (time.time() - t0) / 60)
-    return snapshots, metrics, failures
+    _log.info("scan complete: %d fetched, %d stored, %d failed, %.1f min",
+              len(snapshots), len(stored), len(failures), (time.time() - t0) / 60)
+    if persist and persist_errors:
+        # Loud, not a shrug: a scan that fetched everything and stored nothing looks identical to
+        # a successful one in the logs unless this is said plainly.
+        _log.error("NOTHING WAS SAVED for %d name(s). First error: %s",
+                   len(persist_errors), persist_errors[0])
+    return snapshots, metrics, failures, stored
 
 
 def build_and_store_slate(snapshots: dict, metrics: dict, positions: dict, *, scan_date: str):
@@ -241,16 +267,26 @@ def main():
         tickers, positions = build_scan_list()
 
     _log.info("HARVEST scan %s — %d ticker(s)", scan_date, len(tickers))
-    snapshots, metrics, failures = scan(tickers, scan_date=scan_date, td_key=td_key,
-                                        persist=not args.no_persist)
+    if not args.no_persist and not ensure_schema():
+        _log.error("aborting: the database is not writable, so nothing would be recorded.")
+        return 1
+
+    snapshots, metrics, failures, stored = scan(tickers, scan_date=scan_date, td_key=td_key,
+                                                persist=not args.no_persist)
 
     if failures:
         _log.info("names with no usable chain: %s",
                   ", ".join(f["ticker"] for f in failures))
 
     if args.vol_only:
-        _log.info("--vol-only: %d observations written. IV percentile unlocks at %d.",
-                  len(metrics), vm.MIN_HISTORY_FOR_PERCENTILE)
+        if args.no_persist:
+            _log.info("--vol-only with --no-persist: %d measured, nothing written.", len(metrics))
+            return 0
+        if not stored:
+            _log.error("--vol-only: NOTHING was written. The IV-history clock has not started.")
+            return 1
+        _log.info("--vol-only: %d observation(s) written. IV percentile unlocks at %d "
+                  "observations per name.", len(stored), vm.MIN_HISTORY_FOR_PERCENTILE)
         return 0
 
     if args.no_slate:
