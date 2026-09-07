@@ -157,12 +157,51 @@ def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
     return True
 
 
+# ── UAE circuit breaker ───────────────────────────────────────────────────────
+# Mubasher is the ONLY free source that covers ADX/DFM, and it sits behind
+# Cloudflare, which 403s datacenter IPs — so on Render every UAE name walks the
+# whole cascade (Mubasher 403 → Twelve Data, which has no ADX/DFM on this plan →
+# yfinance, which 404s quoteSummary → Finnhub, which is US-only) and fails at the
+# end of it. Measured in production 07-Sep-2026: ~53 SECONDS of guaranteed-failing
+# lookups on every cold start, and the free tier cold-starts roughly every 17
+# minutes. That is the single largest avoidable component of "the app is stuck".
+#
+# A breaker, not a hardcoded skip list: from a residential IP or a GitHub Actions
+# runner Mubasher works fine, and NO_LIVE_SOURCE would disable it permanently
+# everywhere. After three consecutive UAE failures in one process we stop trying
+# for the lifetime of that process and fall straight through to
+# last_known_price — the IBKR mark, which is what actually prices these lines
+# today (see core/ibkr_prices.apply_static_marks_to_holdings). A restart re-arms
+# it, so a network that can reach Mubasher keeps using it.
+_UAE_FAILURES = 0
+_UAE_BREAKER_THRESHOLD = 3
+
+
+def _uae_circuit_open() -> bool:
+    return _UAE_FAILURES >= _UAE_BREAKER_THRESHOLD
+
+
+def reset_uae_circuit():
+    """Re-arm the breaker (tests, and after a network change)."""
+    global _UAE_FAILURES
+    _UAE_FAILURES = 0
+
+
 def _fetch_one_quote(sym: str) -> tuple:
     """
     Fetch price data for a single ticker.
     Cascade: ADX/Mubasher (ADX stocks) → Twelve Data (UAE/DFM) → yfinance → Finnhub
     """
     import yfinance as yf
+
+    # Short-circuit: this network cannot reach the only UAE source, so the rest
+    # of the cascade is 5s of certain failure per name.
+    try:
+        from core.adx_client import is_uae_symbol as _is_uae
+        if _is_uae(sym) and _uae_circuit_open():
+            return sym, None
+    except Exception:
+        pass
 
     # Source 0a: Mubasher intraday CSV — the ONLY working free source for UAE
     # (ADX + DFM) prices. Gated on is_uae_symbol(), not is_adx_ticker(): the
@@ -178,7 +217,17 @@ def _fetch_one_quote(sym: str) -> tuple:
             if adx and adx.get("price", 0) > 0:
                 adx["symbol"] = sym
                 adx.setdefault("currency", "AED")
+                reset_uae_circuit()          # this network CAN reach Mubasher
                 return sym, adx
+            global _UAE_FAILURES
+            _UAE_FAILURES += 1
+            if _UAE_FAILURES == _UAE_BREAKER_THRESHOLD:
+                import logging as _lg
+                _lg.getLogger(__name__).warning(
+                    "UAE price source unreachable %d times — skipping live UAE lookups for the "
+                    "rest of this process and using broker marks instead. This is expected on "
+                    "Render (Cloudflare blocks datacenter IPs); a restart re-arms it.",
+                    _UAE_FAILURES)
     except Exception:
         pass
 
