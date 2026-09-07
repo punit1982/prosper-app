@@ -11,27 +11,29 @@ WHY THIS EXISTS — the cost is not what it looks like
 The fear is "hundreds of dollars of Claude tokens". Measured, that is only true of the
 `full` tier used indiscriminately:
 
-    tier      model       web     what it costs        50 names     182 holdings
-    screen    Sonnet 5    no      ~$0.04-0.10/name     ~$2-5        ~$8-18
-    standard  Sonnet 5    yes     ~$1.20/name          ~$60         ~$220
-    full      Opus 5      yes     ~$4.00/name          ~$200        ~$728
+    tier       model      searches  content   per name   50 names   182 holdings
+    screen     Sonnet 5      0          -      $0.073*      $4          $13
+    standard   Sonnet 5     12        40k      ~$1.20      $60         $219
+    full_lean  Sonnet 5     25        18k      ~$1.36      $68         $248
+    full       Opus 5       25        40k      ~$5.78     $289       $1,052
 
-The GROW framework is 36,053 tokens. Sent as a cached system block it costs $0.0072 a
-call instead of $0.072 — but ONLY if the cache stays warm, which needs the calls to be
-close together in one process. That is the main reason to batch rather than click
-through the UI one name at a time.
+    * measured on a real NKE run, not estimated.
 
-What actually drives the standard/full cost is not the framework, it is web_fetch pulling
-up to 40,000 tokens of page content per fetch, twelve times. `--lean` cuts that budget,
-which is the single biggest lever on price after tier choice.
+The framework is 36,053 tokens and, cached, costs $0.018 a call — it is NOT the cost
+driver. web_fetch is: 25 fetches x 40,000 tokens of page content is ~1M input tokens per
+name. full_lean keeps all 25 sources (breadth of evidence is the point of the full tier)
+and trims the boilerplate pulled from each, which is where the 76% saving comes from.
+
+Batching matters because prompt caching only pays off while the cache is warm, which
+needs the calls close together in one process rather than clicked one at a time in the UI.
 
 RECOMMENDED USE
 ---------------
     # every name the Options Desk needs a Rule 1 verdict for — a couple of dollars
     python3 scripts/grow_batch.py --universe --tier screen
 
-    # depth only where it changes a decision: your largest positions
-    python3 scripts/grow_batch.py --holdings --top 20 --tier standard --lean
+    # depth where it changes a decision — full retrieval breadth, a quarter of the price
+    python3 scripts/grow_batch.py --holdings --top 20 --tier full_lean
 
 Screen tier produces the Durability score and the full price ladder (buy_below,
 fair_high) — everything Rule 1 needs. It does no filings retrieval, so it is marked
@@ -134,10 +136,10 @@ def main():
     src.add_argument("--holdings", action="store_true", help="every US holding")
     src.add_argument("--top", type=int, help="cap the list at N names")
 
-    ap.add_argument("--tier", default="screen", choices=["screen", "standard", "full"],
-                    help="screen is enough for the Options Desk's Rule 1 (default)")
-    ap.add_argument("--lean", action="store_true",
-                    help="halve the web-fetch content budget — the biggest cost lever after tier")
+    ap.add_argument("--tier", default="screen",
+                    choices=["screen", "standard", "full", "full_lean"],
+                    help="screen is enough for the Options Desk's Rule 1 (default). full_lean is "
+                         "full-tier retrieval breadth at ~a quarter of full's price")
     ap.add_argument("--skip-fresh", type=int, default=30, metavar="DAYS",
                     help="skip names already analysed within N days (0 = re-run everything)")
     ap.add_argument("--budget", type=float, default=0.0, metavar="USD",
@@ -160,27 +162,13 @@ def main():
 
     from core import grow_engine as ge
 
-    if args.lean:
-        # web_fetch is the cost driver at standard/full: 12 fetches x 40,000 content tokens is
-        # ~480k input tokens a name. Halving it roughly halves the bill.
-        _orig = ge._web_tools_for
-
-        def _lean_tools(model, max_searches):
-            tools = _orig(model, max(0, max_searches // 2))
-            for t in tools:
-                if "max_content_tokens" in t:
-                    t["max_content_tokens"] = min(t["max_content_tokens"], 15000)
-            return tools
-        ge._web_tools_for = _lean_tools
-        _log.info("--lean: search budget halved, fetch content capped at 15k tokens")
-
     targets = _resolve_targets(args)
     if args.skip_fresh:
         before = len(targets)
         targets = [t for t in targets if not _already_done(t, args.skip_fresh)]
         _log.info("skipping %d name(s) analysed within %d days", before - len(targets), args.skip_fresh)
 
-    est = ge.GROW_TIERS[args.tier]["est_cost"] * (0.5 if args.lean else 1.0)
+    est = ge.GROW_TIERS[args.tier]["est_cost"]
     _log.info("%d name(s), tier=%s, rough estimate $%.2f total ($%.2f each)",
               len(targets), args.tier, est * len(targets), est)
 

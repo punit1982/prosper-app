@@ -851,8 +851,8 @@ def portfolio_section():
 
     # ── Restricted / Illiquid Holdings ──────────────────────────────────────
     # Unvested RSUs/PSUs and 401(k)/DCP retirement balances — real net worth,
-    # but not tradeable, so kept out of the tables above and out of Portfolio
-    # Rebalance's suggestions (see pages/16_Portfolio_Rebalance.py).
+    # but not tradeable, so kept out of the tables above and out of any
+    # rebalance maths (core/portfolio_optimizer.py, surfaced on Risk & Strategy).
     if not restricted_df.empty:
         st.divider()
         _restricted_total = safe_sum(restricted_df.get("market_value")) or 0

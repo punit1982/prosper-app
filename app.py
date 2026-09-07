@@ -264,16 +264,29 @@ pg = st.navigation({
         st.Page("pages/22_Dividend_Dashboard.py", title="Dividends", icon="💰"),
         st.Page("pages/20_Earnings_Calendar.py", title="Earnings Calendar", icon="📅"),
     ],
-    "Research & AI": [
-        st.Page("pages/13_Research_Hub.py", title="Research Hub", icon="🔭"),
+    # Split by what the page is FOR, not by what it is made of.
+    #
+    # "Decide" holds the four surfaces that produce an action: a Durability score and
+    # price ladder, an options ticket, a single-name workup, and the assistant.
+    #
+    # "Signals" holds the rest. GROW §6.2 is explicit that aggregator data — analyst
+    # consensus, headline sentiment, screen-derived technicals, peer multiples — is
+    # Tier 5, confirmation only, and never price-setting. They sat beside GROW in one
+    # undifferentiated "Research & AI" list of nine, which invites reading a sell-side
+    # target as if it carried the same weight as the framework's own arithmetic. The
+    # group name now says what they are.
+    "Decide": [
+        st.Page("pages/15_GROW_Analysis.py", title="GROW Engine", icon="🌱"),
+        st.Page("pages/19_Options_Desk.py", title="Options Desk", icon="🌾"),
         st.Page("pages/18_Equity_Deep_Dive.py", title="Equity Deep Dive", icon="🔬"),
+        st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
+    ],
+    "Signals — confirmation only": [
+        st.Page("pages/13_Research_Hub.py", title="Research Hub", icon="🔭"),
         st.Page("pages/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
         st.Page("pages/8_Sentiment.py", title="Sentiment", icon="💬"),
         st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
         st.Page("pages/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
-        st.Page("pages/15_GROW_Analysis.py", title="GROW Engine", icon="🌱"),
-        st.Page("pages/19_Options_Desk.py", title="Options Desk", icon="🌾"),
-        st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
     ],
     "News & Activity": [
         st.Page("pages/3_Portfolio_News.py", title="Portfolio News", icon="📰"),

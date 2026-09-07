@@ -101,8 +101,45 @@ GROW_TIERS = {
         "effort": "xhigh",
         "web": True,
         "max_searches": 25,
-        "description": "Opus 5, deeper retrieval, technical appendix printed (~$4 and 10–15 min per stock)",
-        "est_cost": 4.00,
+        "fetch_content_tokens": 40000,
+        "description": "Opus 5, deeper retrieval, technical appendix printed (~$4–6 and 10–15 min per stock)",
+        "est_cost": 5.75,
+    },
+    # Full-tier retrieval at roughly a quarter of the price.
+    #
+    # Measured cost model (per name, 20k output, framework cached):
+    #   Opus   · 25 searches · 40k content   $5.78    <- "full" as shipped
+    #   Opus   · 25 searches · 18k content   $3.03
+    #   Sonnet · 25 searches · 40k content   $2.46
+    #   Sonnet · 25 searches · 18k content   $1.36    <- this tier, 76% cheaper
+    #
+    # The dominant cost is not the model and not the 36k-token framework (cached at
+    # $0.018) — it is web_fetch, which pulls up to 40,000 tokens of page content per
+    # fetch, 25 times, for ~1M input tokens a name.
+    #
+    # What is deliberately NOT cut: the search budget stays at 25. Breadth of evidence
+    # is the whole reason to run the full tier, and trimming sources would trade away
+    # the thing being paid for. What is cut is the boilerplate pulled from each source
+    # (nav chrome, footers, related-article lists) — 18k tokens still comfortably holds
+    # a 10-K item or an earnings release.
+    #
+    # The model change is defensible for a specific structural reason: GROW's §8
+    # resolver recomputes the Entry verdict, the five-rung ladder and the stability
+    # band in Python from the model's own inputs and OVERRIDES the model's arithmetic.
+    # So the model is not trusted with the numbers on either tier — only with judgment
+    # and narrative. A/B this against "full" on two or three names before trusting it
+    # wholesale (a standing open item in the handoff).
+    "full_lean": {
+        "label": "Full GROW (lean)",
+        "model": CLAUDE_DEFAULT_MODEL,
+        "max_tokens": 40000,
+        "thinking": {"type": "adaptive"},
+        "effort": "xhigh",
+        "web": True,
+        "max_searches": 25,
+        "fetch_content_tokens": 18000,
+        "description": "Sonnet 5 at full retrieval breadth, trimmed fetch payloads (~$1.40 per stock)",
+        "est_cost": 1.40,
     },
 }
 
@@ -410,18 +447,25 @@ def build_data_snapshot(ticker: str, info: dict = None, price_quote: dict = None
 # TOOLS
 # ─────────────────────────────────────────
 
-def _web_tools_for(model: str, max_searches: int) -> List[dict]:
-    """Server-side web tools. The 2026-02-09 variants need Opus/Sonnet 4.6+; Haiku 4.5 uses the basic ones."""
+def _web_tools_for(model: str, max_searches: int, content_tokens: int = 40000) -> List[dict]:
+    """Server-side web tools. The 2026-02-09 variants need Opus/Sonnet 4.6+; Haiku 4.5 uses the basic ones.
+
+    `content_tokens` caps how much of each fetched page is pulled into the request. It is the
+    single largest cost lever in the whole engine: at 25 fetches, 40,000 tokens each is ~1M input
+    tokens per name, which dwarfs the 36k-token cached framework.
+    """
     if max_searches <= 0:
         return []
     if model == CLAUDE_FAST_MODEL:
         return [
             {"type": "web_search_20250305", "name": "web_search", "max_uses": max_searches},
-            {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": max_searches, "max_content_tokens": 30000},
+            {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": max_searches,
+             "max_content_tokens": min(content_tokens, 30000)},
         ]
     return [
         {"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches},
-        {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": max_searches, "max_content_tokens": 40000},
+        {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": max_searches,
+         "max_content_tokens": content_tokens},
     ]
 
 
@@ -659,7 +703,8 @@ def run_grow(
     last_stop = None
 
     for model in models:
-        tools = _web_tools_for(model, cfg["max_searches"] if cfg["web"] else 0)
+        tools = _web_tools_for(model, cfg["max_searches"] if cfg["web"] else 0,
+                               cfg.get("fetch_content_tokens", 40000))
         messages = [{"role": "user", "content": user_msg}]
         kwargs = {"model": model, "max_tokens": cfg["max_tokens"], "system": system, "messages": messages}
         if tools:

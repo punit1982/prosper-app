@@ -195,6 +195,13 @@ def fetch_chain(ticker: str, *, retries: int = 2, pacer: _Pacer = None) -> dict:
                 raise ChainUnavailable(f"{ticker}: no listed options (HTTP {e.code})")
             if e.code == 429:
                 pacer.throttled()
+                # Once the pacer is at its ceiling the source is rate-limiting this IP
+                # systemically, and a retry 20s later is worth no more than the next
+                # name's first attempt — it just costs a minute per name. Give up on
+                # this one and let --resume collect the stragglers on a later pass.
+                # Measured: 21 remaining names were taking ~60s each this way.
+                if pacer.delay >= pacer.CEILING:
+                    raise ChainUnavailable(f"{ticker}: rate-limited (429) — retry with --resume")
                 continue
             if attempt == retries - 1:
                 break
