@@ -2604,8 +2604,10 @@ def get_chain_snapshots(scan_date: str = None) -> Dict[str, dict]:
     conn = _get_connection()
     try:
         if not scan_date:
-            row = conn.execute("SELECT MAX(scan_date) FROM option_chain_cache").fetchone()
-            scan_date = (row[0] if row else None)
+            # Turso rows are dict-like, not tuples — positional indexing on a fetchone() result
+            # works locally against sqlite3 and fails in production. _read_sql normalises both.
+            latest = _read_sql("SELECT MAX(scan_date) AS d FROM option_chain_cache", conn)
+            scan_date = None if latest.empty else latest.iloc[0]["d"]
             if not scan_date:
                 return {}
         df = _read_sql(
@@ -2729,24 +2731,26 @@ def get_harvest_slate(slate_date: str = None) -> Optional[dict]:
     """The stored slate for a date (default: most recent), or None."""
     uid = _current_user_id()
     conn = _get_connection()
+    cols = ("SELECT payload_json, market_note, n_selected, n_candidates, model_id, "
+            "cost_estimate, slate_date, created_at FROM harvest_slate ")
     try:
+        # Read through _read_sql rather than fetchone(): Turso returns dict-like rows, so
+        # positional indexing passes locally against sqlite3 and fails on the deployed database.
         if slate_date:
-            row = conn.execute(
-                "SELECT payload_json, market_note, n_selected, n_candidates, model_id, "
-                "cost_estimate, slate_date, created_at FROM harvest_slate "
-                "WHERE slate_date = ? AND user_id = ?", (slate_date, uid)).fetchone()
+            df = _read_sql(cols + "WHERE slate_date = ? AND user_id = ?", conn,
+                           params=(slate_date, uid))
         else:
-            row = conn.execute(
-                "SELECT payload_json, market_note, n_selected, n_candidates, model_id, "
-                "cost_estimate, slate_date, created_at FROM harvest_slate "
-                "WHERE user_id = ? ORDER BY slate_date DESC LIMIT 1", (uid,)).fetchone()
-        if not row:
+            df = _read_sql(cols + "WHERE user_id = ? ORDER BY slate_date DESC LIMIT 1", conn,
+                           params=(uid,))
+        if df is None or df.empty:
             return None
-        payload = json.loads(row[0]) if row[0] else {}
+        r = df.iloc[0]
+        payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
         payload["_meta"] = {
-            "market_note": row[1], "n_selected": row[2], "n_candidates": row[3],
-            "model_id": row[4], "cost_estimate": row[5], "slate_date": row[6],
-            "created_at": row[7],
+            "market_note": r["market_note"], "n_selected": r["n_selected"],
+            "n_candidates": r["n_candidates"], "model_id": r["model_id"],
+            "cost_estimate": r["cost_estimate"], "slate_date": r["slate_date"],
+            "created_at": r["created_at"],
         }
         return payload
     except Exception:
