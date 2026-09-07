@@ -1,0 +1,74 @@
+name: HARVEST options scan
+
+# Nightly options scan for the Prosper Options Desk: fetches the chains for the book plus the
+# assignment-grade universe, measures implied against realised volatility, stores the metrics,
+# and builds the day's slate with a single Claude call (~$0.02).
+#
+# WHY A RUNNER AND NOT RENDER
+#   * The scan moves ~150MB and takes 6-12 minutes against a rate-limited CDN. That cannot live
+#     in a Streamlit page request, and Render's free tier would sleep through it.
+#   * Render's datacenter IPs are already known to be blocked by Cloudflare for the Mubasher/UAE
+#     fetches. The same risk applies to any CDN-fronted source. Runner IPs are not blocked.
+#     NOTE: CBOE has been verified from a residential IP only. The first run here is the real
+#     test — if it 403s, that is the datacenter-IP problem again, not a code fault.
+#
+# WHY 21:30 UTC
+#   The US close is 20:00/21:00 UTC depending on daylight saving. Running half an hour after the
+#   later of the two guarantees settled closing quotes. This matters more than it sounds: a scan
+#   run over a weekend reported a 115% median bid/ask spread on XLF — one of the most liquid ETFs
+#   in existence — purely because Friday's quotes sit unmoved on strikes that never traded.
+#   Weekdays only, for the same reason.
+#
+# SETUP (one time): Settings -> Secrets and variables -> Actions
+#   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, ANTHROPIC_API_KEY,
+#   FINNHUB_API_KEY, TWELVE_DATA_API_KEY
+#   HARVEST_COLLATERAL_USD  (the liquid collateral ledger; without it every short put is
+#                            blocked by doctrine R4, which is the safe default)
+
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"   # 21:30 UTC, Mon-Fri — after the US close
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full | no-slate (data only, no model call) | vol-only"
+        required: false
+        default: "full"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45        # a 110-name sweep at 2-3s pacing, plus backoff headroom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run scan
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          HARVEST_COLLATERAL_USD: ${{ secrets.HARVEST_COLLATERAL_USD }}
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          case "$MODE" in
+            vol-only) FLAGS="--vol-only" ;;
+            no-slate) FLAGS="--no-slate" ;;
+            *)        FLAGS="" ;;
+          esac
+          python scripts/options_scan.py $FLAGS --out harvest-slate.json
+
+      - name: Upload slate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harvest-slate
+          path: harvest-slate.json
+          if-no-files-found: ignore
+          retention-days: 30

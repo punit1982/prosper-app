@@ -1,4 +1,4 @@
-# Prosper — Handoff (6 Sep 2026, current at v7.17)
+# Prosper — Handoff (7 Sep 2026, current at v7.19)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
@@ -105,6 +105,8 @@ credentials, no repo changes:
   sync with CORE.md or it silently replaces correct numbers with stale ones. After ANY change to
   `grow/*.md` run `venv/bin/python3 grow/grow_verify.py "grow/GROW v5 1 CORE 04Sep2026.md"` and
   expect `RESULT: ALL CHECKS PASS`.
+- `core/options_data.py` + `core/vol_metrics.py` + `core/options_engine.py` + `harvest/` —
+  **HARVEST v1.0, the Options Desk** (new in v7.19). Daily options recommendation engine. See §9.
 - `core/file_parsers.py`, `core/screenshot_parser.py` — broker imports. Restricted-stock and
   retirement rows get an AI-built deterministic `broker_source`, but **only if the Upload Portal's
   Broker dropdown stays on "Auto-detect"**; a manual selection collapses NIQ/401(k)/DCP into one tag.
@@ -235,8 +237,98 @@ quote exists" rather than as fetch failures.
 8. Sweep the remaining ad hoc 🔴/🟡/🟢 into `status_chip()` (Technical Analysis, Sentiment, Analyst
    Consensus, Earnings Calendar, Upload Portal). Low value — these are directional signals, not
    severity states.
+10. **Paper-trade HARVEST before placing a single real order.** Log the slate daily without
+    acting for four weeks, then measure: what fraction would have expired worthless, what the fills
+    would realistically have been, and whether the doctrine's rejections were right. An options
+    engine that has never been measured is a confident-sounding random number generator, and this
+    one makes specific probability claims every morning.
+11. **Run GROW on the assignment-grade universe.** R1 is the keystone rule and it cannot be
+    evaluated without a verdict — every AGU name currently produces a PROVISIONAL ticket. The
+    engine is honest about it, but it is running on one cylinder until those verdicts exist.
 9. Never map old PROSPER-era verdicts onto GROW. Every GROW verdict shown must carry Durability +
    Entry arithmetic. Positions are never sent to the engine.
+
+## 9. HARVEST v1.0 — the Options Desk (new in v7.19)
+
+Daily options engine: at most five specific, tradeable orders a morning, from live chains, for
+about **$0.0155 a day** in model cost (measured, cache warm).
+
+**Architecture — the GROW split, applied to options.** Claude never sees an option chain and never
+does arithmetic.
+
+| Layer | Where | What |
+|---|---|---|
+| 2 | `options_engine.generate_candidates()` | Pure Python. Walks the chains, applies every doctrine gate, scores survivors. ~180,000 contracts → ~20 finalists. |
+| 3 | `options_engine.select_slate()` | ONE Claude call (Sonnet 5). Sees a 20-row table, picks ≤5, writes the reasoning. |
+| 4 | `options_engine.resolve_order()` | Pure Python. Recomputes limit price, size, collateral, breakeven, max loss and exits — **overrides the model**, exactly as `resolve_entry()` does for GROW. |
+
+**Doctrine** — `harvest/HARVEST_v1_DOCTRINE.md`, sent as a cached system block (~3.1k tokens).
+Eleven rules. R1 is the keystone and is where GROW earns its keep: **a covered call's strike must
+sit at or above GROW's `fair_high` rung, and a short put's strike at or below `buy_below`** — you
+only ever agree to a price GROW already called fair. R2 forbids selling cheap volatility
+(IV30/HV20 ≥ 1.10 required). R4 caps short-put collateral at 60% of the ledger. R9 makes "fewer
+than five" and "zero" valid answers.
+
+**Data — all free, all verified live 06-07 Sep 2026.**
+
+| Source | Status |
+|---|---|
+| **CBOE delayed quotes** (`cdn.cboe.com/api/global/delayed_quotes/options/<SYM>.json`) | Works, keyless. The only free source with **greeks + IV per contract**. Verified on US equities, ADRs, ETFs and index options (`_SPX` takes the underscore). |
+| **Finnhub `/calendar/earnings`** | Works on the existing key. One call covers the whole R6 blackout gate. |
+| **Yahoo `chart` → Twelve Data** | Realized-vol closes, two sources. Yahoo 429s under a 110-name sweep, hence the fallback. |
+| **Yahoo v7 options** | **Dead** — `401 Invalid Crumb`, same as `quoteSummary`. Do not build on it. |
+
+**Two operational constraints that shaped everything:**
+
+1. **CBOE rate-limits hard.** Eight parallel workers → HTTP 429 within seconds, and it silently
+   reported that NVDA/ORCL/PLTR have no listed options. Sequential at ~3s ran 84/84 clean.
+   `options_data._Pacer` does adaptive backoff. **Never add concurrency there.**
+2. **Weekend quotes lie about spreads.** A Sunday scan gave a 115% median spread on XLF. Open
+   interest survives the weekend; bid/ask does not. Hence `quote_is_stale()`, the loosened gate
+   when stale, and the "re-check before placing" warning on every affected ticket.
+
+**Running it.** `scripts/options_scan.py`, on a **GitHub Actions runner** (`docs/harvest-scan-github-action.yml`,
+21:30 UTC weekdays — after the US close). Not Render: a scan moves ~150MB over 6-12 minutes, and
+Render's datacenter IPs are already known to be Cloudflare-blocked for the UAE fetches. **CBOE has
+only been verified from a residential IP — the first runner execution is the real test.**
+
+    python scripts/options_scan.py --vol-only    # phase 0: start the IV-history clock TODAY
+
+`--vol-only` matters more than it looks: IV percentile needs ~120 observations
+(`vol_metrics.MIN_HISTORY_FOR_PERCENTILE`) and **cannot be backfilled from any free source**. Every
+day it does not run pushes usable IV-rank six months further out.
+
+**Tables** (additive, in `init_db()`): `option_chain_cache` (the reduced slice, not raw chains),
+`vol_history` (the permanent series), `harvest_recommendations` (append-only, like
+`grow_verdict_log`), `harvest_positions`, `harvest_slate`.
+
+**Settings**: `harvest_collateral_usd` is the liquid collateral ledger (Treasury ETFs + cash, NOT
+the margin loan). **Left at 0, every short put is blocked by R4** — the safe default. Set it on the
+Settings page.
+
+**Owner context that shaped the doctrine** (corrected 7 Sep after a first pass got it wrong):
+~$208k of short-duration Treasury ETFs (IB01, U03A) + ~$67k AED cash = real collateral. The
+CHF/JPY/SGD debit is a deliberate 1-1.5% funding carry, not distress. UAE-resident Indian national:
+no capital gains tax, and option premium suffers no US withholding while US dividends lose 30% —
+so premium is the best-taxed income stream (R10, and it is *configuration*, not tax advice).
+
+**Universe**: `harvest/universe.py` — 50 assignment-grade names, tiered by collateral per contract
+(A <$15k, B $15-40k, C >$40k = never a naked short put), plus a SPY/TLT hedge annex. Built because
+only **11 of the owner's 69 eligible US lots** pass a real liquidity gate — his own book cannot
+honestly feed five ideas a day.
+
+**Tests**: `tests/test_harvest.py`, 41 assertions, offline, no network/model/DB. Run them after any
+change to the gates or the arithmetic — this is where a wrong number becomes a real order.
+
+    venv/bin/python3 tests/test_harvest.py
+
+**Verified in the preview harness** at 375×812 against the real slate: `stat_grid` holds a
+3-column grid (112.6px each), hero at 30.4px, no horizontal overflow, page 4.2 screens.
+
+**Not yet done**: the workflow file needs copying to `.github/workflows/` plus secrets (same
+`workflow`-scope problem as prewarm); no live GROW verdicts existed locally so R1 was exercised
+against seeded verdicts, not production ones; and the engine has never been paper-traded — see
+open item 10.
 
 ## 8. What verification is and isn't possible here
 
