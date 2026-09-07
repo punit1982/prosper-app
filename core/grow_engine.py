@@ -693,133 +693,23 @@ def resolve_entry(price, central, bull_price, horizon_years, required_return,
 # MAIN
 # ─────────────────────────────────────────
 
-def run_grow(
-    ticker: str,
-    tier: str = "standard",
-    info: dict = None,
-    price_quote: dict = None,
-    prior: dict = None,
-    modifier: str = "",
-) -> Tuple[Optional[Dict], str]:
-    """Run GROW on one ticker. Returns (result_dict, error_message); result is None on failure.
+def assemble_result(ticker: str, data: dict, memo_text: str = "", *, tier: str = "standard",
+                    info: dict = None, price_quote: dict = None, model_id: str = "",
+                    cost: float = 0.0, elapsed: float = 0.0, data_fields: int = 0,
+                    usage: dict = None) -> Tuple[Optional[dict], str]:
+    """Turn a parsed GROW JSON block into the DB-ready result.
 
-    The result dict is DB-ready for core.database.save_prosper_analysis().
+    Shared by every producer of GROW output — the API path in run_grow() and the Cowork
+    import in scripts/grow_import.py. The §8 resolver runs HERE, so a memo produced by
+    hand in a chat window gets exactly the same deterministic verdict, five-rung ladder
+    and stability band as one produced through the API. Reimplementing any of this in the
+    import path would let the two drift, and the ladder is what Rule 1 reads.
     """
-    if not framework_available():
-        return None, "GROW framework files not found in the app's grow/ folder."
-    api_key = get_api_key("ANTHROPIC_API_KEY")
-    if not api_key or api_key.startswith("your_"):
-        return None, "Anthropic API key not configured. Add ANTHROPIC_API_KEY on Render (Environment) or in your local .env."
-
-    tier = tier if tier in GROW_TIERS else "standard"
-    cfg = dict(GROW_TIERS[tier])          # copy: the search budget is adjusted per-run below
-
-    # Primary filing data first, where the ticker is a US EDGAR filer. This is the cost lever:
-    # ~850 tokens of as-filed XBRL with accession numbers replaces the fetches that were
-    # re-reading the same figures out of HTML at up to 40,000 tokens each.
-    edgar = None
-    if cfg.get("web"):
-        try:
-            from core import edgar_client
-            edgar = edgar_client.filing_snapshot(ticker)
-        except Exception:
-            edgar = None
-
-    snapshot, data_fields = build_data_snapshot(ticker, info, price_quote, edgar=edgar)
-
-    if edgar:
-        # The financial-statement retrieval is already done, so the remaining budget buys
-        # qualitative evidence. Cutting it is what converts the shorter prompt into a smaller
-        # bill; leaving it at 25 would just spend the searches elsewhere.
-        cfg["max_searches"] = max(8, int(cfg["max_searches"] * 0.6))
-        _log.info("GROW %s: EDGAR primary data found (%d concepts) — search budget %d",
-                  ticker, edgar.get("concepts_found") or 0, cfg["max_searches"])
-
-    user_parts = [f"GROW {ticker}" + (f" {modifier}" if modifier else "") + (" screen" if tier == "screen" and "screen" not in modifier else "")]
-    user_parts.append("\nDATA SNAPSHOT (Tier 5 — confirmation only):\n" + snapshot)
-    if prior:
-        try:
-            prior_slim = {k: prior.get(k) for k in ("classification", "durability", "entry", "one_reason", "break_triggers", "driving_inputs") if prior.get(k)}
-            prior_slim["analysis_date"] = prior.get("analysis_date")
-            user_parts.append("\nPRIOR RUN (§11 continuity — update against this):\n```json\n" + json.dumps(prior_slim, default=str)[:12000] + "\n```")
-        except Exception:
-            pass
-    user_msg = "\n".join(user_parts)
-
-    try:
-        import anthropic
-    except ImportError:
-        return None, "anthropic package not installed."
-
-    client = anthropic.Anthropic(api_key=api_key, timeout=900.0, max_retries=1)
-    system = _system_blocks(tier, max_searches=cfg["max_searches"], has_edgar=bool(edgar))
-    models = [cfg["model"]] + [m for m in CLAUDE_MODEL_PRIORITY if m != cfg["model"]]
-
-    t0 = time.time()
-    total_cost = 0.0
-    usage_tot = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0, "web_searches": 0}
-    final_text = ""
-    model_used = None
-    last_error = None
-    last_stop = None
-
-    for model in models:
-        tools = _web_tools_for(model, cfg["max_searches"] if cfg["web"] else 0,
-                               cfg.get("fetch_content_tokens", 40000))
-        messages = [{"role": "user", "content": user_msg}]
-        kwargs = {"model": model, "max_tokens": cfg["max_tokens"], "system": system, "messages": messages}
-        if tools:
-            kwargs["tools"] = tools
-        # Thinking / effort. Haiku 4.5 (last-resort fallback) takes neither "adaptive"
-        # nor effort, so only the current-generation models get them.
-        if model != CLAUDE_FAST_MODEL:
-            if cfg.get("thinking"):
-                kwargs["thinking"] = cfg["thinking"]
-            if cfg.get("effort"):
-                kwargs["extra_body"] = {"output_config": {"effort": cfg["effort"]}}
-        try:
-            texts = []
-            for _turn in range(8):  # web tools may return pause_turn; continue up to 8 times
-                # Streamed so large max_tokens never trips the SDK's request-time limit
-                with client.messages.stream(**kwargs) as stream:
-                    resp = stream.get_final_message()
-                c, u = _usage_cost(resp.usage, model)
-                total_cost += c
-                for k in usage_tot:
-                    usage_tot[k] += u.get(k, 0)
-                texts.append(extract_text(resp))
-                last_stop = getattr(resp, "stop_reason", "")
-                if last_stop == "pause_turn":
-                    messages.append({"role": "assistant", "content": resp.content})
-                    continue
-                break
-            final_text = "\n".join(t for t in texts if t)
-            model_used = model
-            break
-        except Exception as e:  # model fallback on 404 only; everything else propagates
-            err = str(e)
-            status = getattr(e, "status_code", None)
-            if status == 404 or "not_found" in err or "404" in err:
-                last_error = e
-                continue
-            _log.exception("GROW run failed for %s", ticker)
-            return None, f"GROW run failed: {err[:300]}"
-
-    if model_used is None:
-        return None, f"No Claude model accessible with your API key. Last error: {last_error}"
-
-    elapsed = time.time() - t0
-    global LAST_RAW_TEXT
-    LAST_RAW_TEXT = final_text  # kept for debugging a failed parse
-    data = _extract_json_block(final_text)
-    if not data or not isinstance(data, dict):
-        _log.warning("GROW %s: no JSON block. stop_reason=%s, chars=%d, tail=%r",
-                     ticker, last_stop, len(final_text), final_text[-300:])
-        if last_stop == "max_tokens":
-            return None, (f"GROW ran out of output budget before finishing (stop_reason=max_tokens after "
-                          f"{usage_tot['output_tokens']} tokens). Try the run again or a deeper tier.")
-        return None, "GROW finished but the machine-readable block could not be parsed. Try again."
-
+    info = info or {}
+    usage_tot = usage or {}
+    final_text = memo_text or ""
+    total_cost = cost
+    model_used = model_id
     dur = data.get("durability") or {}
     ent = data.get("entry") or {}
     ladder = ent.get("ladder") or {}
@@ -961,6 +851,139 @@ def run_grow(
     result["full_response"] = {k: v for k, v in result.items() if k not in ("memo_md",)}
     result["full_response"]["grow_json"] = data
     return result, ""
+
+
+def run_grow(
+    ticker: str,
+    tier: str = "standard",
+    info: dict = None,
+    price_quote: dict = None,
+    prior: dict = None,
+    modifier: str = "",
+) -> Tuple[Optional[Dict], str]:
+    """Run GROW on one ticker. Returns (result_dict, error_message); result is None on failure.
+
+    The result dict is DB-ready for core.database.save_prosper_analysis().
+    """
+    if not framework_available():
+        return None, "GROW framework files not found in the app's grow/ folder."
+    api_key = get_api_key("ANTHROPIC_API_KEY")
+    if not api_key or api_key.startswith("your_"):
+        return None, "Anthropic API key not configured. Add ANTHROPIC_API_KEY on Render (Environment) or in your local .env."
+
+    tier = tier if tier in GROW_TIERS else "standard"
+    cfg = dict(GROW_TIERS[tier])          # copy: the search budget is adjusted per-run below
+
+    # Primary filing data first, where the ticker is a US EDGAR filer. This is the cost lever:
+    # ~850 tokens of as-filed XBRL with accession numbers replaces the fetches that were
+    # re-reading the same figures out of HTML at up to 40,000 tokens each.
+    edgar = None
+    if cfg.get("web"):
+        try:
+            from core import edgar_client
+            edgar = edgar_client.filing_snapshot(ticker)
+        except Exception:
+            edgar = None
+
+    snapshot, data_fields = build_data_snapshot(ticker, info, price_quote, edgar=edgar)
+
+    if edgar:
+        # The financial-statement retrieval is already done, so the remaining budget buys
+        # qualitative evidence. Cutting it is what converts the shorter prompt into a smaller
+        # bill; leaving it at 25 would just spend the searches elsewhere.
+        cfg["max_searches"] = max(8, int(cfg["max_searches"] * 0.6))
+        _log.info("GROW %s: EDGAR primary data found (%d concepts) — search budget %d",
+                  ticker, edgar.get("concepts_found") or 0, cfg["max_searches"])
+
+    user_parts = [f"GROW {ticker}" + (f" {modifier}" if modifier else "") + (" screen" if tier == "screen" and "screen" not in modifier else "")]
+    user_parts.append("\nDATA SNAPSHOT (Tier 5 — confirmation only):\n" + snapshot)
+    if prior:
+        try:
+            prior_slim = {k: prior.get(k) for k in ("classification", "durability", "entry", "one_reason", "break_triggers", "driving_inputs") if prior.get(k)}
+            prior_slim["analysis_date"] = prior.get("analysis_date")
+            user_parts.append("\nPRIOR RUN (§11 continuity — update against this):\n```json\n" + json.dumps(prior_slim, default=str)[:12000] + "\n```")
+        except Exception:
+            pass
+    user_msg = "\n".join(user_parts)
+
+    try:
+        import anthropic
+    except ImportError:
+        return None, "anthropic package not installed."
+
+    client = anthropic.Anthropic(api_key=api_key, timeout=900.0, max_retries=1)
+    system = _system_blocks(tier, max_searches=cfg["max_searches"], has_edgar=bool(edgar))
+    models = [cfg["model"]] + [m for m in CLAUDE_MODEL_PRIORITY if m != cfg["model"]]
+
+    t0 = time.time()
+    total_cost = 0.0
+    usage_tot = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0, "web_searches": 0}
+    final_text = ""
+    model_used = None
+    last_error = None
+    last_stop = None
+
+    for model in models:
+        tools = _web_tools_for(model, cfg["max_searches"] if cfg["web"] else 0,
+                               cfg.get("fetch_content_tokens", 40000))
+        messages = [{"role": "user", "content": user_msg}]
+        kwargs = {"model": model, "max_tokens": cfg["max_tokens"], "system": system, "messages": messages}
+        if tools:
+            kwargs["tools"] = tools
+        # Thinking / effort. Haiku 4.5 (last-resort fallback) takes neither "adaptive"
+        # nor effort, so only the current-generation models get them.
+        if model != CLAUDE_FAST_MODEL:
+            if cfg.get("thinking"):
+                kwargs["thinking"] = cfg["thinking"]
+            if cfg.get("effort"):
+                kwargs["extra_body"] = {"output_config": {"effort": cfg["effort"]}}
+        try:
+            texts = []
+            for _turn in range(8):  # web tools may return pause_turn; continue up to 8 times
+                # Streamed so large max_tokens never trips the SDK's request-time limit
+                with client.messages.stream(**kwargs) as stream:
+                    resp = stream.get_final_message()
+                c, u = _usage_cost(resp.usage, model)
+                total_cost += c
+                for k in usage_tot:
+                    usage_tot[k] += u.get(k, 0)
+                texts.append(extract_text(resp))
+                last_stop = getattr(resp, "stop_reason", "")
+                if last_stop == "pause_turn":
+                    messages.append({"role": "assistant", "content": resp.content})
+                    continue
+                break
+            final_text = "\n".join(t for t in texts if t)
+            model_used = model
+            break
+        except Exception as e:  # model fallback on 404 only; everything else propagates
+            err = str(e)
+            status = getattr(e, "status_code", None)
+            if status == 404 or "not_found" in err or "404" in err:
+                last_error = e
+                continue
+            _log.exception("GROW run failed for %s", ticker)
+            return None, f"GROW run failed: {err[:300]}"
+
+    if model_used is None:
+        return None, f"No Claude model accessible with your API key. Last error: {last_error}"
+
+    elapsed = time.time() - t0
+    global LAST_RAW_TEXT
+    LAST_RAW_TEXT = final_text  # kept for debugging a failed parse
+    data = _extract_json_block(final_text)
+    if not data or not isinstance(data, dict):
+        _log.warning("GROW %s: no JSON block. stop_reason=%s, chars=%d, tail=%r",
+                     ticker, last_stop, len(final_text), final_text[-300:])
+        if last_stop == "max_tokens":
+            return None, (f"GROW ran out of output budget before finishing (stop_reason=max_tokens after "
+                          f"{usage_tot['output_tokens']} tokens). Try the run again or a deeper tier.")
+        return None, "GROW finished but the machine-readable block could not be parsed. Try again."
+
+    return assemble_result(
+        ticker, data, final_text, tier=tier, info=info, price_quote=price_quote,
+        model_id=model_used, cost=total_cost, elapsed=elapsed,
+        data_fields=data_fields, usage=usage_tot)
 
 
 def run_grow_batch(tickers: list, tier: str = "screen", info_map: dict = None,

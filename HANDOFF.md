@@ -1,4 +1,4 @@
-# Prosper — Handoff (7 Sep 2026, current at v7.19)
+# Prosper — Handoff (7 Sep 2026, current at v7.20)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
@@ -105,8 +105,10 @@ credentials, no repo changes:
   sync with CORE.md or it silently replaces correct numbers with stale ones. After ANY change to
   `grow/*.md` run `venv/bin/python3 grow/grow_verify.py "grow/GROW v5 1 CORE 04Sep2026.md"` and
   expect `RESULT: ALL CHECKS PASS`.
+- `core/edgar_client.py` — SEC EDGAR XBRL: primary filing data for US names, free, with
+  accession numbers. See §8.
 - `core/options_data.py` + `core/vol_metrics.py` + `core/options_engine.py` + `harvest/` —
-  **HARVEST v1.0, the Options Desk** (new in v7.19). Daily options recommendation engine. See §9.
+  **HARVEST v1.0, the Options Desk** (new in v7.19). Daily options recommendation engine. See §8.
 - `core/file_parsers.py`, `core/screenshot_parser.py` — broker imports. Restricted-stock and
   retirement rows get an AI-built deterministic `broker_source`, but **only if the Upload Portal's
   Broker dropdown stays on "Auto-detect"**; a manual selection collapses NIQ/401(k)/DCP into one tag.
@@ -214,41 +216,68 @@ quote exists" rather than as fetch failures.
 
 ## 7. Open items, highest value first
 
-1. **IBKR Flex web service still not configured** (`IBKR_FLEX_TOKEN` + query id). Until it is, the
-   committed `data/ibkr_marks.json` snapshot is the price source for UAE/fund/suspended lines —
-   see §6. Configuring Flex would make it self-updating; the static file is the stopgap.
-2. ~~Nothing back-fills `last_known_price`~~ — `apply_static_marks_to_holdings()` now does, on every
-   app start, from `data/ibkr_marks.json`. Keep that file fresh (§6).
-3. **Install the pre-warm GitHub Action.** `docs/prewarm-github-action.yml` needs copying to
-   `.github/workflows/` plus repo secrets — the push token used in these sessions lacks `workflow`
-   scope. This is what kills the slow first load of the morning.
-4. **Cold load.** A first load of 182 holdings ran past two minutes locally with no Render cold start
-   involved. Pre-warm + a paid instance is the answer.
-5. **GROW Annex E calibration** — the archetype premium/required-return table
-   (`grow/GROW v5 1 ANNEX E ARCHETYPE LOOKUPS.md`) is a **mechanical linear rescale of pre-compression
-   values, explicitly labelled a placeholder**, chosen by Punit as a stopgap. Replace with real
-   per-archetype judgment when he is ready. Do not treat the numbers as final.
-6. **Full GROW tier (Opus 5, ~$4/name) still not live-tested end to end.** Open question Punit is
-   weighing: run full tier on Sonnet 5 instead (~50% cheaper; the deterministic §8 resolver already
-   overrides model arithmetic, so only narrative depth changes). A/B it first.
-7. **Exhicon (`543895.BO`)** — Yahoo shows ₹258.55 against Trendlyne's ₹469.85 and a 52-week range of
-   220–440. That looks like a corporate action; **the share count needs confirming before the position
-   value is trusted.**
-8. Sweep the remaining ad hoc 🔴/🟡/🟢 into `status_chip()` (Technical Analysis, Sentiment, Analyst
-   Consensus, Earnings Calendar, Upload Portal). Low value — these are directional signals, not
-   severity states.
-10. **Paper-trade HARVEST before placing a single real order.** Log the slate daily without
-    acting for four weeks, then measure: what fraction would have expired worthless, what the fills
-    would realistically have been, and whether the doctrine's rejections were right. An options
-    engine that has never been measured is a confident-sounding random number generator, and this
-    one makes specific probability claims every morning.
-11. **Run GROW on the assignment-grade universe.** R1 is the keystone rule and it cannot be
-    evaluated without a verdict — every AGU name currently produces a PROVISIONAL ticket. The
-    engine is honest about it, but it is running on one cylinder until those verdicts exist.
-9. Never map old PROSPER-era verdicts onto GROW. Every GROW verdict shown must carry Durability +
-   Entry arithmetic. Positions are never sent to the engine.
+1. **Run GROW across the book and the universe — through Cowork, not the API.** This is the
+   critical path. Rule 1 of the options doctrine cannot be evaluated without a Durability score
+   and a price ladder, so **every assignment-grade name currently produces a PROVISIONAL
+   ticket**. The engine is honest about it, but it is running on one cylinder until those
+   verdicts exist. See §9 for the Cowork workflow — it costs nothing per token.
+   Two names are done: NKE (screen) and ADBE (full_lean).
 
-## 9. HARVEST v1.0 — the Options Desk (new in v7.19)
+2. **Paper-trade HARVEST before placing a real order.** Log the slate daily without acting, then
+   measure: what fraction would have expired worthless, what the fills would realistically have
+   been, and whether the doctrine's rejections were right. An options engine that has never been
+   measured is a confident-sounding random number generator, and this one makes specific
+   probability claims every morning. Start small and real rather than long and simulated — a
+   paper fill always fills at the mid, which is the one thing that cannot fail.
+
+3. **Install the two GitHub Actions.** `docs/harvest-scan-github-action.yml` and
+   `docs/prewarm-github-action.yml` need copying into `.github/workflows/` plus repo secrets.
+   The push tokens used in these sessions lack `workflow` scope, so no session has been able to
+   do it. Until then the nightly options scan has to be run by hand, and it is slow from a
+   residential IP (see §8).
+
+4. **The mobile "Connecting…" hang.** A watchdog that reloads when a backgrounded tab's
+   WebSocket has died shipped in v7.20 and is verified installed, but whether it cures the
+   reported symptom is unconfirmed — it needs a real phone left backgrounded. If it persists,
+   the next suspect is `st.navigation` running alongside a `pages/` directory: Streamlit logs
+   that warning on every boot, and a direct page URL bypasses `app.py` entirely (confirmed in
+   the harness — the whole design system fails to load).
+
+5. **A/B `full_lean` against `full` on two or three names.** `full_lean` (Sonnet, 25 searches,
+   18k fetch content) is measured at $1.27 and produces a complete, well-formed result. Whether
+   the memo is as *good* as Opus at 40k content is unmeasured. Cost can be modelled; quality has
+   to be compared.
+
+6. **IBKR Flex web service still not configured** (`IBKR_FLEX_TOKEN` + query id). The committed
+   `data/ibkr_marks.json` snapshot is what actually prices UAE/fund lines today; refresh it with
+   `scripts/refresh_ibkr_marks.py` at the start of a session.
+
+7. **Cold load.** A first load of 182 holdings ran past two minutes locally. The UAE circuit
+   breaker (v7.19) removed ~53s of guaranteed-failing lookups; pre-warm plus a paid instance is
+   the rest of the answer. Memory and CPU are NOT the constraint — measured 344MB of a 537MB
+   limit, CPU flatlining at 0.0006 after startup.
+
+8. **GROW Annex E calibration** — the archetype premium/required-return table
+   (`grow/GROW v5 1 ANNEX E ARCHETYPE LOOKUPS.md`) is a **mechanical linear rescale of
+   pre-compression values, explicitly labelled a placeholder**, chosen by Punit as a stopgap.
+   Replace with real per-archetype judgment when he is ready. Do not treat the numbers as final.
+
+9. **Exhicon (`543895.BO`)** — Yahoo shows ₹258.55 against Trendlyne's ₹469.85 and a 52-week
+   range of 220–440. That looks like a corporate action; **the share count needs confirming
+   before the position value is trusted.**
+
+10. Sweep the remaining ad hoc 🔴/🟡/🟢 into `status_chip()` (Technical Analysis, Sentiment,
+    Analyst Consensus, Earnings Calendar, Upload Portal). Low value — these are directional
+    signals, not severity states.
+
+11. Never map old PROSPER-era verdicts onto GROW. Every GROW verdict shown must carry Durability
+    + Entry arithmetic. Positions are never sent to the engine.
+
+**Closed since the last handoff:** `last_known_price` back-fill (v7.18,
+`apply_static_marks_to_holdings`); the full tier is now live-tested end to end (ADBE, $1.27, 11.3
+min); the legacy `PROSPER_CLAIM_LEGACY` env var has been removed.
+
+## 8. HARVEST v1.0 — the Options Desk (new in v7.19)
 
 Daily options engine: at most five specific, tradeable orders a morning, from live chains, for
 about **$0.0155 a day** in model cost (measured, cache warm).
@@ -268,6 +297,25 @@ sit at or above GROW's `fair_high` rung, and a short put's strike at or below `b
 only ever agree to a price GROW already called fair. R2 forbids selling cheap volatility
 (IV30/HV20 ≥ 1.10 required). R4 caps short-put collateral at 60% of the ledger. R9 makes "fewer
 than five" and "zero" valid answers.
+
+**SEC EDGAR XBRL (`core/edgar_client.py`, v7.20)** — primary filing data for US names without
+an LLM. Revenue, income, cash flow, debt, equity and the cover-page share count arrive as
+numbers, each tagged with the form, fiscal period, filing date and **accession number**. Free,
+no key, ~850 tokens a name. Verified on 12 filers, 12/12.
+
+  * Concept names are NOT consistent between filers. HIMS tags revenue only as
+    `RevenueFromContractWithCustomerExcludingAssessedTax` and has no `Revenues` concept at all;
+    ADBE has both. Every metric is an ordered fallback chain — a single-concept lookup silently
+    returns nothing for a third of the book.
+  * It is injected ABOVE a divider in the snapshot and §6.2's instruction was rewritten to say
+    which half is Class A. Without that the model re-fetches what it was handed and the whole
+    exercise is pointless.
+  * **Honest result:** the measured ADBE run cost **$1.27 against a modelled $1.36 without it —
+    a ~7% saving, not the ~55% first projected.** The freed search budget gets spent on
+    qualitative retrieval by design, so the gain is better evidence per dollar, not a smaller
+    bill. Cutting the bill further means cutting searches, which is a separate decision.
+  * US filers only. SREN.SW, EMAAR.AE, the India lines and the LSE/Lux funds return None and
+    fall back to ordinary retrieval.
 
 **Data — all free, all verified live 06-07 Sep 2026.**
 
@@ -317,10 +365,15 @@ so premium is the best-taxed income stream (R10, and it is *configuration*, not 
 only **11 of the owner's 69 eligible US lots** pass a real liquidity gate — his own book cannot
 honestly feed five ideas a day.
 
-**Tests**: `tests/test_harvest.py`, 41 assertions, offline, no network/model/DB. Run them after any
+**Tests**: `tests/test_harvest.py`, **60 assertions**, offline, no network/model/DB. Run them after any
 change to the gates or the arithmetic — this is where a wrong number becomes a real order.
 
     venv/bin/python3 tests/test_harvest.py
+
+The suite inserts `scripts/_stub` on its own path. It has to: yfinance segfaults
+(SIGSEGV, exit 139) for every ticker in the local venv on Python 3.14, and a segfault
+produces NO output and exit 139 — indistinguishable from a clean pass at a glance. This
+suite reported nothing for one run before that was noticed.
 
 **Verified in the preview harness** at 375×812 against the real slate: `stat_grid` holds a
 3-column grid (112.6px each), hero at 30.4px, no horizontal overflow, page 4.2 screens.
@@ -330,7 +383,43 @@ change to the gates or the arithmetic — this is where a wrong number becomes a
 against seeded verdicts, not production ones; and the engine has never been paper-traded — see
 open item 10.
 
-## 8. What verification is and isn't possible here
+## 9. Running GROW on the Pro subscription instead of the API (v7.20)
+
+The API is the expensive path: **$1.27 a name measured** at `full_lean`, ~$25 for twenty
+holdings. Punit's decision is to run GROW in **Claude Cowork** on his existing Pro limits
+instead, and pay nothing per token. Two scripts make that a supported path rather than
+copy-paste:
+
+    python3 scripts/grow_prompt.py --universe --out ~/grow_briefs   # 1. generate briefs
+    # 2. open Cowork with the grow/ folder attached; paste ONE brief per conversation
+    # 3. save the WHOLE reply (the fenced ```json block at the end is what gets read)
+    python3 scripts/grow_import.py --dir ~/grow_out                 # 4. import
+
+**The guarantee that makes this safe.** §8 is arithmetic, not judgement. `resolve_entry()`
+recomputes the Entry verdict, the five-rung ladder and the ±25% stability band in Python from
+the memo's own inputs and **overrides whatever the memo wrote** — on both paths. To keep them
+from drifting, the whole assembly step was extracted into
+`core.grow_engine.assemble_result()`, which the API path and the import path both call. There
+is no second implementation.
+
+Demonstrated, not asserted: a test feeds a memo whose ladder reads
+`strong_buy_below: 1.0, buy_below: 2.0, fair_high: 4.0` and asserts the stored result is
+`174.12 / 230.07 / 348.00`. Another feeds a memo claiming STRONG BUY on numbers that support
+HOLD and asserts the verdict is corrected and the disagreement recorded in `uncertainties`.
+
+`grow_import.py` refuses, before saving anything: no parseable JSON block; a missing or
+out-of-range `durability.score` (rule 20); an `entry.verdict` outside the five permitted words
+(rule 22); no price to solve the ladder against; and a JSON `ticker` that disagrees with the
+one being imported as — filing one company's analysis under another's name is the one mistake
+that would quietly poison Rule 1.
+
+Rows imported this way are tagged `model_used="cowork"` and carry a note in `uncertainties`
+saying so. They are otherwise indistinguishable from API rows, which is the point.
+
+**One brief per conversation.** The framework is ~36,000 tokens and each memo is long; a
+conversation carrying three or four names starts truncating the earlier ones.
+
+## 10. What verification is and isn't possible here
 
 Achievable and expected: `py_compile` on every touched file; the preview harness at 375×812 and
 1280px against the real portfolio; live production Render logs and deploy status via the Render MCP;

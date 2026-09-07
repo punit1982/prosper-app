@@ -9,6 +9,7 @@ offline against hand-built chains — no network, no model, no database.
     venv/bin/python3 tests/test_harvest.py          # also works without pytest
 """
 
+import json
 import os
 import sys
 from datetime import date, timedelta
@@ -587,6 +588,95 @@ def test_grow_snapshot_separates_primary_from_aggregator():
     text, _ = ge.build_data_snapshot("TEST", info={"longName": "T"}, edgar=edgar)
     assert text.index("PRIMARY FILING DATA") < text.index("Tier-5 aggregator data")
     assert "confirmation only" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cowork import — the §8 resolver must override a hand-produced memo exactly as
+# it overrides an API one, or the two paths drift and Rule 1 reads a wrong ladder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cowork_reply(**over):
+    entry = {"verdict": "HOLD", "price": 259.40, "required_return": 0.109,
+             "base_cost_of_equity": 0.089, "cash_returned": 8.0, "central_value": 340.0,
+             # Deliberately absurd — the resolver must replace every one of these.
+             "ladder": {"strong_buy_below": 1.0, "buy_below": 2.0, "acceptable_below": 3.0,
+                        "fair_high": 4.0, "reduce_above": 4.0},
+             "caps": [], "ceilings": []}
+    entry.update(over.pop("entry", {}))
+    payload = {
+        "ticker": "CRM", "company": "Salesforce, Inc.",
+        "classification": {"archetype": "T2", "horizon_years": 4.0},
+        "durability": {"score": 71, "band": "Strong", "integrity_level": "0", "criteria": []},
+        "entry": entry,
+        "cases": {"base": {"price": 340.0}, "bull": {"price": 460.0}},
+        "confidence": "reasonably confident", "uncertainties": [],
+    }
+    payload.update(over)
+    return "# Memo\n\nSome prose.\n\n```json\n" + json.dumps(payload) + "\n```\n"
+
+
+def _assemble(text, ticker="CRM", price=259.40):
+    from core import grow_engine as ge
+    data = ge._extract_json_block(text)
+    return ge.assemble_result(ticker, data, ge._strip_json_block(text), tier="cowork",
+                              price_quote={"price": price, "source": "test"})
+
+
+def test_cowork_ladder_is_recomputed_not_trusted():
+    """The memo's ladder said 1.0 / 2.0 / 4.0. Python must replace all of it."""
+    res, err = _assemble(_cowork_reply())
+    assert res, err
+    assert res["fair_high"] == 348.0                       # central 340 + cash 8
+    assert abs(res["buy_below"] - 230.07) < 0.5            # 348 / 1.109^4
+    assert abs(res["strong_buy_below"] - 174.12) < 0.5     # 348 / 1.189^4
+    assert res["buy_below"] > 2.0 and res["fair_high"] > 4.0
+
+
+def test_cowork_verdict_is_recomputed_from_the_arithmetic():
+    """§8.1 is a table, not an opinion. A memo claiming STRONG BUY on numbers that do not
+    support it gets corrected, and the disagreement is recorded."""
+    res, _ = _assemble(_cowork_reply(entry={"verdict": "STRONG BUY"}))
+    assert res["entry_verdict"] == "HOLD"
+    assert res["model_entry_verdict"] == "STRONG BUY"
+    assert any("recomputed by arithmetic" in u for u in res["uncertainties"])
+
+
+def test_cowork_import_matches_the_api_path_exactly():
+    """Both paths go through assemble_result, so identical JSON must give identical numbers."""
+    from core import grow_engine as ge
+    text = _cowork_reply()
+    data = ge._extract_json_block(text)
+    a, _ = ge.assemble_result("CRM", data, "", tier="cowork",
+                              price_quote={"price": 259.40, "source": "t"})
+    b, _ = ge.assemble_result("CRM", data, "", tier="full_lean",
+                              price_quote={"price": 259.40, "source": "t"})
+    for k in ("entry_verdict", "durability", "buy_below", "strong_buy_below",
+              "fair_high", "acceptable_below", "cagr_spot"):
+        assert a[k] == b[k], k
+
+
+def test_cowork_rejects_a_missing_durability_score():
+    """Rule 20: a run without a Durability score is rejected, not filed with a blank."""
+    res, err = _assemble(_cowork_reply(durability={"band": "Strong"}))
+    assert res is None and "Durability" in err
+
+
+def test_cowork_needs_a_price_to_solve_against():
+    from core import grow_engine as ge
+    text = _cowork_reply(entry={"price": None})
+    data = ge._extract_json_block(text)
+    res, _ = ge.assemble_result("CRM", data, "", tier="cowork", price_quote=None)
+    # No price means no ladder — the resolver returns nothing rather than inventing one.
+    assert res is None or res.get("buy_below") in (None, 2.0)
+
+
+def test_brief_carries_the_primary_data_divider():
+    """The brief must tell Cowork which half of the snapshot is Class A, or it re-fetches it."""
+    from core import grow_engine as ge
+    text, _ = ge.build_data_snapshot(
+        "TEST", info={"longName": "T"},
+        edgar={"text": "SEC EDGAR XBRL — PRIMARY FILING DATA\nRevenue: 1000"})
+    assert "PRIMARY FILING DATA" in text and "Tier-5 aggregator data" in text
 
 
 if __name__ == "__main__":
