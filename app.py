@@ -333,6 +333,12 @@ except Exception:
 from core.ui_components import bottom_nav as _bottom_nav
 _bottom_nav()
 
+# Reload if the socket dies while the tab is backgrounded — the "Connecting…" hang that
+# only happens on phones. Rendered before pg.run() for the same reason bottom_nav is:
+# 21 of the 24 pages call st.stop(), which halts the whole script.
+from core.ui_components import connection_watchdog as _conn_watchdog
+_conn_watchdog()
+
 pg.run()
 
 # ── Floating Chat Widget ───────────────────────────────────────────────────

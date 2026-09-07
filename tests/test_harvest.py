@@ -437,6 +437,51 @@ def test_slice_chain_survives_a_missing_spot():
     assert od.slice_chain({"current_price": None, "options": []}, today=TODAY) == []
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GROW batch targeting — both bugs here shipped and cost real money
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _grow_batch():
+    import importlib.util as _u
+    spec = _u.spec_from_file_location(
+        "grow_batch", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "scripts", "grow_batch.py"))
+    m = _u.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_netflix_is_not_a_fund():
+    """A substring match on "etf" classified NETFLIX as a fund — n-ETF-lix. It ran in
+    production and silently dropped a real holding from the analysis list."""
+    assert _grow_batch()._looks_like_fund("NFLX", "Netflix Inc") is False
+
+
+def test_real_businesses_are_kept():
+    m = _grow_batch()
+    for t, n in [("ADBE", "ADOBE INC"), ("HIMS", "HIMS & HERS HEALTH"),
+                 ("EMAAR.AE", "EMAAR PROPERTIES"), ("SREN.SW", "SWISS RE AG"),
+                 ("CRM", "SALESFORCE INC"), ("IREN", "IREN LTD")]:
+        assert m._looks_like_fund(t, n) is False, t
+
+
+def test_wrappers_are_skipped():
+    """GROW scores businesses. A durability memo on a Treasury ETF is $1.40 for nothing."""
+    m = _grow_batch()
+    for t, n in [("U03A.L", "iShares Treasury Bond ETF"), ("JEPG", "JPM GB EQ PR IN ACT"),
+                 ("PDI", "Pimco Dynamic Inco"), ("QYLD", "GX NASDAQ 100 COV C"),
+                 ("IAU", "ISHARES GOLD TRUST"), ("NDIA", "iShares MSCI India UCITS ETF")]:
+        assert m._looks_like_fund(t, n) is True, t
+
+
+def test_isin_shaped_tickers_are_skipped():
+    m = _grow_batch()
+    assert m._looks_like_fund("LU1255915586", "Allianz Income And") is True
+    assert m._looks_like_fund("I288654906", "FRANKLIN INCOME FU") is True
+    assert m._looks_like_fund("MF:12345", "Some Mutual Fund") is True
+    assert m._looks_like_fund("RESTRICTED:NIQ", "Unvested award") is True
+
+
 if __name__ == "__main__":
     import traceback
     fns = [(n, f) for n, f in sorted(globals().items())

@@ -41,6 +41,7 @@ provisional by the engine itself and should not be mistaken for a researched mem
 """
 
 import argparse
+import re
 import logging
 import os
 import sys
@@ -66,12 +67,42 @@ def _resolve_targets(args) -> list:
     if args.holdings:
         try:
             from core.database import get_all_holdings
+            import pandas as _pd
             df = get_all_holdings()
             if df is not None and not df.empty:
-                if args.top and "quantity" in df.columns:
-                    df = df.copy()
-                    df["_q"] = df["quantity"].astype(float)
-                    df = df.sort_values("_q", ascending=False)
+                df = df.copy()
+                # Rank by POSITION VALUE, not share count.
+                #
+                # The first version sorted on `quantity`, so "--top 20" returned the twenty
+                # largest *share counts* — which on this book means the cheapest stocks:
+                # TALABAT.AE, AKT, DHLU.SI, CAN, SPACE42.AE, penny lines and UAE listings.
+                # Precisely the opposite of "the positions worth spending $1.40 a name on".
+                qty = _pd.to_numeric(df.get("quantity"), errors="coerce").fillna(0)
+                px = _pd.to_numeric(df.get("last_known_price"), errors="coerce")
+                px = px.fillna(_pd.to_numeric(df.get("avg_cost"), errors="coerce")).fillna(0)
+                df["value_usd"] = qty.abs() * px
+                # FX: values are in the listing currency, so a JPY line would otherwise dwarf a
+                # USD one by ~150x. Normalise the majors well enough to rank on.
+                _fx = {"USD": 1.0, "AED": 0.2723, "SAR": 0.2666, "EUR": 1.09, "GBP": 1.27,
+                       "GBp": 0.0127, "CHF": 1.12, "SGD": 0.775, "JPY": 0.0067,
+                       "INR": 0.0119, "HKD": 0.1282, "CAD": 0.73}
+                cur = df.get("currency").astype(str) if "currency" in df.columns else "USD"
+                df["value_usd"] = df["value_usd"] * cur.map(lambda c: _fx.get(c, 1.0))
+                df = df.sort_values("value_usd", ascending=False)
+                if not args.include_funds:
+                    _before = len(df)
+                    _mask = [not _looks_like_fund(r.ticker, getattr(r, "name", ""))
+                             for r in df.itertuples()]
+                    _dropped = df[[not m for m in _mask]]["ticker"].tolist()
+                    df = df[_mask]
+                    if _dropped:
+                        _log.info("skipping %d fund/ETF/bond line(s) — GROW scores businesses, "
+                                  "not wrappers (--include-funds to override): %s",
+                                  len(_dropped), ", ".join(_dropped[:12]))
+                if args.top:
+                    _log.info("largest positions by value: %s",
+                              ", ".join(f"{r.ticker} (${r.value_usd:,.0f})"
+                                        for r in df.head(min(args.top, 8)).itertuples()))
                 names += [str(t).upper() for t in df["ticker"].tolist()]
         except Exception as e:
             _log.warning("could not read holdings: %s", e)
@@ -80,6 +111,40 @@ def _resolve_targets(args) -> list:
         if n and n not in seen:
             seen.add(n); out.append(n)
     return out[:args.top] if args.top else out
+
+
+# GROW scores the durability of a BUSINESS — market pull, moat, margin room, operator
+# credibility. None of that is meaningful for a Treasury ETF, a covered-call income fund or a
+# closed-end bond fund, and at full_lean prices each one is $1.40 spent to produce a memo about
+# a wrapper rather than a company. holdings.asset_category is NULL for all 116 rows here, so the
+# instrument name is the only signal available.
+# Whole words only. A naive substring match dropped NETFLIX, because "n-ETF-lix" contains "etf".
+_FUND_WORDS = (
+    "etf", "etfs", "fund", "funds", "fd", "index", "ishares", "vanguard", "spdr", "invesco",
+    "ucits", "trust", "pimco", "franklin", "wisdomtree", "amundi", "lyxor", "schwab",
+    "buywrite", "dividend", "aggregate", "treasury", "govt", "allianz",
+)
+# Multi-word markers that are unambiguous even inside a longer name.
+_FUND_PHRASES = (
+    "global x", "gx nasdaq", "covered c", "cov c", "income fu", "dynamic inco",
+    "eq pr in", "jpm usd", "glb hy", "msci", "treasury bond", "bond etf",
+)
+# ISIN-shaped identifiers used as tickers: two country letters then 9-10 alphanumerics
+# (LU1255915586), or a leading letter followed by all digits (I288654906).
+_ISIN_LIKE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9,10}$|^[A-Z]\d{6,}$")
+
+
+def _looks_like_fund(ticker: str, name: str) -> bool:
+    t = (ticker or "").strip().upper()
+    if t.startswith(("MF:", "RESTRICTED:")):
+        return True
+    if _ISIN_LIKE.match(t):
+        return True
+    n = (name or "").lower()
+    if any(ph in n for ph in _FUND_PHRASES):
+        return True
+    words = set(re.findall(r"[a-z]+", n))
+    return bool(words & set(_FUND_WORDS))
 
 
 def _snapshot_inputs(ticker: str):
@@ -134,7 +199,10 @@ def main():
     src.add_argument("--universe", action="store_true",
                      help="the 50-name assignment-grade universe (harvest/universe.py)")
     src.add_argument("--holdings", action="store_true", help="every US holding")
-    src.add_argument("--top", type=int, help="cap the list at N names")
+    src.add_argument("--top", type=int,
+                     help="cap the list at N names, ranked by position VALUE (not share count)")
+    src.add_argument("--include-funds", action="store_true",
+                     help="don't skip ETFs / bond funds / income wrappers")
 
     ap.add_argument("--tier", default="screen",
                     choices=["screen", "standard", "full", "full_lean"],

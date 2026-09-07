@@ -19,6 +19,7 @@ Design rules followed here (from the mobile system, each learned the hard way):
 """
 
 import json
+import os
 from datetime import datetime, date
 
 import pandas as pd
@@ -91,6 +92,99 @@ if not slate:
                "a rate-limited data source and takes several minutes.")
     st.stop()
 
+def _rebuild_slate():
+    """Re-run layers 2-4 against the chains already stored — no network, one Claude call.
+
+    Deliberately NOT a full scan. A scan fetches ~115 chains at 2-20s each against a
+    rate-limited CDN; the last full run took 164 minutes. That can never be a button.
+
+    This is the thing that actually needs re-running by hand: the slate is built with the
+    collateral ledger as it stood at scan time, so changing harvest_collateral_usd in
+    Settings leaves yesterday's slate with every short put still blocked by R4 until the
+    next overnight run. ~30 seconds and about $0.015.
+    """
+    from datetime import date as _date
+    from core import options_engine as _oe
+    from core import options_data as _od
+    from core.database import (
+        get_chain_snapshots as _gcs, get_all_holdings as _gah,
+        get_all_prosper_analyses as _gapa, get_open_harvest_positions as _gohp,
+        save_harvest_slate as _shs, log_harvest_recommendations as _lhr,
+    )
+
+    snaps = _gcs()
+    if not snaps:
+        st.error("No stored option chains to rebuild from. The overnight scan has to run first.")
+        return
+    scan_date = next(iter(snaps.values())).get("scan_date") or _date.today().isoformat()
+
+    metrics, clean = {}, {}
+    for t, sn in snaps.items():
+        metrics[t] = sn.get("_metrics") or {}
+        clean[t] = {"ticker": t, "spot": sn.get("spot"), "iv30": sn.get("iv30"),
+                    "quote_timestamp": sn.get("quote_timestamp"),
+                    "contracts": sn.get("contracts") or []}
+
+    positions = {}
+    try:
+        h = _gah()
+        if h is not None and not h.empty:
+            for _, r in h.iterrows():
+                tk = str(r.get("ticker") or "").strip().upper()
+                if not tk or "." in tk or not tk.isalpha() or len(tk) > 5:
+                    continue
+                if str(r.get("currency") or "USD").upper() != "USD":
+                    continue
+                try:
+                    q = float(r.get("quantity") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if q > 0:
+                    positions[tk] = {"shares": positions.get(tk, {}).get("shares", 0) + q}
+    except Exception:
+        pass
+
+    grow_map = {}
+    try:
+        g = _gapa()
+        if g is not None and not g.empty:
+            grow_map = {str(r["ticker"]).upper(): dict(r) for _, r in g.iterrows()}
+    except Exception:
+        pass
+
+    open_u, committed = set(), 0.0
+    try:
+        op = _gohp()
+        if op is not None and not op.empty:
+            open_u = {str(t).upper() for t in op["ticker"].tolist()}
+            committed = float(op["collateral"].fillna(0).sum())
+    except Exception:
+        pass
+
+    _oe.configure()
+    collateral = float(SETTINGS.get("harvest_collateral_usd", 0) or 0)
+    earnings = _od.fetch_earnings_calendar(os.getenv("FINNHUB_API_KEY", ""))
+
+    payload = _oe.build_slate(
+        clean, metrics, positions, grow_map, earnings,
+        collateral_available=collateral, collateral_committed=committed,
+        open_underlyings=open_u, as_of=scan_date,
+    )
+    if payload.get("error"):
+        st.error(f"Rebuild failed: {payload['error']}")
+        return
+    u = payload.get("usage") or {}
+    _shs(scan_date, payload, market_note=payload.get("market_note") or "",
+         n_selected=len(payload.get("tickets") or []),
+         n_candidates=payload.get("candidates_considered") or 0,
+         model_id=u.get("model_id") or "", cost_estimate=u.get("cost") or 0.0)
+    _lhr(scan_date, payload.get("tickets") or [])
+    st.success(f"Rebuilt: {len(payload.get('tickets') or [])} idea(s) from "
+               f"{payload.get('candidates_considered') or 0} candidates "
+               f"(${u.get('cost') or 0:.4f}).")
+    st.rerun()
+
+
 meta = slate.get("_meta") or {}
 tickets = slate.get("tickets") or []
 blocked = slate.get("blocked") or []
@@ -143,6 +237,22 @@ if slate.get("market_note"):
 
 if slate.get("error"):
     st.error(f"The engine reported: {slate['error']}")
+
+_cfg_collateral = float(SETTINGS.get("harvest_collateral_usd", 0) or 0)
+if abs(_cfg_collateral - (slate.get("collateral_available") or 0)) > 1:
+    st.warning(
+        f"This slate was built against a collateral ledger of "
+        f"{_money(slate.get('collateral_available') or 0)}, but Settings now says "
+        f"{_money(_cfg_collateral)}. Short puts were sized — or blocked — against the old "
+        f"figure. Rebuild to apply the new one."
+    )
+
+if st.button("Rebuild today's slate", use_container_width=True,
+             help="Re-scores the chains already stored and re-picks the slate. No new market "
+                  "data is fetched — that is the overnight job — so this takes ~30 seconds "
+                  "and about $0.015."):
+    with st.spinner("Re-scoring stored chains and re-picking…"):
+        _rebuild_slate()
 
 st.divider()
 

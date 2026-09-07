@@ -266,6 +266,64 @@ _MOBILE_CSS = """
 </style>
 """
 
+_RECONNECT_JS = """
+<script>
+/* Mobile Safari and Chrome suspend a backgrounded tab and silently drop its WebSocket.
+   Streamlit notices, shows "Connecting..." in the toolbar, and then sits there: taps do
+   nothing because there is no socket to send them on. Reported symptom, mobile only —
+   "it just stops responding to taps".
+
+   Streamlit does retry, but its backoff grows and a suspended tab misses the retries
+   entirely, so a phone picked up after a few minutes lands in a dead state that never
+   recovers on its own. This watchdog reloads the page when the tab becomes visible again
+   and the connection is actually down. Reload is safe here: every page renders from the
+   database or session cache, so a reload costs a re-render, not lost work.
+
+   Guarded three ways so it cannot loop: only when the document is visible, only when a
+   disconnect indicator is actually present, and at most once every 20 seconds. */
+(function () {
+  if (window.__prosperReconnectWatchdog) return;
+  window.__prosperReconnectWatchdog = true;
+  var lastReload = 0;
+
+  function looksDisconnected() {
+    var el = window.parent.document.querySelector('[data-testid="stConnectionStatus"]');
+    if (el && /connecting|disconnected|error/i.test(el.textContent || '')) return true;
+    return !!window.parent.document.querySelector('[data-testid="stStatusWidget"] [aria-label*="onnect"]');
+  }
+
+  function check() {
+    if (window.parent.document.visibilityState !== 'visible') return;
+    if (!looksDisconnected()) return;
+    var now = Date.now();
+    if (now - lastReload < 20000) return;
+    lastReload = now;
+    window.parent.location.reload();
+  }
+
+  window.parent.document.addEventListener('visibilitychange', function () {
+    if (window.parent.document.visibilityState === 'visible') setTimeout(check, 1200);
+  });
+  setInterval(check, 5000);
+})();
+</script>
+"""
+
+
+def connection_watchdog() -> None:
+    """Reload the page if the WebSocket dies while the tab is backgrounded (phones).
+
+    Rendered through components.v1.html rather than st.markdown: st.markdown strips
+    <script>, so the markdown route would inject nothing at all and look like it worked.
+    Height 0 — it draws nothing.
+    """
+    try:
+        import streamlit.components.v1 as _c
+        _c.html(_RECONNECT_JS, height=0, width=0)
+    except Exception:
+        pass
+
+
 def mobile_shell() -> None:
     """Inject the mobile design-system stylesheet.
 
