@@ -272,6 +272,7 @@ pg = st.navigation({
         st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
         st.Page("pages/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
         st.Page("pages/15_GROW_Analysis.py", title="GROW Engine", icon="🌱"),
+        st.Page("pages/19_Options_Desk.py", title="Options Desk", icon="🌾"),
         st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
     ],
     "News & Activity": [

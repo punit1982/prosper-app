@@ -127,6 +127,58 @@ st.divider()
 # ─────────────────────────────────────────
 # API STATUS
 # ─────────────────────────────────────────
+st.subheader("🌾 Options Desk (HARVEST)")
+st.caption(
+    "The Options Desk sells premium against collateral you actually hold. These numbers set the "
+    "hurdle every short put has to clear — leave the ledger at 0 and short puts stay switched off."
+)
+
+_hv1, _hv2 = st.columns(2)
+with _hv1:
+    harvest_collateral = st.number_input(
+        "Liquid collateral ledger (USD)",
+        min_value=0.0, step=5000.0, format="%.0f",
+        value=float(current.get("harvest_collateral_usd", 0.0) or 0.0),
+        help=("Treasury bills/ETFs and free cash that can secure a short put — NOT the margin "
+              "loan. Borrowing to secure a put is not securing it. The doctrine commits at most "
+              "60% of this, keeping the rest as the buffer that makes the carry trade safe."),
+    )
+    harvest_tbill = st.number_input(
+        "T-bill yield on that collateral (%)",
+        min_value=0.0, max_value=15.0, step=0.25,
+        value=float(current.get("harvest_tbill_yield_pct", 4.0) or 4.0),
+        help=("A short put has to beat this plus 300bp, or you should just hold the bill and take "
+              "no risk. Rule 3."),
+    )
+with _hv2:
+    harvest_funding = st.number_input(
+        "Funding cost on borrowings (%)",
+        min_value=0.0, max_value=15.0, step=0.25,
+        value=float(current.get("harvest_funding_cost_pct", 1.5) or 1.5),
+        help=("The rate on the CHF/JPY/SGD margin borrowings. Used to report the carry spread on "
+              "covered calls, not to justify more leverage."),
+    )
+    harvest_wht = st.number_input(
+        "US dividend withholding suffered (%)",
+        min_value=0.0, max_value=50.0, step=1.0,
+        value=float(current.get("harvest_us_dividend_wht_pct", 30.0) or 30.0),
+        help=("Rule 10. Option premium is capital-gain-natured and suffers no US withholding for "
+              "a non-resident alien, while US dividends do — so premium is the better-taxed "
+              "income stream. This is a setting, not tax advice: confirm it with your adviser."),
+    )
+
+if harvest_collateral > 0:
+    st.caption(
+        f"Short puts may commit up to **${harvest_collateral * 0.6:,.0f}** "
+        f"(60% of the ledger). Premium must clear **{harvest_tbill + 3.0:.2f}%** annualised to "
+        f"beat holding the bill."
+    )
+else:
+    st.caption("Ledger is 0 — every short put will be blocked by Rule 4. Covered calls and "
+               "protective puts are unaffected; they need no collateral.")
+
+st.divider()
+
 st.subheader("🔑 API Keys & Integrations")
 st.caption("Shows which API keys are configured (via .env or Streamlit secrets). Keys are never displayed for security.")
 
@@ -350,6 +402,10 @@ if st.button("💾 Save Settings", type="primary", use_container_width=True):
         "pref_dash_auto_extended":    auto_ext,
         "pref_mkt_auto_summary":      auto_mkt_summary,
         "pref_port_auto_summary":     auto_port_summary,
+        "harvest_collateral_usd":       float(harvest_collateral),
+        "harvest_tbill_yield_pct":      float(harvest_tbill),
+        "harvest_funding_cost_pct":     float(harvest_funding),
+        "harvest_us_dividend_wht_pct":  float(harvest_wht),
     }
     save_user_settings(updates)
     SETTINGS.update(updates)

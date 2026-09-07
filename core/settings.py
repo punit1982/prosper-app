@@ -67,6 +67,20 @@ _DEFAULTS = {
     "pref_perf_period":      "1y",
     "pref_perf_benchmarks":  ["S&P 500", "Nasdaq 100", "Nifty 50", "Sensex"],
 
+    # ── HARVEST (Options Desk) ──
+    # The liquid collateral behind short puts (doctrine R4). Treasury ETFs + cash, NOT the
+    # margin loan: borrowing to secure a put is not securing it. Set this from the real
+    # balance — leaving it at 0 blocks every short put, which is the safe default.
+    "harvest_collateral_usd":  0.0,
+    # R3 — a short put must beat the collateral's own return plus a spread.
+    "harvest_tbill_yield_pct": 4.0,
+    # R0/R3 — cost of the CHF/JPY/SGD funding, used to report the carry spread.
+    "harvest_funding_cost_pct": 1.5,
+    # R10 — withholding actually suffered on US dividends. Drives the "premium is better-taxed
+    # than dividends" preference. CONFIGURATION, NOT TAX ADVICE: confirm with an adviser.
+    "harvest_us_dividend_wht_pct": 30.0,
+    "harvest_premium_is_withheld": False,
+
     # ── News Preferences ──
     "pref_news_auto_summary":  False,
     "pref_news_max_articles":  30,

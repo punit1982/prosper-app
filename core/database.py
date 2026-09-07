@@ -219,6 +219,103 @@ def init_db():
             confidence TEXT,
             user_id TEXT NOT NULL DEFAULT 'default',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        # ── HARVEST v1.0 — the Options Desk ────────────────────────────────
+        # One row per underlying per scan. Stores the REDUCED chain slice
+        # (core.options_data.slice_chain), never the raw chain: raw is
+        # 100kB-12MB per name and would be gigabytes a week for no benefit.
+        """CREATE TABLE IF NOT EXISTS option_chain_cache (
+            ticker TEXT NOT NULL,
+            scan_date TEXT NOT NULL,
+            spot REAL,
+            iv30 REAL,
+            quote_timestamp TEXT,
+            contracts_json TEXT NOT NULL,
+            metrics_json TEXT,
+            fetched_at REAL DEFAULT 0,
+            PRIMARY KEY (ticker, scan_date))""",
+        # The one table that MUST start accumulating on day one. IV percentile
+        # needs ~120 observations (vol_metrics.MIN_HISTORY_FOR_PERCENTILE) and
+        # cannot be backfilled from any free source — every day this is not
+        # written pushes the date it becomes usable six months further out.
+        """CREATE TABLE IF NOT EXISTS vol_history (
+            ticker TEXT NOT NULL,
+            obs_date TEXT NOT NULL,
+            iv30 REAL,
+            hv20 REAL,
+            hv60 REAL,
+            vrp REAL,
+            spot REAL,
+            PRIMARY KEY (ticker, obs_date))""",
+        # Append-only. Every idea with the price it was issued at, whether it
+        # was taken, and what happened — the same discipline as
+        # grow_verdict_log. Without it there is no way to know whether the
+        # engine is any good, and an options engine that has never been
+        # measured is a confident-sounding random number generator.
+        """CREATE TABLE IF NOT EXISTS harvest_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rec_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            contract_symbol TEXT,
+            expiry TEXT,
+            strike REAL,
+            right TEXT,
+            contracts INTEGER,
+            limit_price REAL,
+            net_premium REAL,
+            spot_at_rec REAL,
+            delta REAL,
+            iv30 REAL,
+            hv20 REAL,
+            vrp REAL,
+            annualised_pct REAL,
+            score REAL,
+            rank INTEGER,
+            conviction TEXT,
+            rationale TEXT,
+            risk_note TEXT,
+            rules_cited TEXT,
+            warnings TEXT,
+            ticket_json TEXT,
+            status TEXT DEFAULT 'proposed',
+            framework TEXT,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        # Open short/long options actually being carried, so the engine can
+        # honour R7 (one position per underlying) and manage rolls.
+        """CREATE TABLE IF NOT EXISTS harvest_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            contract_symbol TEXT NOT NULL,
+            expiry TEXT,
+            strike REAL,
+            right TEXT,
+            contracts INTEGER NOT NULL,
+            open_date TEXT NOT NULL,
+            open_price REAL,
+            credit_received REAL,
+            collateral REAL DEFAULT 0,
+            close_date TEXT,
+            close_price REAL,
+            realised_pnl REAL,
+            status TEXT DEFAULT 'open',
+            notes TEXT,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        # The daily slate as rendered — so opening the page ten times costs
+        # nothing and the Claude call happens once per day, not once per view.
+        """CREATE TABLE IF NOT EXISTS harvest_slate (
+            slate_date TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            payload_json TEXT NOT NULL,
+            market_note TEXT,
+            n_selected INTEGER,
+            n_candidates INTEGER,
+            model_id TEXT,
+            cost_estimate REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (slate_date, user_id))""",
     ]
 
     # GROW v5.1 columns on prosper_analysis (added by migration below)
@@ -247,6 +344,11 @@ def init_db():
         # A5: bootstrap admin uniqueness — at most one admin during first-run.
         # Day-2 promotion via UPDATE works because the index targets INSERT paths.
         "CREATE UNIQUE INDEX IF NOT EXISTS uniq_one_admin ON users(role) WHERE role = 'admin'",
+        "CREATE INDEX IF NOT EXISTS idx_vol_history_ticker ON vol_history(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_harvest_rec_date ON harvest_recommendations(rec_date)",
+        "CREATE INDEX IF NOT EXISTS idx_harvest_rec_user ON harvest_recommendations(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_harvest_pos_status ON harvest_positions(status)",
+        "CREATE INDEX IF NOT EXISTS idx_chain_cache_date ON option_chain_cache(scan_date)",
     ]
 
     conn = _get_connection()
@@ -294,6 +396,7 @@ def init_db():
             "holdings", "transactions", "cash_positions", "watchlist",
             "nav_snapshots", "prosper_analysis", "briefing_cache",
             "fortress_state", "parse_cache", "ai_call_cache",
+            "harvest_recommendations", "harvest_positions",
         ):
             try:
                 conn2.execute(f"ALTER TABLE {_table} ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'")
@@ -2461,3 +2564,297 @@ def users_query_succeeded() -> bool:
             conn.close()
     except Exception:
         return False
+
+
+# ─────────────────────────────────────────
+# HARVEST v1.0 — the Options Desk
+# ─────────────────────────────────────────
+# Design note: the Options Desk page must NEVER fetch a chain. A full scan moves ~150MB and takes
+# 6-9 minutes against a rate-limited CDN. Everything below is read-side only — the page renders
+# from what scripts/options_scan.py wrote overnight, which is what keeps page latency at a single
+# indexed SELECT rather than minutes.
+
+def save_chain_snapshot(ticker: str, scan_date: str, snapshot: dict, metrics: dict = None):
+    """Upsert one underlying's reduced chain slice for a scan date."""
+    import time as _t
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO option_chain_cache
+                   (ticker, scan_date, spot, iv30, quote_timestamp, contracts_json,
+                    metrics_json, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ticker, scan_date) DO UPDATE SET
+                   spot=excluded.spot, iv30=excluded.iv30,
+                   quote_timestamp=excluded.quote_timestamp,
+                   contracts_json=excluded.contracts_json,
+                   metrics_json=excluded.metrics_json, fetched_at=excluded.fetched_at""",
+            (ticker.upper(), scan_date, snapshot.get("spot"), snapshot.get("iv30"),
+             snapshot.get("quote_timestamp"),
+             json.dumps(snapshot.get("contracts") or [], default=str),
+             json.dumps(metrics or {}, default=str), _t.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_chain_snapshots(scan_date: str = None) -> Dict[str, dict]:
+    """All underlyings from one scan date (default: the most recent scan present)."""
+    conn = _get_connection()
+    try:
+        if not scan_date:
+            row = conn.execute("SELECT MAX(scan_date) FROM option_chain_cache").fetchone()
+            scan_date = (row[0] if row else None)
+            if not scan_date:
+                return {}
+        df = _read_sql(
+            "SELECT ticker, spot, iv30, quote_timestamp, contracts_json, metrics_json "
+            "FROM option_chain_cache WHERE scan_date = ?", conn, params=(scan_date,))
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+    out: Dict[str, dict] = {}
+    for _, r in df.iterrows():
+        try:
+            contracts = json.loads(r["contracts_json"]) if r["contracts_json"] else []
+        except (json.JSONDecodeError, TypeError):
+            contracts = []
+        try:
+            metrics = json.loads(r["metrics_json"]) if r.get("metrics_json") else {}
+        except (json.JSONDecodeError, TypeError):
+            metrics = {}
+        out[r["ticker"]] = {
+            "ticker": r["ticker"], "spot": r["spot"], "iv30": r["iv30"],
+            "quote_timestamp": r["quote_timestamp"], "contracts": contracts,
+            "_metrics": metrics, "scan_date": scan_date,
+        }
+    return out
+
+
+def prune_chain_cache(keep_days: int = 5):
+    """Chain slices are a working set, not a record. vol_history is the permanent series."""
+    conn = _get_connection()
+    try:
+        cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        conn.execute("DELETE FROM option_chain_cache WHERE scan_date < ?", (cutoff,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def save_vol_observation(ticker: str, obs_date: str, metrics: dict):
+    """Append one day's volatility observation. Idempotent per (ticker, date)."""
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO vol_history (ticker, obs_date, iv30, hv20, hv60, vrp, spot)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ticker, obs_date) DO UPDATE SET
+                   iv30=excluded.iv30, hv20=excluded.hv20, hv60=excluded.hv60,
+                   vrp=excluded.vrp, spot=excluded.spot""",
+            (ticker.upper(), obs_date, metrics.get("iv30"), metrics.get("hv20"),
+             metrics.get("hv60"), metrics.get("vrp"), metrics.get("spot")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_iv_history(ticker: str, limit: int = 400) -> List[float]:
+    """IV30 series for one ticker, oldest first — the input to iv_percentile()."""
+    conn = _get_connection()
+    try:
+        df = _read_sql(
+            "SELECT iv30 FROM vol_history WHERE ticker = ? AND iv30 IS NOT NULL "
+            "ORDER BY obs_date DESC LIMIT ?", conn, params=(ticker.upper(), limit))
+        return list(reversed([float(v) for v in df["iv30"].tolist() if v is not None]))
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def get_iv_history_map(tickers: List[str], limit: int = 400) -> Dict[str, List[float]]:
+    """One query for the whole universe — 110 separate round trips to Turso would dominate the
+    scan's runtime."""
+    if not tickers:
+        return {}
+    conn = _get_connection()
+    try:
+        marks = ",".join("?" * len(tickers))
+        df = _read_sql(
+            f"SELECT ticker, obs_date, iv30 FROM vol_history "
+            f"WHERE ticker IN ({marks}) AND iv30 IS NOT NULL ORDER BY obs_date ASC",
+            conn, params=tuple(t.upper() for t in tickers))
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+    out: Dict[str, List[float]] = {}
+    for _, r in df.iterrows():
+        out.setdefault(r["ticker"], []).append(float(r["iv30"]))
+    return {k: v[-limit:] for k, v in out.items()}
+
+
+def save_harvest_slate(slate_date: str, payload: dict, *, market_note: str = "",
+                       n_selected: int = 0, n_candidates: int = 0,
+                       model_id: str = "", cost_estimate: float = 0.0):
+    """Persist the rendered slate so the page is a SELECT and the Claude call happens once a day."""
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO harvest_slate
+                   (slate_date, user_id, payload_json, market_note, n_selected,
+                    n_candidates, model_id, cost_estimate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(slate_date, user_id) DO UPDATE SET
+                   payload_json=excluded.payload_json, market_note=excluded.market_note,
+                   n_selected=excluded.n_selected, n_candidates=excluded.n_candidates,
+                   model_id=excluded.model_id, cost_estimate=excluded.cost_estimate""",
+            (slate_date, uid, json.dumps(payload, default=str), market_note,
+             n_selected, n_candidates, model_id, cost_estimate),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_harvest_slate(slate_date: str = None) -> Optional[dict]:
+    """The stored slate for a date (default: most recent), or None."""
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        if slate_date:
+            row = conn.execute(
+                "SELECT payload_json, market_note, n_selected, n_candidates, model_id, "
+                "cost_estimate, slate_date, created_at FROM harvest_slate "
+                "WHERE slate_date = ? AND user_id = ?", (slate_date, uid)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT payload_json, market_note, n_selected, n_candidates, model_id, "
+                "cost_estimate, slate_date, created_at FROM harvest_slate "
+                "WHERE user_id = ? ORDER BY slate_date DESC LIMIT 1", (uid,)).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row[0]) if row[0] else {}
+        payload["_meta"] = {
+            "market_note": row[1], "n_selected": row[2], "n_candidates": row[3],
+            "model_id": row[4], "cost_estimate": row[5], "slate_date": row[6],
+            "created_at": row[7],
+        }
+        return payload
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def log_harvest_recommendations(rec_date: str, tickets: List[dict], framework: str = "HARVEST v1.0"):
+    """Append-only log of everything proposed, with the price it was proposed at."""
+    if not tickets:
+        return
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        for t in tickets:
+            conn.execute(
+                """INSERT INTO harvest_recommendations
+                    (rec_date, ticker, strategy, contract_symbol, expiry, strike, right,
+                     contracts, limit_price, net_premium, spot_at_rec, delta, iv30, hv20, vrp,
+                     annualised_pct, score, rank, conviction, rationale, risk_note, rules_cited,
+                     warnings, ticket_json, status, framework, user_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (rec_date, t.get("ticker"), t.get("strategy"), t.get("contract_symbol"),
+                 t.get("expiry"), t.get("strike"), t.get("right"), t.get("contracts"),
+                 t.get("limit_price"), t.get("net_premium"), t.get("spot"), t.get("delta"),
+                 t.get("iv30"), t.get("hv20"), t.get("vrp"), t.get("annualised_pct"),
+                 t.get("score"), t.get("rank"), t.get("conviction"), t.get("why"),
+                 t.get("risk"), json.dumps(t.get("rules_cited") or []),
+                 json.dumps(t.get("warnings") or []), json.dumps(t, default=str),
+                 "proposed", framework, uid),
+            )
+        conn.commit()
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger("prosper").warning(f"harvest rec log failed: {e}")
+    finally:
+        conn.close()
+
+
+def get_harvest_recommendations(days: int = 60) -> pd.DataFrame:
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        return _read_sql(
+            "SELECT * FROM harvest_recommendations WHERE user_id = ? AND rec_date >= ? "
+            "ORDER BY rec_date DESC, rank ASC", conn, params=(uid, cutoff))
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def get_open_harvest_positions() -> pd.DataFrame:
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        return _read_sql(
+            "SELECT * FROM harvest_positions WHERE user_id = ? AND status = 'open' "
+            "ORDER BY expiry ASC", conn, params=(uid,))
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def add_harvest_position(ticker: str, strategy: str, contract_symbol: str, *, expiry: str = None,
+                         strike: float = None, right: str = None, contracts: int = 1,
+                         open_price: float = None, credit_received: float = None,
+                         collateral: float = 0.0, notes: str = "") -> int:
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            """INSERT INTO harvest_positions
+                (ticker, strategy, contract_symbol, expiry, strike, right, contracts,
+                 open_date, open_price, credit_received, collateral, status, notes, user_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,'open',?,?)""",
+            (ticker.upper(), strategy, contract_symbol, expiry, strike, right, contracts,
+             datetime.now().strftime("%Y-%m-%d"), open_price, credit_received, collateral,
+             notes, uid))
+        conn.commit()
+        return cur.lastrowid if hasattr(cur, "lastrowid") else 0
+    finally:
+        conn.close()
+
+
+def close_harvest_position(position_id: int, close_price: float = None, realised_pnl: float = None):
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE harvest_positions SET status='closed', close_date=?, close_price=?, "
+            "realised_pnl=? WHERE id=? AND user_id=?",
+            (datetime.now().strftime("%Y-%m-%d"), close_price, realised_pnl, position_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_recommendation_status(rec_id: int, status: str):
+    """'proposed' -> 'taken' | 'passed' | 'expired'. The calibration signal."""
+    uid = _current_user_id()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE harvest_recommendations SET status=? WHERE id=? AND user_id=?",
+                     (status, rec_id, uid))
+        conn.commit()
+    finally:
+        conn.close()
