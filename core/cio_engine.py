@@ -167,12 +167,17 @@ def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
 # minutes. That is the single largest avoidable component of "the app is stuck".
 #
 # A breaker, not a hardcoded skip list: from a residential IP or a GitHub Actions
-# runner Mubasher works fine, and NO_LIVE_SOURCE would disable it permanently
-# everywhere. After three consecutive UAE failures in one process we stop trying
-# for the lifetime of that process and fall straight through to
-# last_known_price — the IBKR mark, which is what actually prices these lines
-# today (see core/ibkr_prices.apply_static_marks_to_holdings). A restart re-arms
-# it, so a network that can reach Mubasher keeps using it.
+# runner Mubasher works fine (measured: ADCB.AE in 2.3s), and a NO_LIVE_SOURCE
+# entry would disable it permanently everywhere. After three failed UAE lookups
+# in one process we stop trying for that process's lifetime and fall straight
+# through to last_known_price — the IBKR mark, which is what actually prices
+# these lines today (core/ibkr_prices.apply_static_marks_to_holdings).
+#
+# Once open it STAYS open for the process: the short-circuit runs before the
+# Mubasher call, so a later success cannot be observed to close it again. That is
+# deliberate — a Render instance lives ~16 minutes, so a restart re-arms it soon
+# enough, and probing a blocked CDN on every request to find out costs exactly the
+# 5s-per-name this exists to avoid. reset_uae_circuit() re-arms it explicitly.
 _UAE_FAILURES = 0
 _UAE_BREAKER_THRESHOLD = 3
 
@@ -182,7 +187,7 @@ def _uae_circuit_open() -> bool:
 
 
 def reset_uae_circuit():
-    """Re-arm the breaker (tests, and after a network change)."""
+    """Re-arm the breaker explicitly (tests, and after a known network change)."""
     global _UAE_FAILURES
     _UAE_FAILURES = 0
 
@@ -210,26 +215,38 @@ def _fetch_one_quote(sym: str) -> tuple:
     # never reached Mubasher at all and fell through to sources with no UAE
     # coverage. adx_client discovers chart IDs at runtime for anything not in
     # the map, so the map is an optimisation, not the supported-ticker list.
+    # The counter must be incremented on BOTH failure shapes. The first version put it
+    # inside the try after the call, so a Cloudflare 403 — which RAISES rather than
+    # returning falsy — jumped straight to `except Exception: pass` and never counted.
+    # Verified in production 07-Sep-2026: the breaker never tripped and all seven UAE
+    # names still took 58 seconds. Counting now happens in a finally-style path.
+    global _UAE_FAILURES
+    _uae_attempted = False
     try:
         from core.adx_client import get_quote as adx_quote, is_uae_symbol
         if is_uae_symbol(sym):
+            _uae_attempted = True
             adx = adx_quote(sym)
             if adx and adx.get("price", 0) > 0:
                 adx["symbol"] = sym
                 adx.setdefault("currency", "AED")
-                reset_uae_circuit()          # this network CAN reach Mubasher
+                _UAE_FAILURES = 0            # this network CAN reach Mubasher
                 return sym, adx
-            global _UAE_FAILURES
-            _UAE_FAILURES += 1
-            if _UAE_FAILURES == _UAE_BREAKER_THRESHOLD:
-                import logging as _lg
-                _lg.getLogger(__name__).warning(
-                    "UAE price source unreachable %d times — skipping live UAE lookups for the "
-                    "rest of this process and using broker marks instead. This is expected on "
-                    "Render (Cloudflare blocks datacenter IPs); a restart re-arms it.",
-                    _UAE_FAILURES)
     except Exception:
         pass
+    if _uae_attempted:
+        _UAE_FAILURES += 1
+        if _UAE_FAILURES == _UAE_BREAKER_THRESHOLD:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(
+                "UAE price source unreachable %d times — skipping live UAE lookups for the rest "
+                "of this process and using broker marks instead. Expected on Render (Cloudflare "
+                "blocks datacenter IPs); a restart re-arms it.", _UAE_FAILURES)
+        # Everything after this point has no ADX/DFM coverage: Twelve Data excludes it on
+        # this plan, Yahoo 404s quoteSummary, Finnhub is US-only. Walking them costs ~5s
+        # per name to arrive at the same answer.
+        if _uae_circuit_open():
+            return sym, None
 
     # Source 0b: Twelve Data — for UAE symbols resolved as TICKER:DFM / TICKER:ADX
     if _is_twelve_data_symbol(sym):
