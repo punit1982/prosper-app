@@ -13,7 +13,13 @@ import os
 import sys
 from datetime import date, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+# yfinance segfaults (SIGSEGV, exit 139) for every ticker in the local venv on Python 3.14, and
+# importing core.grow_engine pulls it in transitively. A segfault produces NO output and exit
+# 139, which looks exactly like a silent pass — this suite reported "nothing" for one run before
+# that was spotted. Load the inert stand-in first so the tests are self-contained.
+sys.path.insert(0, os.path.join(_ROOT, "scripts", "_stub"))
 
 from core import options_data as od          # noqa: E402
 from core import vol_metrics as vm           # noqa: E402
@@ -480,6 +486,107 @@ def test_isin_shaped_tickers_are_skipped():
     assert m._looks_like_fund("I288654906", "FRANKLIN INCOME FU") is True
     assert m._looks_like_fund("MF:12345", "Some Mutual Fund") is True
     assert m._looks_like_fund("RESTRICTED:NIQ", "Unvested award") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEC EDGAR — primary filing data. Offline: no network, synthetic facts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from core import edgar_client as ec          # noqa: E402
+
+
+def _facts(**concepts):
+    """Build a companyfacts-shaped payload from {concept: [observations]}."""
+    us, dei = {}, {}
+    for name, obs in concepts.items():
+        target = dei if name.startswith("Entity") else us
+        target[name] = {"units": {"shares" if "Shares" in name else "USD": obs}}
+    return {"entityName": "Test Co", "facts": {"us-gaap": us, "dei": dei}}
+
+
+def _obs(end, val, *, form="10-K", start=None, fy=2025, accn="0001-25-000001"):
+    o = {"end": end, "val": val, "form": form, "fy": fy, "fp": "FY",
+         "filed": "2026-01-15", "accn": accn}
+    if start:
+        o["start"] = start
+    return o
+
+
+def test_ticker_to_cik_rejects_non_us_listings():
+    """A suffixed ticker is not a US filer by construction. Without this guard SREN.SW could
+    match a same-named US company and the memo would cite the wrong entity's filings."""
+    for t in ("SREN.SW", "EMAAR.AE", "543895.BO", "4519.T", "U03A.L", "D05.SI"):
+        assert ec.ticker_to_cik(t) is None, t
+
+
+def test_revenue_falls_back_across_concepts():
+    """HIMS tags revenue ONLY as RevenueFromContractWithCustomerExcludingAssessedTax and has no
+    `Revenues` concept at all — a single-concept lookup returns nothing for it."""
+    f = _facts(RevenueFromContractWithCustomerExcludingAssessedTax=[
+        _obs("2025-12-31", 1_500_000_000, start="2025-01-01")])
+    out = ec.extract_financials(f)
+    assert out["revenue"]["concept"] == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert out["revenue"]["observations"][0]["value"] == 1_500_000_000
+
+
+def test_preferred_concept_wins_when_several_exist():
+    f = _facts(
+        Revenues=[_obs("2025-12-31", 999, start="2025-01-01")],
+        RevenueFromContractWithCustomerExcludingAssessedTax=[
+            _obs("2025-12-31", 1000, start="2025-01-01")])
+    assert ec.extract_financials(f)["revenue"]["observations"][0]["value"] == 1000
+
+
+def test_quarterly_durations_are_excluded_from_annual_figures():
+    """A 10-K carries quarterly duration facts too. Taking one as the annual revenue understates
+    the business by ~4x."""
+    f = _facts(Revenues=[
+        _obs("2025-12-31", 250, start="2025-10-01"),      # a quarter inside the 10-K
+        _obs("2025-12-31", 1000, start="2025-01-01"),     # the actual year
+    ])
+    assert ec.extract_financials(f)["revenue"]["observations"][0]["value"] == 1000
+
+
+def test_every_observation_carries_provenance():
+    """Provenance is the whole reason this beats a web fetch."""
+    f = _facts(Revenues=[_obs("2025-12-31", 1000, start="2025-01-01", accn="0000796343-26-000003")])
+    o = ec.extract_financials(f)["revenue"]["observations"][0]
+    assert o["accn"] == "0000796343-26-000003"
+    assert o["form"] == "10-K" and o["filed"] == "2026-01-15"
+
+
+def test_restated_periods_keep_the_later_filing():
+    f = _facts(Revenues=[
+        {"end": "2024-12-31", "val": 900, "start": "2024-01-01", "form": "10-K",
+         "fy": 2024, "fp": "FY", "filed": "2025-01-10", "accn": "old"},
+        {"end": "2024-12-31", "val": 950, "start": "2024-01-01", "form": "10-K",
+         "fy": 2025, "fp": "FY", "filed": "2026-01-15", "accn": "new"},
+    ])
+    obs = ec.extract_financials(f)["revenue"]["observations"]
+    assert len([o for o in obs if o["end"] == "2024-12-31"]) == 1
+    assert obs[0]["accn"] == "new"
+
+
+def test_untagged_metrics_are_reported_not_invented():
+    f = _facts(Revenues=[_obs("2025-12-31", 1000, start="2025-01-01")])
+    out = ec.extract_financials(f)
+    assert "revenue" in out
+    assert "long_term_debt" not in out          # absent, and must not be fabricated
+
+
+def test_snapshot_returns_none_for_non_filers():
+    assert ec.filing_snapshot("EMAAR.AE") is None
+    assert ec.filing_snapshot("") is None
+
+
+def test_grow_snapshot_separates_primary_from_aggregator():
+    """If the model is told as-filed XBRL is Tier-5 aggregator data it will re-fetch it, and the
+    entire saving evaporates."""
+    from core import grow_engine as ge
+    edgar = {"text": "SEC EDGAR XBRL — PRIMARY FILING DATA\nRevenue: 1000"}
+    text, _ = ge.build_data_snapshot("TEST", info={"longName": "T"}, edgar=edgar)
+    assert text.index("PRIMARY FILING DATA") < text.index("Tier-5 aggregator data")
+    assert "confirmation only" in text
 
 
 if __name__ == "__main__":

@@ -129,12 +129,17 @@ GROW_TIERS = {
     # So the model is not trusted with the numbers on either tier — only with judgment
     # and narrative. A/B this against "full" on two or three names before trusting it
     # wholesale (a standing open item in the handoff).
+    # Budget note, from a live failure: at effort "xhigh" with a 40,000-token ceiling this tier
+    # spent 47,067 output tokens across its search turns and stopped with stop_reason=max_tokens
+    # having written 269 characters — no memo, no JSON, run lost, money spent. Extended thinking
+    # is billed as output and competes with the memo for the same ceiling. "high" is what the
+    # standard tier already produces full memos at, and the headroom is now generous.
     "full_lean": {
         "label": "Full GROW (lean)",
         "model": CLAUDE_DEFAULT_MODEL,
-        "max_tokens": 40000,
+        "max_tokens": 60000,
         "thinking": {"type": "adaptive"},
-        "effort": "xhigh",
+        "effort": "high",
         "web": True,
         "max_searches": 25,
         "fetch_content_tokens": 18000,
@@ -236,7 +241,24 @@ The complete framework (CORE + runtime annexes) is in the previous system block.
 OPERATING RULES FOR THIS ENVIRONMENT
 1. Trigger: the user message is `GROW <TICKER>` with an optional modifier. Run the nine steps of §3.
 2. Retrieval: {retrieval_rule}
-3. The DATA SNAPSHOT in the user message is Tier-5 aggregator data (confirmation only under §6.2). Never let it be the sole basis of a price-setting number. It does give you today's price with a timestamp; cross-check it against a second source when you can, and mark it stale per rule 6 if it is older than the last completed session.
+3. The DATA SNAPSHOT in the user message has two parts, and they do NOT carry the same weight.
+   (a) If a section headed "SEC EDGAR XBRL — PRIMARY FILING DATA" is present, those figures are
+       as-filed XBRL pulled straight from the SEC, each tagged with the form, fiscal period,
+       filing date and accession number of the filing it came from. Treat them as Class A
+       primary evidence under §6 — they are already the filing. DO NOT spend searches
+       re-retrieving revenue, income, cash flow, debt, equity or the cover-page share count for
+       periods shown there; that work is done. Spend your retrieval budget on what XBRL cannot
+       carry: guidance, segment commentary, competitive position, management credibility,
+       post-period events, and any figure marked NOT TAGGED.
+       CITE IT. When a figure in your memo comes from that block, quote the accession number
+       shown beside it (e.g. "revenue $23.77bn, 10-K FY2025, accession 0000796343-26-000003").
+       Auditable provenance is the entire reason this data is supplied as primary evidence
+       rather than left to retrieval; a figure used without its source reverts to being an
+       unsourced claim. Record these in `driving_inputs[].source`.
+   (b) Everything below the divider is Tier-5 aggregator data, confirmation only under §6.2.
+       Never let it be the sole basis of a price-setting number. It does give you today's price
+       with a timestamp; cross-check it against a second source when you can, and mark it stale
+       per rule 6 if it is older than the last completed session.
 4. Position-blind (rule 13): you are given no holding, cost basis or weight. Do not ask for one.
 5. If the ticker could map to more than one listing, take the listing in the DATA SNAPSHOT (its exchange and currency), name the alternatives in `uncertainties`, and continue — this environment cannot stop and ask.
 6. Always produce both verdicts (rule 1). The only permitted Entry words are STRONG BUY, BUY, HOLD, SELL, STRONG SELL (rule 22).
@@ -272,11 +294,15 @@ _RETRIEVAL_SCREEN = (
 )
 
 
-def _system_blocks(tier: str) -> List[dict]:
+def _system_blocks(tier: str, max_searches: int = None, has_edgar: bool = False) -> List[dict]:
     cfg = GROW_TIERS[tier]
-    retrieval_rule = (
-        _RETRIEVAL_WEB.format(n=cfg["max_searches"]) if cfg["web"] else _RETRIEVAL_SCREEN
-    )
+    n = max_searches if max_searches is not None else cfg["max_searches"]
+    retrieval_rule = (_RETRIEVAL_WEB.format(n=n) if cfg["web"] else _RETRIEVAL_SCREEN)
+    if has_edgar:
+        retrieval_rule += (
+            "\n\nThe statement-level figures are ALREADY SUPPLIED as as-filed SEC XBRL in the "
+            "snapshot, with accession numbers. Do not re-retrieve them. This budget is for the "
+            "qualitative and forward-looking evidence XBRL cannot carry.")
     memo_rule = (
         "Include the §10.2 appendix (section 11) in full."
         if tier == "full" else
@@ -355,8 +381,15 @@ def _financials_snapshot(ticker: str) -> str:
     return "\n".join(lines)
 
 
-def build_data_snapshot(ticker: str, info: dict = None, price_quote: dict = None) -> Tuple[str, int]:
-    """Return (snapshot_text, data_fields) — aggregator data for confirmation only."""
+def build_data_snapshot(ticker: str, info: dict = None, price_quote: dict = None,
+                       edgar: dict = None) -> Tuple[str, int]:
+    """Return (snapshot_text, data_fields).
+
+    Two tiers of evidence, kept visibly separate. When `edgar` is supplied it holds as-filed
+    XBRL figures with accession numbers — Class A under §6, not the Tier-5 aggregator data that
+    makes up the rest of this block. Conflating them would be the whole point missed: the model
+    must know which numbers it may rely on and which it must confirm.
+    """
     info = info or {}
     lines = [f"TICKER (as held in Prosper): {ticker}"]
     lines.append(f"Snapshot taken: {datetime.now().strftime('%Y-%m-%d %H:%M')} local time")
@@ -438,6 +471,14 @@ def build_data_snapshot(ticker: str, info: dict = None, price_quote: dict = None
     if summary:
         lines.append("")
         lines.append("Business description (aggregator): " + (summary[:600] + "…" if len(summary) > 600 else summary))
+
+    if edgar and edgar.get("text"):
+        lines.insert(0, edgar["text"])
+        lines.insert(1, "")
+        lines.insert(2, "─" * 78)
+        lines.insert(3, "Everything BELOW this line is Tier-5 aggregator data — confirmation "
+                        "only under §6.2.")
+        lines.insert(4, "─" * 78)
 
     data_fields = sum(1 for l in lines if ":" in l)
     return "\n".join(lines), data_fields
@@ -671,8 +712,28 @@ def run_grow(
         return None, "Anthropic API key not configured. Add ANTHROPIC_API_KEY on Render (Environment) or in your local .env."
 
     tier = tier if tier in GROW_TIERS else "standard"
-    cfg = GROW_TIERS[tier]
-    snapshot, data_fields = build_data_snapshot(ticker, info, price_quote)
+    cfg = dict(GROW_TIERS[tier])          # copy: the search budget is adjusted per-run below
+
+    # Primary filing data first, where the ticker is a US EDGAR filer. This is the cost lever:
+    # ~850 tokens of as-filed XBRL with accession numbers replaces the fetches that were
+    # re-reading the same figures out of HTML at up to 40,000 tokens each.
+    edgar = None
+    if cfg.get("web"):
+        try:
+            from core import edgar_client
+            edgar = edgar_client.filing_snapshot(ticker)
+        except Exception:
+            edgar = None
+
+    snapshot, data_fields = build_data_snapshot(ticker, info, price_quote, edgar=edgar)
+
+    if edgar:
+        # The financial-statement retrieval is already done, so the remaining budget buys
+        # qualitative evidence. Cutting it is what converts the shorter prompt into a smaller
+        # bill; leaving it at 25 would just spend the searches elsewhere.
+        cfg["max_searches"] = max(8, int(cfg["max_searches"] * 0.6))
+        _log.info("GROW %s: EDGAR primary data found (%d concepts) — search budget %d",
+                  ticker, edgar.get("concepts_found") or 0, cfg["max_searches"])
 
     user_parts = [f"GROW {ticker}" + (f" {modifier}" if modifier else "") + (" screen" if tier == "screen" and "screen" not in modifier else "")]
     user_parts.append("\nDATA SNAPSHOT (Tier 5 — confirmation only):\n" + snapshot)
@@ -691,7 +752,7 @@ def run_grow(
         return None, "anthropic package not installed."
 
     client = anthropic.Anthropic(api_key=api_key, timeout=900.0, max_retries=1)
-    system = _system_blocks(tier)
+    system = _system_blocks(tier, max_searches=cfg["max_searches"], has_edgar=bool(edgar))
     models = [cfg["model"]] + [m for m in CLAUDE_MODEL_PRIORITY if m != cfg["model"]]
 
     t0 = time.time()

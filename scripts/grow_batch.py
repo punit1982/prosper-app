@@ -271,7 +271,11 @@ def main():
             res, err = None, f"{type(e).__name__}: {e}"
         if not res:
             failed.append((t, err))
-            _log.warning("   %s failed: %s", t, str(err)[:160])
+            # A failure is not free: a run that dies on max_tokens has already paid for every
+            # output token it spent getting there. Charge the estimate against the budget so a
+            # string of failures cannot silently blow through it.
+            spent += est
+            _log.warning("   %s failed (≈$%.2f still spent): %s", t, est, str(err)[:160])
             continue
         spent += res.get("cost_estimate") or 0.0
         try:
