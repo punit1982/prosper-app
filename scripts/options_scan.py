@@ -123,6 +123,15 @@ def build_scan_list(extra: list = None) -> list:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+def already_scanned(scan_date: str) -> set:
+    """Tickers already stored for this scan date."""
+    try:
+        from core.database import get_chain_snapshots
+        return set((get_chain_snapshots(scan_date) or {}).keys())
+    except Exception:
+        return set()
+
+
 def scan(tickers: list, *, scan_date: str, td_key: str, persist: bool = True) -> tuple:
     """Fetch, reduce and measure every ticker. Returns (snapshots, metrics, failures).
 
@@ -254,6 +263,9 @@ def main():
     ap.add_argument("--vol-only", action="store_true",
                     help="phase 0: IV/HV history only — no candidates, no slate, no model")
     ap.add_argument("--no-persist", action="store_true", help="do not write to the database")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip tickers already stored for today — a rate-limited sweep can run "
+                         "for hours, and this makes it safe to stop and restart")
     ap.add_argument("--out", help="also write the slate payload to this JSON path")
     args = ap.parse_args()
 
@@ -266,11 +278,21 @@ def main():
     else:
         tickers, positions = build_scan_list()
 
-    _log.info("HARVEST scan %s — %d ticker(s)", scan_date, len(tickers))
     if not args.no_persist and not ensure_schema():
         _log.error("aborting: the database is not writable, so nothing would be recorded.")
         return 1
 
+    if args.resume and not args.no_persist:
+        done = already_scanned(scan_date)
+        before = len(tickers)
+        tickers = [t for t in tickers if t not in done]
+        _log.info("--resume: %d of %d already stored for %s, %d to go",
+                  before - len(tickers), before, scan_date, len(tickers))
+        if not tickers:
+            _log.info("nothing left to scan today.")
+            return 0
+
+    _log.info("HARVEST scan %s — %d ticker(s)", scan_date, len(tickers))
     snapshots, metrics, failures, stored = scan(tickers, scan_date=scan_date, td_key=td_key,
                                                 persist=not args.no_persist)
 

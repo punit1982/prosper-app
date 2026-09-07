@@ -69,19 +69,29 @@ _INDEX_SYMBOLS = {"SPX", "VIX", "NDX", "RUT", "XSP", "DJX"}
 class _Pacer:
     """Adaptive sequential throttle for CBOE.
 
-    Starts polite, backs off hard on 429, and creeps back toward the floor after sustained
-    success. The floor is 2.0s because 3.0s ran 84/84 clean and 0.0s (8 workers) failed within
-    seconds — there is no measured benefit to going faster and a large measured cost to trying.
+    Starts polite, backs off on 429, and creeps back toward the floor as requests succeed. The
+    floor is 2.0s because 3.0s ran 84/84 clean from a cold IP, and 0.0s (8 parallel workers)
+    failed within seconds — there is no measured benefit to going faster and a large measured
+    cost to trying.
+
+    RECOVERY BUG, fixed 07-Sep-2026. The first version decayed the delay only after EIGHT
+    consecutive successes and reset that counter on any 429. In a real 115-name run each name
+    typically 429'd twice before succeeding, so the streak never reached two, let alone eight —
+    the pacer pinned itself at the 30s ceiling and stayed there for the whole run. 115 names took
+    2.9 hours at ~90s each. Recovery now needs three successes, decays 25% at a time, and a 429
+    halves the streak instead of zeroing it, so a run that is succeeding two times in three still
+    claws its way back down.
     """
 
     FLOOR = 2.0
     START = 3.0
-    CEILING = 30.0
+    CEILING = 20.0        # was 30.0 — at 30s the retry wait exceeded the value of retrying
 
     def __init__(self, start: float = None):
         self.delay = float(start or self.START)
         self._last = 0.0
         self._streak = 0
+        self.throttle_events = 0
 
     def wait(self):
         gap = time.time() - self._last
@@ -91,13 +101,14 @@ class _Pacer:
 
     def ok(self):
         self._streak += 1
-        if self._streak >= 8 and self.delay > self.FLOOR:
-            self.delay = max(self.FLOOR, self.delay * 0.85)
+        if self._streak >= 3 and self.delay > self.FLOOR:
+            self.delay = max(self.FLOOR, self.delay * 0.75)
             self._streak = 0
 
     def throttled(self):
-        self._streak = 0
-        self.delay = min(self.CEILING, max(self.delay * 2.0, 8.0))
+        self._streak = max(0, self._streak // 2)     # halve, don't zero — see the docstring
+        self.throttle_events += 1
+        self.delay = min(self.CEILING, max(self.delay * 1.6, 6.0))
         _log.warning("CBOE 429 — backing off to %.1fs between requests", self.delay)
 
 
@@ -157,7 +168,7 @@ class ChainUnavailable(Exception):
     """No listed options for this underlying (CBOE 403/404), or the fetch failed."""
 
 
-def fetch_chain(ticker: str, *, retries: int = 3, pacer: _Pacer = None) -> dict:
+def fetch_chain(ticker: str, *, retries: int = 2, pacer: _Pacer = None) -> dict:
     """Return CBOE's `data` block for one underlying. Raises ChainUnavailable.
 
     A 403 or 404 is a real answer — the name has no listed options (QTEX returns 403). It is not
