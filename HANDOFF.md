@@ -181,38 +181,85 @@ positions per screen.
 Design review + page-by-page plan (published artifact):
 `https://claude.ai/code/artifact/fe1423f6-44eb-4103-909f-4c4e495fafc7`
 
-## 6. Data sources — what actually works today
+## 6. Data sources — the pipeline (rebuilt 8 Sep 2026, v7.21)
 
-| Source | Status |
-|---|---|
-| **yfinance** | `chart` works unauthenticated. `quoteSummary` + v7 `quote` return "Invalid Crumb" on a raw call — yfinance 1.7's internal workaround is the only thing keeping `.info` alive, and it has broken once already. |
-| **Yahoo `chart` (direct, keyless)** | Added as a fallback between yfinance and Finnhub. Verified pricing PRY.MI / 543895.BO / AAPL / D05.SI / NESN.SW with yfinance fully stubbed. **Use `range=1d`** — over a longer range `chartPreviousClose` is the close before the window, which produced a bogus −47% day move. |
-| **Mubasher (UAE ADX/DFM)** | Works from a residential IP. **Behind Cloudflare — 403s datacenter IPs, so it fails on Render.** Every earlier "verified live" was run from a laptop. |
-| **Twelve Data** | **Paid "Basic" plan**, ~800/day. Does *not* cover India NSE/BSE, OTC funds, or ADX/DFM ("available starting with Pro or Venture"). Fallback-only. |
-| **Finnhub** | Works. US-centric; `/stock/metric` is the US fundamentals fallback. |
-| **FMP** | Legacy `/api/v3/*` is dead. `/stable/*` works but is US-only on this key. |
-| **IBKR Flex Query** | Works, app-usable (token + query id). This is the only IBKR path the deployed app can use. |
-| **IBKR MCP connector** | Has live prices for every UAE/Japan/SGX/CH name — but it authenticates as *the user's own Claude connector*. **The Render app can never call it.** Good for in-session verification only. |
-| **FX** | AED/SAR/HKD hard pegs (AED 3.6725) resolve with no network call. Chain: yfinance → `open.er-api.com` → stale DB cache of any age → static table. It never silently returns 1.0 any more. |
+Prices no longer walk a fixed global cascade per ticker. `core/market_data.py`
+groups holdings by **market** and asks that market's best provider for all of them
+at once, then falls down a per-market tier list for whatever is still missing.
+`core/symbology.py` decides which market a ticker belongs to.
 
-**Consequence:** UAE, European/offshore funds and suspended lines have no free live source reachable
-from Render. They are valued from IBKR's own `markPrice` via two paths:
+**Measured against the real 182-holding book, 8 Sep 2026:**
 
-  1. `core/ibkr_prices.maybe_daily_refresh()` — Flex Query web service, once per calendar day. Only
-     runs if `IBKR_FLEX_TOKEN` + a query id are set. **They are not**, so this is currently a no-op.
-  2. `core/ibkr_prices.apply_static_marks_to_holdings()` — reads `data/ibkr_marks.json`, a committed
-     snapshot of IBKR's mark for every position, and writes it into `holdings.last_known_price` (the
-     durable fallback the price cascade already uses — never wiped by a failed live fetch, unlike a
-     `price_cache` row). This is the path that actually runs today. **Refresh the file at the start
-     of a working session:** call the IBKR connector's `get_account_positions`, save its JSON, run
-     `venv/bin/python3 scripts/refresh_ibkr_marks.py <that file>`, commit, push.
+| Mode | Priced | Time | Sources used |
+|---|---|---|---|
+| TradingView **off** (the default) | 175/181 | 67.7s | yahoo-chart 104, finnhub 53, mubasher 11, justetf 6, frankfurt 1 |
+| TradingView **on** | 175/181 | 19.4s | tradingview 161, mubasher 11, yahoo-chart 2, frankfurt 1 |
 
-`scripts/prewarm.py` also fetches UAE quotes and runs on a **GitHub Actions runner**, whose IPs
-Cloudflare does not block like Render's.
+Same coverage either way. The batch provider makes it ~3.5× faster and yields 54
+live (rather than delayed) quotes; it is **not** load-bearing. The six that stay
+unpriced are OZON and Balasore Alloys (both suspended) and four offshore mutual
+funds — none has a free source anywhere, and they are reported as such.
 
-Instruments with genuinely no quote anywhere are listed in `cio_engine.NO_LIVE_SOURCE` (OZON —
-suspended ADR; Balasore Alloys; legacy `F0…​.NS` Morningstar fund rows) and are reported as "no market
-quote exists" rather than as fetch failures.
+**Why the old cascade was both slow and wrong.** It ordered sources globally, so
+every non-US name walked Finnhub (403 outside the US), FMP (402 outside the US)
+and Twelve Data (404 on this plan) before reaching one that could answer. And
+Yahoo's `chart` endpoint — the fallback covering Tokyo, Zurich, Milan, Singapore,
+London and the BSE — now **rate-limits**: production logs `Crumb fetch
+rate-limited (HTTP 429)` on every boot, 5-8 Sep. The cascade swallowed that and
+served a stale broker mark that was indistinguishable from a live price.
+
+### Provider status, all probed live 8 Sep 2026
+
+| Source | Covers | Status |
+|---|---|---|
+| **TradingView** scanner | every market in the book | One POST per country returns all of it. Keyless, CloudFront (not Cloudflare bot-gating), plain `python-requests` UA works, 20 rapid calls → 0 failures. Home-market prices in home currency, with an `update_mode` field declaring its own delay. **Undocumented; its terms do not license redistribution.** Ships **disabled** — `PROSPER_ENABLE_TRADINGVIEW=true`. Cross-checked against IBKR's own marks on 10 holdings across 5 markets: worst divergence 0.80%. |
+| **Finnhub** | US only | Verified 403 for `.SW` / `.T` / `.NS`; `c:0` for `.AE`. Routed to US alone. |
+| **Yahoo `chart`** | most markets | Intermittent — 429s in bursts, still answered 104 names in one run. Kept as a tier-2/3 fallback, never primary. |
+| **justETF** (by ISIN) | LSE + Irish-domiciled ETFs | Keyless, verified. Prices all six `.L` ETF lines. Needs the ISIN. |
+| **AMFI** `NAVAll.txt` | India mutual funds | Official, keyless, 18,035 schemes with ISINs, one 1.5 MB download cached 6h. **Closes the gap the old handoff called unclosable.** |
+| **Boerse Frankfurt** (by ISIN) | non-UAE international | Keyless; priced 15/15 in testing but in **EUR at a Frankfurt cross-listing**, so the day change is Frankfurt's. Deliberately last before the broker mark. 0/7 for UAE. |
+| **Mubasher** | UAE only | Works from residential IPs and the GitHub prewarm runner; Cloudflare 403s Render. Costs one call to find out. |
+| **IBKR marks** | everything | `data/ibkr_marks.json`, the committed snapshot. Latency class `broker_mark` — never presented as a market price. Refresh per [[prosper-ibkr-marks-refresh]]. |
+| **FMP** | US only | `402 Premium Query Parameter` for every non-US symbol on this key. |
+| **Twelve Data** | US only on this plan | `404 available starting with the Pro or Venture plan`. |
+| **SEC EDGAR** | US filings | Unchanged and exemplary. |
+| **FX** | — | AED/SAR/HKD pegs → yfinance → open.er-api → stale cache → static. Note **Frankfurter/ECB has only 30 currencies and AED is not one**, so the 3.6725 peg stays load-bearing. `exchangerate.host` now requires a key. |
+
+### Provenance — the rule that makes failures diagnosable
+
+Every quote carries `source`, `latency`, `asof` and `currency`, and
+`price_cache` now stores `latency` + `quote_currency`. Latency classes are
+`live` / `delayed` / `eod` / `broker_mark` / `stale_cache`, and
+`Quote.is_actionable` is true only for the first two — so the Options Desk can
+tell a real print from a broker valuation before it writes a strike against it.
+
+**Both `price_cache` paths fall back to the legacy column set** when the additive
+migration has not yet run. This was found by running it: without the fallback the
+SELECT raises, every ticker looks stale, and every page load re-fetches the book.
+
+### Identity — stop resolving, start recording
+
+The IBKR statement's *Financial Instrument Information* section states the
+**ISIN**, the **Conid** and the **listing exchange** for every position. The
+parser now keeps all three (`holdings.isin` / `.conid` / `.listing_exchange`).
+That is what the ISIN-keyed providers need, and it is why `symbology.classify()`
+trusts the broker's exchange code over any suffix guess — IBKR writes Toronto as
+`TSE`, which as a Yahoo suffix means Tokyo.
+
+`core/symbology.py` also encodes: per-**country** TradingView slugs (routing all
+of "europe" to Germany silently loses Milan), the IBKR symbol truncations
+(`PUREHEALT` → `PUREHEALTH`, `ADNOCDRIL` → `ADNOCDRILL`), and a GBX→GBP guard for
+London pence quotes.
+
+### Checking a source from the network that matters
+
+    venv/bin/python3 scripts/probe_sources.py
+
+…or the **Data Source Health** panel on the Settings page, which runs the same
+probes *from the server*. A pass on a laptop says nothing about Render — that
+lesson cost two rounds on the UAE bug. **The one thing still unverified is
+whether TradingView answers from Render**; run the panel in production before
+setting `PROSPER_ENABLE_TRADINGVIEW`.
 
 ## 7. Open items, highest value first
 
