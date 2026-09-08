@@ -1,8 +1,15 @@
-# Prosper — Handoff (7 Sep 2026, current at v7.20)
+# Prosper — Handoff (8 Sep 2026, current at v7.22)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
+
+**Where the work stands.** A three-front review on 8 Sep 2026 measured the data layer, the code
+weight and the phone experience, then rebuilt the first of the three. **Phase 1 (data sources) is
+shipped and live. Phases 2 (simplicity) and 3 (mobile) are specified but not started** — the
+findings and the ordered task lists are in §11 and §12, and every number in them is measured, not
+estimated. Full review, with the phone mockups:
+`https://claude.ai/code/artifact/3b209668-235c-4b33-9402-5fdcbc9732c4`
 
 **Before you touch anything: `git pull`, then check `list_deploys` via the Render MCP.** Two separate
 Claude sessions have worked this repo on the same day and one shipped v7.15 while the other was
@@ -89,6 +96,13 @@ credentials, no repo changes:
   scoped by `(ticker, broker_source)` so re-uploading one account never wipes another's same-ticker
   position; a second, broader delete scoped by `(broker_source, asset_category IN ('Restricted
   Stock','Retirement Account'))` runs first, because those tickers are AI-generated fresh each parse.
+- `core/symbology.py` — **identity and routing (new in v7.21).** Classifies a ticker into a
+  *market* from the broker's listing exchange, then the suffix, then the ISIN country prefix, in
+  that order of trust. Holds the Yahoo suffix table, the per-country TradingView slugs, the IBKR
+  symbol truncations, the crypto symbol set and the GBX→GBP flag. No network, no state.
+- `core/market_data.py` — **the quote pipeline (new in v7.21).** Per-market ordered tier lists of
+  batch-shaped providers; a `Quote` carrying `source` / `latency` / `asof` / `currency`; a
+  `FetchReport` naming what could not be priced. This is the ONLY price path — see §6.
 - `core/cio_engine.py` + `core/data_engine.py` + `core/currency_normalizer.py` — the price /
   fundamentals waterfall, FX, news, ticker resolution. All parallel fetches go through
   `core/parallel.py`: `gather()`'s outer deadline only bounds how long the CALLER waits, **not** how
@@ -151,6 +165,20 @@ Read this section before writing Streamlit code. Each line cost a real debugging
 10. **Bound long lists.** The first card-list cut rendered all 182 positions and made the Dashboard
     12.8 screens tall — worse than the scroll-box it replaced. Sort by value, cap at 25, offer
     "show all".
+11. **A source's reachability is a property of the NETWORK, not the code.** Mubasher works from a
+    laptop and 403s Render. Yahoo rate-limits both, intermittently. Never write "verified live"
+    without saying which network the check ran from. `scripts/probe_sources.py` and
+    Settings → 📡 Data Source Health exist to settle this in one click.
+12. **An additive migration creates a window where the columns do not exist yet.** It runs in
+    `init_db()`, so any path that reads or writes before that — a script, a direct page render, the
+    deploy window itself — sees the old schema. On a READ path that silently made every ticker look
+    stale and re-fetched the whole book on every page load. Try the new columns, catch, fall back.
+13. **Silence a third-party library's own chatter when a miss is normal.** yfinance prints
+    "symbol may be delisted" for every failure; in a tiered pipeline a failure just means "next
+    tier", so those lines are pure noise — and noise is how real errors get missed.
+14. **Route by market, not by a global source order.** Finnhub 403s outside the US, FMP 402s, Twelve
+    Data 404s. A single global cascade walks all three certain failures for every non-US name before
+    reaching a source that can answer.
 
 ## 5. The mobile design system (`core/ui_components.py`)
 
@@ -284,68 +312,67 @@ crypto symbol set.
 server-side. A pass on a laptop says nothing about Render — that lesson cost two
 rounds on the UAE bug and one paid subscription.
 
-## 7. Open items, highest value first
+## 7. Where the work stands — the phase board
 
-1. **Run GROW across the book and the universe — through Cowork, not the API.** This is the
-   critical path. Rule 1 of the options doctrine cannot be evaluated without a Durability score
-   and a price ladder, so **every assignment-grade name currently produces a PROVISIONAL
-   ticket**. The engine is honest about it, but it is running on one cylinder until those
-   verdicts exist. See §9 for the Cowork workflow — it costs nothing per token.
-   Two names are done: NKE (screen) and ADBE (full_lean).
+Three fronts were measured on 8 Sep 2026. One is shipped; two are specified and waiting.
 
+| Phase | Scope | State | Detail |
+|---|---|---|---|
+| **1 — Data sources** | Every price, FX, fundamental and options feed | ✅ **shipped, live** (`63118b2`, `dep-dag0f8eq1p3s73efb5kg`) | §6 |
+| **2 — Simplicity & speed** | Caching, duplication, dead weight, per-page cost | ⏳ **specified, not started** | §11 |
+| **3 — Mobile rehaul** | All 24 screens at 375 px | ⏳ **specified, not started** | §12 |
+
+### What Phase 1 actually changed
+
+- One price path, not two. `cio_engine._fetch_one_quote` (~240 lines) deleted; everything routes
+  through `core/market_data.py`.
+- **179/185 instruments priced in 17.1 s**, against 175/181 in 67.7 s before. All 11 UAE names
+  priced for the first time from Render.
+- Mubasher and Twelve Data removed from the price path on probe evidence, not opinion.
+- New: crypto (Coinbase → CoinGecko), India fund NAV (AMFI), LSE ETFs (justETF), ECB FX
+  (Frankfurter), ISIN/Conid/listing-exchange capture from the broker statement.
+- Provenance (`source` / `latency` / `asof` / `currency`) on every quote and every cache row.
+
+### Standing items that belong to no phase
+
+1. **Run GROW across the book and the universe — through Cowork, not the API.** Still the critical
+   path. Rule 1 of the options doctrine cannot be evaluated without a Durability score and a price
+   ladder, so **every assignment-grade name currently produces a PROVISIONAL ticket**. See §9; it
+   costs nothing per token. Two names are done: NKE (screen) and ADBE (full_lean).
 2. **Paper-trade HARVEST before placing a real order.** Log the slate daily without acting, then
-   measure: what fraction would have expired worthless, what the fills would realistically have
-   been, and whether the doctrine's rejections were right. An options engine that has never been
-   measured is a confident-sounding random number generator, and this one makes specific
-   probability claims every morning. Start small and real rather than long and simulated — a
-   paper fill always fills at the mid, which is the one thing that cannot fail.
-
+   measure what fraction would have expired worthless and whether the doctrine's rejections were
+   right. An options engine that has never been measured is a confident-sounding random number
+   generator, and this one makes specific probability claims every morning.
 3. **Install the two GitHub Actions.** `docs/harvest-scan-github-action.yml` and
-   `docs/prewarm-github-action.yml` need copying into `.github/workflows/` plus repo secrets.
-   The push tokens used in these sessions lack `workflow` scope, so no session has been able to
-   do it. Until then the nightly options scan has to be run by hand, and it is slow from a
-   residential IP (see §8).
-
-4. **The mobile "Connecting…" hang.** A watchdog that reloads when a backgrounded tab's
-   WebSocket has died shipped in v7.20 and is verified installed, but whether it cures the
-   reported symptom is unconfirmed — it needs a real phone left backgrounded. If it persists,
-   the next suspect is `st.navigation` running alongside a `pages/` directory: Streamlit logs
-   that warning on every boot, and a direct page URL bypasses `app.py` entirely (confirmed in
-   the harness — the whole design system fails to load).
-
-5. **A/B `full_lean` against `full` on two or three names.** `full_lean` (Sonnet, 25 searches,
-   18k fetch content) is measured at $1.27 and produces a complete, well-formed result. Whether
-   the memo is as *good* as Opus at 40k content is unmeasured. Cost can be modelled; quality has
-   to be compared.
-
-6. **IBKR Flex web service still not configured** (`IBKR_FLEX_TOKEN` + query id). The committed
-   `data/ibkr_marks.json` snapshot is what actually prices UAE/fund lines today; refresh it with
-   `scripts/refresh_ibkr_marks.py` at the start of a session.
-
-7. **Cold load.** A first load of 182 holdings ran past two minutes locally. The UAE circuit
-   breaker (v7.19) removed ~53s of guaranteed-failing lookups; pre-warm plus a paid instance is
-   the rest of the answer. Memory and CPU are NOT the constraint — measured 344MB of a 537MB
-   limit, CPU flatlining at 0.0006 after startup.
-
-8. **GROW Annex E calibration** — the archetype premium/required-return table
+   `docs/prewarm-github-action.yml` need copying into `.github/workflows/` plus repo secrets. Every
+   session's push token has lacked `workflow` scope. Until then the nightly options scan is manual.
+   Note the prewarm job is now the *only* remaining consumer of `core/adx_client.py`.
+4. **Cancel the Twelve Data subscription.** It is paid, and after Phase 1 it contributes nothing:
+   `404 available starting with the Pro or Venture plan` for UAE, India and OTC funds, and US is
+   covered twice over by TradingView and Finnhub. Confirm nothing else regressed first —
+   `core/yf_utils.py` still borrows its rate-limiter helper.
+5. **`PROSPER_COOKIE_SECRET` is only 18 bytes** on production — JWT logs an
+   `InsecureKeyLengthWarning` (non-fatal, HS256 works). Regenerate as 32 bytes
+   (`python -c "import secrets;print(secrets.token_hex(32))"`); existing sessions need one re-login.
+6. **GROW Annex E calibration** — the archetype premium/required-return table
    (`grow/GROW v5 1 ANNEX E ARCHETYPE LOOKUPS.md`) is a **mechanical linear rescale of
    pre-compression values, explicitly labelled a placeholder**, chosen by Punit as a stopgap.
    Replace with real per-archetype judgment when he is ready. Do not treat the numbers as final.
-
-9. **Exhicon (`543895.BO`)** — Yahoo shows ₹258.55 against Trendlyne's ₹469.85 and a 52-week
-   range of 220–440. That looks like a corporate action; **the share count needs confirming
-   before the position value is trusted.**
-
-10. Sweep the remaining ad hoc 🔴/🟡/🟢 into `status_chip()` (Technical Analysis, Sentiment,
-    Analyst Consensus, Earnings Calendar, Upload Portal). Low value — these are directional
-    signals, not severity states.
-
-11. Never map old PROSPER-era verdicts onto GROW. Every GROW verdict shown must carry Durability
+7. **Exhicon (`543895.BO`)** — Yahoo shows ₹258.55 against Trendlyne's ₹469.85 and a 52-week range
+   of 220–440. That looks like a corporate action; **the share count needs confirming before the
+   position value is trusted.**
+8. **`PRYM.MI` should be `PRY.MI`.** IBKR writes Prysmian with a trailing lowercase share-class
+   marker, and the parser keeps it. The pipeline prices it anyway via Boerse Frankfurt by ISIN — a
+   fair demonstration of why capturing the ISIN mattered — but the ticker is still wrong.
+9. **A/B `full_lean` against `full` on two or three names.** `full_lean` (Sonnet, 25 searches, 18k
+   fetch content) is measured at $1.27 and produces a complete result. Whether the memo is as *good*
+   as Opus at 40k content is unmeasured. Cost can be modelled; quality has to be compared.
+10. **Never map old PROSPER-era verdicts onto GROW.** Every GROW verdict shown must carry Durability
     + Entry arithmetic. Positions are never sent to the engine.
 
-**Closed since the last handoff:** `last_known_price` back-fill (v7.18,
-`apply_static_marks_to_holdings`); the full tier is now live-tested end to end (ADBE, $1.27, 11.3
-min); the legacy `PROSPER_CLAIM_LEGACY` env var has been removed.
+**Closed since the last handoff:** the whole of Phase 1 (§6); `last_known_price` back-fill; the
+full tier live-tested end to end; the "mobile Connecting… hang" watchdog shipped (efficacy still
+unconfirmed — see §12).
 
 ## 8. HARVEST v1.0 — the Options Desk (new in v7.19)
 
@@ -502,3 +529,237 @@ the sign-in page rendering, deploy status, and error-level logs.
 **A standing lesson:** "verified live" from a laptop is not the same as verified on Render. The UAE
 price bug survived two rounds of fixes because every verification ran from a residential IP. When a
 data source is involved, say which network the check ran from.
+
+## 11. PHASE 2 — Simplicity, speed and reliability (specified, not started)
+
+Measured 8 Sep 2026 in the preview harness (§2) against the real 182-holding book. Every figure
+below is measured. Nothing here is an estimate.
+
+### The one rule that explains nearly every slow page
+
+Prosper has two cache tiers: **durable** (Turso) and **session** (`st.session_state`, dead on every
+refresh and every free-tier spin-down). I walked all twenty cached functions in `data_engine`:
+
+| Tier | Count | Functions |
+|---|---|---|
+| Durable | **2** | `get_ticker_info_batch`, `get_portfolio_news` |
+| Session only | **17** | `get_history`, `get_financials`, `get_ticker_info`, `get_ticker_news`, `get_analyst_recommendations`, `get_analyst_price_targets`, `get_recommendations_summary`, `get_upgrade_downgrade`, `get_finnhub_analyst_data`, `get_insider_transactions`, `get_insider_purchases`, `get_institutional_holders`, `get_major_holders`, `get_mutualfund_holders`, `resolve_ticker`, `resolve_tickers_batch`, `calc_portfolio_beta` |
+| **No cache at all** | **1** | `get_market_news` |
+
+Two of twenty. The fast pages are the two that hit Turso; everything else re-fetches from scratch on
+every page load, every refresh and every cold start. `get_history()` — the heaviest payload in the
+app and its biggest single memory allocation — is in the session tier on a 1-hour TTL.
+
+**Measured page cost** (headless `AppTest`, one page per subprocess, caches warm):
+
+| Page | Time |
+|---|---|
+| Market News | **11,710 ms** — *every visit* |
+| Command Center | 750 ms |
+| Portfolio Dashboard | 630 ms |
+| Performance | **never completed** — still on "Loading 1y data for 181 tickers + 4 benchmarks…" after 10 s in the browser |
+
+### The findings, with the fix for each
+
+**P2-1 · `get_market_news` has no cache, and the cache it should use already exists.**
+`CRITICAL / 15 min.` The function body contains zero references to `_cache_get`, `_cache_set` or
+`news_cache` — I checked the whole thing. It fans out to nine RSS feeds plus Finnhub on every
+single visit. Forty lines above it, `get_portfolio_news()` reads and writes `news_cache` correctly.
+→ **Fix:** three lines, copied from the function above it. 11.7 s → ~50 ms warm. Best
+benefit-to-risk ratio in the codebase; do this first.
+
+**P2-2 · Performance loads a year of history for every holding, uncached.** `CRITICAL / 1 day.`
+185 × 1y daily bars held in memory simultaneously, session-cached only, on a 512 MiB / 0.15 vCPU
+instance. This is the "freeze".
+→ **Fix:** (a) give `get_history` a durable tier — a `history_cache` table keyed
+`(ticker, period, date)`; (b) then bound the page — portfolio NAV comes from `nav_snapshots`, which
+is already written daily and needs **no** per-ticker history at all. Per-ticker history belongs on
+Deep Dive, one name at a time.
+
+**P2-3 · The same total is computed twelve different ways.** `CORRECTNESS / half a day.`
+`market_value.sum()` appears in four distinct coercion styles across eight files — bare `.sum()`,
+`to_numeric(errors="coerce").sum()`, `…dropna().sum()`, `to_numeric(df[…]).sum()`. On a clean float
+column all four agree. On an **object** column containing an empty string — exactly what an unpriced
+line produces — the bare variant raises
+`TypeError: unsupported operand type(s) for +: 'float' and 'str'` while the others return the right
+number. **Eight sites crash where four degrade.** Demonstrated, not asserted.
+→ **Fix:** one `portfolio_totals(df) -> dict` in `cio_engine`, called by Command Center, Dashboard,
+Summary, Performance, Risk, Dividends, Earnings, AI Chat and the NAV snapshot in `app.py`. Nine call
+sites collapse to one definition of "what the portfolio is worth".
+
+**P2-4 · The Dashboard builds twelve holdings tables to show one.** `HIGH / low risk.`
+Measured in the DOM at 375 px: **12 `stDataFrame` widgets and 11 tab buttons** on a single render.
+Streamlit tabs are not lazy — every country tab's table is serialised and shipped whether or not it
+is opened.
+→ **Fix:** replace the tab strip with `st.segmented_control` (or a selectbox) that renders one
+table. Eleven twelfths of that work disappears. Pairs naturally with **P3-4**.
+
+**P2-5 · 713 lines of a retired engine survive for one helper.** `TIDY / zero risk.`
+`core/prosper_analysis.py` is PROSPER v3.0, retired in favour of GROW v5.1. It is imported exactly
+once in the whole codebase: `grow_engine.py:457 → _fetch_finnhub_analyst`. The `prosper_analysis`
+*table* is very much alive — it is the GROW verdict store — which is what has been protecting the
+module from deletion.
+→ **Fix:** move `_fetch_finnhub_analyst` into `finnhub_client.py` where it belongs, delete the file.
+−713 lines, zero behaviour change.
+
+**P2-6 · Eight pages independently re-enrich the same portfolio.** `STRUCTURAL / half a day.`
+`enrich_portfolio()` is called from nine sites across eight pages, and seven pages each build their
+own full holdings table. The enrichment itself is cheap (~0.08 s) — the cost is that each page then
+derives its own KPIs from it, which is where the twelve summation variants came from.
+→ **Fix:** one `get_portfolio_view()` returning the enriched frame **and** the totals, memoised per
+`(portfolio_id, base_currency)`. Do this *with* P2-3, not after it.
+
+**P2-7 · Sentiment is a page nobody waits for.** `HIGH / low risk.` Five sources × 186 holdings,
+measured at **>200 s**.
+→ **Fix:** restrict to on-demand, single ticker. Nothing that takes three minutes is a signal.
+
+**P2-8 · Insider transactions and institutional holders.** `TIDY / low risk.` Four yfinance calls
+per render, on one tab of one page, for data that is quarterly-stale by nature.
+→ **Fix:** cut, or move to Finnhub. ~120 lines.
+
+**P2-9 · Sixty lines of CSS styling a widget that no longer exists.** `TIDY / zero risk.`
+`app.py` carries twelve `[data-testid="stMetric*"]` rules from before the v7.16 migration.
+`st.metric` is down to two uses app-wide.
+→ **Fix:** delete the block. It is also the last thing in `app.py` fighting `mobile_shell()` for the
+same selectors.
+
+**P2-10 · Two pages share the number 18.** `TIDY, but see the note / 1 hour.`
+`18_Equity_Deep_Dive.py` and `18_Risk_Strategy.py`. Harmless under `st.navigation` — but the
+`pages/` directory is **also** being auto-discovered. Streamlit logs that warning on every boot, and
+a direct page URL bypasses `app.py` entirely, which means the whole design system fails to load
+(confirmed in the harness).
+→ **Fix:** renumber, and take `pages/` out of auto-discovery. **This is a live suspect for the
+"Connecting…" hang** — worth doing before blaming the WebSocket again.
+
+**P2-11 · Top Movers shows zeros instead of an empty state.** `HONESTY / 1 hour.` When day-change
+data is missing, the Command Center's Top Movers list fills with `+0.0%` rows in ticker order rather
+than saying it has nothing to show.
+→ **Fix:** filter rows where change is null or exactly zero; fall back to
+`ui_errors.empty_state`. The component already exists.
+
+### What Phase 2 adds up to
+
+| Change | Lines | Effect | Risk |
+|---|---|---|---|
+| P2-1 cache Market News | +3 | 11.7 s → ~50 ms | none |
+| P2-5 delete `prosper_analysis.py` | −713 | no behaviour change | none |
+| P2-9 delete dead `stMetric` CSS | −60 | fewer selector collisions | none |
+| P2-3 one `portfolio_totals()` | −~90 | one definition of net worth | low |
+| P2-2 durable `history_cache` | +~40 | unblocks Performance, Risk, Technical | medium |
+| P2-4 one Dashboard table, not twelve | −~50 | ~11/12 of render work | low |
+| P2-7 Sentiment on-demand | −~40 | removes a >200 s page | low |
+| P2-8 cut insider + institutional | −~120 | 4 yfinance calls/render gone | low |
+
+Roughly **−1,000 lines net**, the two slowest surfaces fixed, and no feature the book actually uses
+removed.
+
+### Suggested order
+
+`P2-1` → `P2-11` → `P2-9` → `P2-5` → `P2-10` → `P2-3` + `P2-6` together → `P2-2` → `P2-4` → `P2-7`
+→ `P2-8`. The first five are an afternoon and carry almost no risk; they also make the rest easier
+to reason about.
+
+---
+
+## 12. PHASE 3 — Mobile rehaul (specified, not started)
+
+Measured on a real 375 × 812 viewport against the real book. **Measure against
+`[data-testid="stMain"]`, never `document.documentElement`** — Streamlit scrolls an inner container,
+so the document's own `scrollHeight` is always just the viewport height. Screen counts below are
+"screens of scrolling"; under 2.5 is good.
+
+Also: scope tap-target counts to `stMain`. Counting the whole document gives 48/59 sub-44 px, but 32
+of those are the collapsed sidebar's own links and are not really on screen.
+
+| Screen | Screens tall | First number at | Tap targets <44 px | Charts | Tables | Verdict |
+|---|---|---|---|---|---|---|
+| Portfolio Summary | **1.67** | 160 px | 1 / 13 | 5 | 0 | best in the app |
+| Command Center | 3.62 | 112 px | 15 / 25 | 3 | 0 | dense but empty |
+| Portfolio Dashboard | 3.49 | 136 px | 2 / 181 | 0 | **12** | hero printed twice |
+| Equity Deep Dive | 1.00 | — | 2 / 9 | 0 | 0 | **opens on an error** |
+| Performance | 1.00 | — | 0 / 5 | 0 | 0 | **never finished loading** |
+| Risk & Strategy | **11.93** | 168 px | 1 / 37 | 3 | 1 | **twelve screens** |
+
+### Four problems that repeat on every screen
+
+**P3-1 · The floating button sits on top of the navigation bar.** `HIGH / 1 hour.` Measured: the
+"Ask Prosper" FAB occupies `y = 738…788` in an 812 px viewport; the bottom nav starts at 760. They
+overlap, and the FAB's own DOM-overlap test returns the nav's icon labels. It is also a duplicate —
+the fifth tab in that bar is already "Ask".
+→ **Fix: delete the FAB.** It costs a row of data on every screen to reach a page one tap away, and
+it still carries the pre-existing bug that anything rendered after `pg.run()` is skipped on 21 of
+the 24 pages. Do this with **P2-10**.
+
+**P3-2 · Empty cells take the same space as full ones.** `HIGH / half a day.` Command Center
+devotes two full `stat_grid` rows to six figures, of which **three** render as an em-dash —
+Realized, Cash, Div/Yr. The Dashboard does the same with Cash, Cash % and Margin.
+→ **Fix:** a grid cell should collapse when it has nothing to say. A 2-cell grid beats a 3-cell grid
+with a hole. **Never render an em-dash cell above the fold.**
+
+**P3-3 · The hero number is printed twice.** `HIGH / 1 hour.` On the Dashboard, "Total Portfolio
+Value / USD 4.9M / −169 today" appears at 136 px, then the identical three figures reappear ~400 px
+lower as the "All" tab's own summary. On a phone that is a full screen of scrolling to arrive back
+where you started.
+→ **Fix:** one hero per page. The tab summary goes.
+
+**P3-4 · Donuts are an expensive way to say one thing.** `MEDIUM / 1 day.` Portfolio Summary spends
+~330 px — 40% of a screen — on a donut whose entire message is a percentage and a label. Five of
+them on one page.
+→ **Fix:** a ranked bar list carries the same information in a third of the height, sorts correctly,
+and does not need Plotly's 1.13 MB bundle. Under 768 px, bars; above it, keep the donut if you like.
+
+### Per-screen actions
+
+**P3-5 · Command Center → the "am I fine?" screen.** `1 day.` 3.62 → ~2.1 screens.
+Hero once, at the top. Two-cell grid where every cell carries a number (Cash + T-bills; Premium/yr
+vs carry). **A stale-data banner as first-class content** — "4 holdings unpriced, ADX feed stale" —
+rather than a silent fallback; Phase 1's `latency` field now makes this possible. Movers show the
+**money**, not just the percent: `−1.51%` means nothing, `−$4,120` is a decision. New "Needs a
+decision" block surfacing GROW ladder breaches and HARVEST earnings blackouts. Mockup in the
+artifact.
+
+**P3-6 · Portfolio Dashboard → the "what changed?" screen.** `1 day.` 3.49 → ~2.3 screens, 12
+tables → 1. Hero once. The country tab strip becomes a **ranked bar list** that shows the
+allocation instead of hiding it behind eleven tabs. A segmented control re-sorts the same rows
+(Value / Today / Total P&L / Weight) rather than rebuilding them. **Rows carry quantity and average
+cost** — the two fields the current rows omit and which were specifically asked for. Mockup in the
+artifact. Shares its implementation with **P2-4**.
+
+**P3-7 · Split Risk & Strategy.** `1 day.` At 11.93 screens with 8 tabs and 3 charts it is four
+pages wearing one hat: a regime call, a portfolio health score, position-sizing guidance, and
+allocation drift. On a phone nobody reaches the fourth. The regime chip and the health score belong
+on the **Command Center** — they are "am I fine?" answers. Sizing and drift belong behind
+**Decide**, reached when you are actually about to trade. Its "Growing" explainer card also
+duplicates the Command Center's expander verbatim.
+
+**P3-8 · Equity Deep Dive opens on an error.** `1 hour.` Confirmed live: defaults to `000660.KS` —
+SK Hynix, which sorts first alphabetically and is *not* in the book — and greets you with "Could not
+fetch data for 000660.KS." Above it sit four lines of prose costing ~90 px before the first control.
+→ **Fix:** default to the largest holding by market value; cut the description to one line or none.
+
+**P3-9 · Confirm the "Connecting…" watchdog.** `unknown.` The v7.20 watchdog is verified installed
+but its efficacy is unconfirmed — it needs a real phone left backgrounded. If the symptom persists,
+**do P2-10 first** (`pages/` auto-discovery bypassing `app.py`) before suspecting the WebSocket.
+
+### The eight rules behind the redesign
+
+| Rule | Why | Applies to |
+|---|---|---|
+| One hero per page, near the top | The number the page exists for, once, above 200 px | every page |
+| Never render an em-dash cell above the fold | Collapse the grid; a 2-cell grid beats a 3-cell grid with a hole | Command Center, Dashboard |
+| Percentages get their money | −1.51% means nothing; −$4,120 is a decision | movers, positions, P&L |
+| Ranked bars, not donuts, under 768 px | Same information, one third of the height, no Plotly | Summary, Dashboard, Risk |
+| Tabs re-sort; they never rebuild | Streamlit tabs are eager — every hidden tab is still built and shipped | Dashboard, Risk, Deep Dive |
+| A page over 4 screens is two pages | Risk & Strategy at 11.93 is a scope problem, not a layout problem | Risk & Strategy |
+| Stale data is content, not an exception | Say "4 unpriced, ADX stale" on the face of the page | every priced surface |
+| No floating button over the nav bar | Measured overlap, and it duplicates a tab | `app.py` |
+
+### Suggested order
+
+`P3-1` (delete the FAB) → `P3-8` (Deep Dive default) → `P3-2` (collapse empty cells) →
+`P3-3` (de-duplicate the hero) → `P3-5` + `P3-6` (the two redesigns) → `P3-4` (bars for donuts) →
+`P3-7` (split Risk) → `P3-9` (confirm the watchdog). The first four are a day and are all
+subtraction.
+
+**Do Phase 2 before Phase 3 where they touch the same file.** P2-4 and P3-6 are the same Dashboard
+change; P2-10 and P3-1 are the same `app.py` change. Doing them together is one edit, not two.
