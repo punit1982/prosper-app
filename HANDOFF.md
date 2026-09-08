@@ -1,15 +1,20 @@
-# Prosper — Handoff (8 Sep 2026, current at v7.22)
+# Prosper — Handoff (8 Sep 2026, current at v7.23)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
 **Where the work stands.** A three-front review on 8 Sep 2026 measured the data layer, the code
-weight and the phone experience, then rebuilt the first of the three. **Phase 1 (data sources) is
-shipped and live. Phases 2 (simplicity) and 3 (mobile) are specified but not started** — the
-findings and the ordered task lists are in §11 and §12, and every number in them is measured, not
-estimated. Full review, with the phone mockups:
+weight and the phone experience. **Phase 1 (data sources) and Phase 2 (simplicity & speed) are
+both shipped and live. Phase 3 (mobile) is audited and waiting** — §12, with STEP 0 being a
+re-measure in the preview harness because Phase 2 moved three of the screens the audit was based
+on. Full review, with the phone mockups:
 `https://claude.ai/code/artifact/3b209668-235c-4b33-9402-5fdcbc9732c4`
+
+**The §11/§12 audits are measured leads, not gospel.** Four of the eleven Phase 2 findings were
+wrong on inspection (a "dead" function that was actually called, a "crash" that can't happen, a bad
+grep, a non-issue Streamlit already handles) — see the ledger at the top of §11. Verify each Phase
+3 finding against the current code before acting on it.
 
 **Before you touch anything: `git pull`, then check `list_deploys` via the Render MCP.** Two separate
 Claude sessions have worked this repo on the same day and one shipped v7.15 while the other was
@@ -200,7 +205,10 @@ every page — including ones never individually converted — gets 44px tap tar
 | `fmt_compact(v, ccy)` | raw currency figures | `2,417,140` → `2.4M`, exact value in `title=` |
 | `status_chip(label, level)` | ad hoc 🔴/🟡/🟢 | critical / warn / good / neutral |
 
-`st.metric` is now **gone from every page** (was 78).
+`st.metric` was mostly replaced by `stat_grid` / `hero_metric` (was 78) — but **23 `.metric()`
+calls remain**, all written as `colN.metric(...)` on `st.columns` objects, in `8_Sentiment.py`,
+`7_Analyst_Consensus.py`, `5_Performance.py` and `core/grow_render.py`. They still depend on the
+`[data-testid="stMetric*"]` CSS in `app.py`. Finishing the conversion is P3-11 (§12).
 
 Measured on a real 375×812 viewport against the real portfolio: Command Center went from 4.5 screens
 with the first number 526px down, to 3.9 screens with it at 118px. The Dashboard went from ~4 to ~15
@@ -314,13 +322,23 @@ rounds on the UAE bug and one paid subscription.
 
 ## 7. Where the work stands — the phase board
 
-Three fronts were measured on 8 Sep 2026. One is shipped; two are specified and waiting.
+Three fronts were measured on 8 Sep 2026. Two are shipped; the third is audited and waiting.
 
 | Phase | Scope | State | Detail |
 |---|---|---|---|
 | **1 — Data sources** | Every price, FX, fundamental and options feed | ✅ **shipped, live** (`63118b2`, `dep-dag0f8eq1p3s73efb5kg`) | §6 |
-| **2 — Simplicity & speed** | Caching, duplication, dead weight, per-page cost | ⏳ **specified, not started** | §11 |
-| **3 — Mobile rehaul** | All 24 screens at 375 px | ⏳ **specified, not started** | §12 |
+| **2 — Simplicity & speed** | Caching, duplication, dead weight, per-page cost | ✅ **shipped, live** (`7d7108d` → `e575e69`, 8 Sep) | §11 |
+| **3 — Mobile rehaul** | All 24 screens at 375 px | ⏳ **audited, not started** | §12 |
+
+**Phase 2 shipped as four pushes on 8 Sep, each verified and deployed live.** What went in and —
+just as important — what was dropped after inspection is the header of §11. The one-line version:
+Market News durable-cached, `prosper_analysis.py` (713 lines) deleted, Sentiment made on-demand,
+Deep Dive's insider/holder tables cut, the Dashboard's 12 eager country tabs collapsed to one
+region picker, and the Performance "freeze" fixed by drawing the portfolio curve from
+`nav_snapshots` instead of a 180-ticker history fan-out. **Four of the eleven §11 findings did not
+survive inspection** (P2-1's target function was dead, P2-3's crash bug isn't real, P2-9's premise
+was a bad grep, P2-10 was already solved by Streamlit) — the standing lesson is that §11 and §12
+are *measured leads, not facts*; re-verify each against the current code before acting.
 
 ### What Phase 1 actually changed
 
@@ -370,9 +388,10 @@ Three fronts were measured on 8 Sep 2026. One is shipped; two are specified and 
 10. **Never map old PROSPER-era verdicts onto GROW.** Every GROW verdict shown must carry Durability
     + Entry arithmetic. Positions are never sent to the engine.
 
-**Closed since the last handoff:** the whole of Phase 1 (§6); `last_known_price` back-fill; the
-full tier live-tested end to end; the "mobile Connecting… hang" watchdog shipped (efficacy still
-unconfirmed — see §12).
+**Closed since the last handoff:** the whole of Phase 2 (§11 ledger — 7 findings shipped across
+`7d7108d`…`e575e69`, 2 dropped as non-bugs, 1 reverted); the whole of Phase 1 (§6);
+`last_known_price` back-fill; the full tier live-tested end to end; the "mobile Connecting… hang"
+watchdog shipped (efficacy still unconfirmed — see §12 P3-9).
 
 ## 8. HARVEST v1.0 — the Options Desk (new in v7.19)
 
@@ -530,10 +549,32 @@ the sign-in page rendering, deploy status, and error-level logs.
 price bug survived two rounds of fixes because every verification ran from a residential IP. When a
 data source is involved, say which network the check ran from.
 
-## 11. PHASE 2 — Simplicity, speed and reliability (specified, not started)
+## 11. PHASE 2 — Simplicity, speed and reliability (SHIPPED 8 Sep 2026)
 
-Measured 8 Sep 2026 in the preview harness (§2) against the real 182-holding book. Every figure
-below is measured. Nothing here is an estimate.
+Shipped in four pushes on 8 Sep. Everything below the "shipped / dropped" ledger is the original
+audit, kept for context — but **it is a set of measured leads, and four of the eleven were wrong.**
+Re-verify before reusing any number here.
+
+### What shipped, and what was dropped
+
+| # | Finding | Outcome |
+|---|---|---|
+| **P2-1** | Market News uncached (measured 11.7 s / visit) | ✅ **Shipped**, but the audit misattributed it: `get_market_news()` had **zero callers**. Real cost is `6_Market_News.py` looping session-only-cached `get_ticker_news` over 6 index tickers on every cold start. Fix: durable `news_cache` tier on that page, keyed by focus area, Refresh busts it. Dead `get_market_news` + `MARKET_RSS_FEEDS` deleted (`_fetch_rss_feed` kept — `get_ticker_news` uses it). |
+| **P2-5** | 713-line retired `prosper_analysis.py` | ✅ **Shipped.** One live consumer (`grow_engine` → `_fetch_finnhub_analyst`); moved that helper verbatim into `finnhub_client.py`, deleted the file. The `prosper_analysis` **table** and its `database.py` accessors are the GROW verdict store — untouched. |
+| **P2-9** | "Dead `st.metric` CSS in `app.py`" | ❌ **Shipped then reverted.** Premise was a bad grep — `grep "st\.metric("` misses `col1.metric(...)` on column objects. There are **23 live `.metric()` calls** (Sentiment, Analyst Consensus, Performance, `grow_render`). The `[data-testid="stMetric*"]` block stays until those pages move to `stat_grid`/`hero_metric`. §5's "st.metric gone from every page" and this finding's "down to two" are both **false**. |
+| **P2-11** | Top Movers shows `+0.0%` filler | ✅ **Shipped.** One line: also drop exactly-zero rows (a missing day-change is filled as `0`, not null, so `dropna` misses it). The existing "No price data available yet." caption now shows when there is genuinely nothing to rank. |
+| **P2-7** | Sentiment sweeps the whole book (>200 s) | ✅ **Shipped.** The whole-book sweep is behind an "Analyse all N holdings" button; picking one holding fetches just that name on demand (cached 30 min). Overview chart + status bar render only once a whole-book run exists. |
+| **P2-8** | Deep Dive Ownership tab: 4 uncached yfinance calls | ✅ **Shipped.** Removed `get_major_holders` / `get_institutional_holders` / `get_insider_purchases` / `get_insider_transactions` and the tables they fed. Kept the ownership-split pie + insights (run off the ticker `info` the page already fetches). `data_engine` functions left in place — no other caller, harmless. |
+| **P2-4** | Dashboard builds 12 tables to show 1 | ✅ **Shipped.** `st.tabs(["All", country, …])` (eager: ~12 tabs × 2 tables = ~24 `stDataFrame`s/render) → `st.segmented_control` "Region" picker, key `dash_region`, default "All". `_render_currency_section` untouched. **This is also most of P3-6** — see §12. |
+| **P2-2** | Performance never finishes loading | ✅ **Shipped.** The "vs Benchmarks" chart rebuilt the portfolio curve from a full history fetch for every one of ~180 holdings. Now the portfolio line is `nav_snapshots.total_value` (written every Dashboard visit), clipped to the selected period, indexed to 100; only the ~4 selected benchmarks still fetch. **Trade-off:** the portfolio line only covers the window since NAV snapshots began, so short periods show an info message until they accumulate. `get_history`'s durable-cache tier (`history_cache` table, audit's "part a") was **not** built — once the fan-out is gone nothing here is on a freeze path. It is still worth doing for Deep Dive / Technical / Risk / `portfolio_optimizer`; carry it into §12. |
+| **P2-3 / P2-6** | 12 ways to sum the portfolio; "8 sites crash where 4 degrade" | ❌ **Dropped — the bug is not real.** `enrich_portfolio()` builds `pd.DataFrame(list-of-dicts)` where `market_value` is `float | None` → the column is **float64**, and bare `.sum()` equals `to_numeric().sum()` equals `.dropna().sum()`. The only thing that puts `""` in a numeric column is `clean_nan()` (`fillna("")`) — and its output is **display-only, never summed** (every call site checked). A 12-site refactor that fixes nothing and can only regress. If revisited, it is purely a consolidation-for-tidiness call, not a correctness one. |
+| **P2-10** | Renumber page 18 / de-auto-discover `pages/` | ❌ **Dropped — already solved.** Under Streamlit 1.41 + `st.navigation`, `set_pages()` swaps `PagesStrategyV1` → `V2`, which fully replaces `pages/` auto-discovery; unregistered pages 404 (the `99_OAuth_Callback` comment already says so). The duplicate `18_` prefix has no functional effect. Residue is **one cosmetic boot-warning line**. The "fix" (rename `pages/` → `views/`, 54 refs) was the riskiest change in the batch for no reward. Only revisit if the "Connecting…" hang is reproduced on a real phone *and* traced to `pages/`. |
+
+**Net:** ~1,600 lines removed across the four pushes, the two slowest surfaces (Market News, Performance) fixed, no feature the book uses removed. Deploys: `7d7108d` (dep-dag10i9…), `decf584` (dep-dag2s6…), `a134ae7` (dep-dag4gt…), `e575e69` (dep-dag53f…) — all live, sign-in 200, no error logs.
+
+---
+
+*Original audit follows (8 Sep 2026, preview harness §2, real 182-holding book):*
 
 ### The one rule that explains nearly every slow page
 
@@ -661,105 +702,140 @@ to reason about.
 
 ---
 
-## 12. PHASE 3 — Mobile rehaul (specified, not started)
+## 12. PHASE 3 — Mobile rehaul (audited; for a future session)
 
-Measured on a real 375 × 812 viewport against the real book. **Measure against
-`[data-testid="stMain"]`, never `document.documentElement`** — Streamlit scrolls an inner container,
-so the document's own `scrollHeight` is always just the viewport height. Screen counts below are
-"screens of scrolling"; under 2.5 is good.
+**Read §11's "shipped / dropped" ledger first.** Four of eleven Phase 2 findings did not survive
+inspection. Phase 3 was written by the same 8 Sep review in the same voice — treat every number
+below as a *lead to re-measure*, not a fact. Phase 2 has also already moved three of these screens
+(Dashboard, Performance, Sentiment), so the original measurement table is partly obsolete.
 
-Also: scope tap-target counts to `stMain`. Counting the whole document gives 48/59 sub-44 px, but 32
-of those are the collapsed sidebar's own links and are not really on screen.
+### STEP 0 for the next session — re-measure, then plan
 
-| Screen | Screens tall | First number at | Tap targets <44 px | Charts | Tables | Verdict |
+The 8 Sep screen-count table (below, struck through) predates the Phase 2 pushes. Before touching
+anything: bring up the preview harness (§2 — rsync a scratch copy, force
+`authentication_status=True`, no-op `run_auth`, seed from `Portfolio Info/`, pre-warm the price and
+ticker-info caches, stub `yfinance`), drive it with the browser at `resize_window` preset `mobile`,
+and **measure against `[data-testid="stMain"]`, never `document.documentElement`** — Streamlit
+scrolls an inner container, so the document's own `scrollHeight` is always just the viewport height.
+Scope tap-target counts to `stMain` too (the whole document counts the 32 collapsed-sidebar links).
+Screen counts are "screens of scrolling"; under 2.5 is good. Then rebuild the table and the
+priority order from what you actually see.
+
+~~8 Sep 2026 — now stale:~~
+
+| Screen | ~~Screens tall~~ | ~~First # at~~ | ~~Sub-44px~~ | ~~Charts~~ | ~~Tables~~ | Note (updated) |
 |---|---|---|---|---|---|---|
-| Portfolio Summary | **1.67** | 160 px | 1 / 13 | 5 | 0 | best in the app |
-| Command Center | 3.62 | 112 px | 15 / 25 | 3 | 0 | dense but empty |
-| Portfolio Dashboard | 3.49 | 136 px | 2 / 181 | 0 | **12** | hero printed twice |
-| Equity Deep Dive | 1.00 | — | 2 / 9 | 0 | 0 | **opens on an error** |
-| Performance | 1.00 | — | 0 / 5 | 0 | 0 | **never finished loading** |
-| Risk & Strategy | **11.93** | 168 px | 1 / 37 | 3 | 1 | **twelve screens** |
+| Portfolio Summary | ~~1.67~~ | ~~160 px~~ | ~~1/13~~ | ~~5~~ | 0 | unchanged by Phase 2 — 5 donuts still there (P3-4) |
+| Command Center | ~~3.62~~ | ~~112 px~~ | ~~15/25~~ | ~~3~~ | 0 | P2-11 fixed the zero-filler movers; layout untouched |
+| Portfolio Dashboard | ~~3.49~~ | ~~136 px~~ | — | 0 | ~~12~~ **1** | **P2-4 done**: 12 eager tabs → one `segmented_control`. P3-6's table-count problem is solved; the row-content and hero-dup parts are not. |
+| Equity Deep Dive | ~~1.00~~ | — | — | 0 | 0 | P2-8 lightened the Ownership tab; still 7 tabs, still the alpha-sort default ticker (P3-8) |
+| Performance | ~~1.00~~ | — | — | — | — | **P2-2 done**: no longer fans out ~180 histories; portfolio line now from `nav_snapshots`. The "never loads" freeze is gone. |
+| Risk & Strategy | ~~11.93~~ | ~~168 px~~ | — | 3 | 1 | still long. **4 top-level tabs, not 8** (the audit was wrong) + one nested `st.tabs` in the allocation tab. Re-measure the screen count. |
 
-### Four problems that repeat on every screen
+### Four cross-cutting problems
 
-**P3-1 · The floating button sits on top of the navigation bar.** `HIGH / 1 hour.` Measured: the
-"Ask Prosper" FAB occupies `y = 738…788` in an 812 px viewport; the bottom nav starts at 760. They
-overlap, and the FAB's own DOM-overlap test returns the nav's icon labels. It is also a duplicate —
-the fifth tab in that bar is already "Ask".
-→ **Fix: delete the FAB.** It costs a row of data on every screen to reach a page one tap away, and
-it still carries the pre-existing bug that anything rendered after `pg.run()` is skipped on 21 of
-the 24 pages. Do this with **P2-10**.
+**P3-1 · The floating "Ask Prosper" button.** `HIGH / 30 min. VERIFIED.` `app.py` renders
+`st.popover("💬 Ask Prosper")` styled `position:fixed; bottom:24px; right:24px; z-index:9999`
+**after `pg.run()`** (line ~354), and the bottom-nav bar's 5th item is already "Ask" →
+`pages/24_AI_Chat.py` (`_NAV_ITEMS` in `ui_components.py`). It overlaps the nav bar, duplicates a
+tab, and — because it is after `pg.run()` — it silently vanishes on the 21 pages that call
+`st.stop()`. → **Delete the popover block** (`app.py` ~347–430) and the `pg.title != "Ask Prosper"`
+guard with it. (P2-10, which this was to be paired with, was dropped — do P3-1 on its own.)
 
-**P3-2 · Empty cells take the same space as full ones.** `HIGH / half a day.` Command Center
-devotes two full `stat_grid` rows to six figures, of which **three** render as an em-dash —
-Realized, Cash, Div/Yr. The Dashboard does the same with Cash, Cash % and Margin.
-→ **Fix:** a grid cell should collapse when it has nothing to say. A 2-cell grid beats a 3-cell grid
-with a hole. **Never render an em-dash cell above the fold.**
+**P3-2 · Em-dash cells take a full grid slot.** `HIGH / half a day. NEEDS RE-MEASURE.` The audit
+said Command Center spends two `stat_grid` rows on six figures with three em-dashes (Realized,
+Cash, Div/Yr), and the Dashboard does the same (Cash, Cash %, Margin). `stat_grid` is in
+`ui_components.py`. → **Make `stat_grid` drop cells whose value is `"—"`/`None`/`""` before it lays
+out the grid** — a 2-cell grid beats a 3-cell grid with a hole. One change to the component fixes
+every caller. Confirm the current em-dash count in the harness first.
 
-**P3-3 · The hero number is printed twice.** `HIGH / 1 hour.` On the Dashboard, "Total Portfolio
-Value / USD 4.9M / −169 today" appears at 136 px, then the identical three figures reappear ~400 px
-lower as the "All" tab's own summary. On a phone that is a full screen of scrolling to arrive back
-where you started.
-→ **Fix:** one hero per page. The tab summary goes.
+**P3-3 · The Dashboard hero prints twice.** `HIGH / 30 min. PARTLY MITIGATED.` `hero_metric("Total
+Portfolio Value", …)` renders once (~line 796 of `2_Portfolio_Dashboard.py`), then
+`_render_currency_section` opens with a `stat_grid` whose first cell is `f"{currency_label} value"`
+— for the "All" region that is the same number again. P2-4 stopped this rendering 12 times, but the
+"All" echo remains. → **In `_render_currency_section`, skip the first `stat_grid` cell when
+`currency_label == "All"`** (the page hero already covers it); keep it for a specific region.
 
-**P3-4 · Donuts are an expensive way to say one thing.** `MEDIUM / 1 day.` Portfolio Summary spends
-~330 px — 40% of a screen — on a donut whose entire message is a percentage and a label. Five of
-them on one page.
-→ **Fix:** a ranked bar list carries the same information in a third of the height, sorts correctly,
-and does not need Plotly's 1.13 MB bundle. Under 768 px, bars; above it, keep the donut if you like.
+**P3-4 · Donuts.** `MEDIUM / 1 day. NEEDS COUNT CHECK.` Portfolio Summary was measured with 5
+Plotly donuts, ~330 px each. → A ranked horizontal-bar list carries the same "X% in Y" in a third
+of the height, sorts correctly, and skips Plotly's bundle. Under 768 px show bars; above it the
+donut is fine. `show_chart`/`mobile_chart` in `ui_components.py` is where a `ranked_bars()` helper
+would live. Grep `4_Portfolio_Summary.py` for `go.Pie` / `px.pie` and confirm the count.
 
 ### Per-screen actions
 
-**P3-5 · Command Center → the "am I fine?" screen.** `1 day.` 3.62 → ~2.1 screens.
-Hero once, at the top. Two-cell grid where every cell carries a number (Cash + T-bills; Premium/yr
-vs carry). **A stale-data banner as first-class content** — "4 holdings unpriced, ADX feed stale" —
-rather than a silent fallback; Phase 1's `latency` field now makes this possible. Movers show the
-**money**, not just the percent: `−1.51%` means nothing, `−$4,120` is a decision. New "Needs a
-decision" block surfacing GROW ladder breaches and HARVEST earnings blackouts. Mockup in the
-artifact.
+**P3-5 · Command Center → the "am I fine?" screen.** `1 day.` Hero once, at the top. Two-cell grid
+where every cell carries a number. **Stale-data as first-class content** — "4 holdings unpriced,
+ADX feed stale" on the face of the page, not a silent fallback; Phase 1's `Quote.latency` /
+provenance classes (`live`/`delayed`/`eod`/`broker_mark`/`stale_cache`, see §6) make this
+computable now. Movers show the **money** as well as the percent (`−$4,120`, not just `−1.51%`) —
+the enriched frame already has `day_gain`. Optional "Needs a decision" block: GROW ladder breaches
+(from `prosper_analysis` rows) + HARVEST earnings blackouts.
 
-**P3-6 · Portfolio Dashboard → the "what changed?" screen.** `1 day.` 3.49 → ~2.3 screens, 12
-tables → 1. Hero once. The country tab strip becomes a **ranked bar list** that shows the
-allocation instead of hiding it behind eleven tabs. A segmented control re-sorts the same rows
-(Value / Today / Total P&L / Weight) rather than rebuilding them. **Rows carry quantity and average
-cost** — the two fields the current rows omit and which were specifically asked for. Mockup in the
-artifact. Shares its implementation with **P2-4**.
+**P3-6 · Portfolio Dashboard — finish what P2-4 started.** `half a day now.` The 12-tables-to-1
+part is **done** (`segmented_control`, key `dash_region`). Remaining: (a) P3-3's hero de-dup above;
+(b) **rows carry quantity and average cost** — `_build_stock_table` / `_build_fund_table` in
+`2_Portfolio_Dashboard.py` omit both, and they were specifically asked for; (c) optionally, a
+ranked allocation bar list above the picker so the currency split is visible without changing the
+selection.
 
-**P3-7 · Split Risk & Strategy.** `1 day.` At 11.93 screens with 8 tabs and 3 charts it is four
-pages wearing one hat: a regime call, a portfolio health score, position-sizing guidance, and
-allocation drift. On a phone nobody reaches the fourth. The regime chip and the health score belong
-on the **Command Center** — they are "am I fine?" answers. Sizing and drift belong behind
-**Decide**, reached when you are actually about to trade. Its "Growing" explainer card also
-duplicates the Command Center's expander verbatim.
+**P3-7 · Risk & Strategy is still too long.** `1 day. RE-MEASURE FIRST.` The audit's "11.93 screens,
+8 tabs" is wrong on the tab count — it is 4 (`tab_health`, `tab_sizing`, `tab_alloc`,
+`tab_advanced`) plus a nested `st.tabs` inside the allocation tab. The *direction* may still hold:
+the regime chip + portfolio-health score are "am I fine?" answers that belong on the Command
+Center; position-sizing and allocation-drift are "about to trade" tools. But measure the real
+screen count post-Phase-2 before committing to a split — it may just need `stat_grid` fixes (P3-2)
+and the nested tabs flattened. Its "Growing" explainer card reportedly duplicates the Command
+Center expander verbatim — worth a `grep`.
 
-**P3-8 · Equity Deep Dive opens on an error.** `1 hour.` Confirmed live: defaults to `000660.KS` —
-SK Hynix, which sorts first alphabetically and is *not* in the book — and greets you with "Could not
-fetch data for 000660.KS." Above it sit four lines of prose costing ~90 px before the first control.
-→ **Fix:** default to the largest holding by market value; cut the description to one line or none.
+**P3-8 · Equity Deep Dive default ticker.** `1 hour. VERIFIED (mechanism).` `18_Equity_Deep_Dive.py`
+line ~36: `portfolio_tickers = sorted(holdings["ticker"].unique())`, and the picker defaults to
+`[0]` — the **alphabetically first** holding, which for this book is a numeric-prefix Asian ticker
+(`000660.KS` / `4519.T` / `543895.BO`). If that line can't be priced the page opens on a fetch
+error. → **Default to the largest holding by market value** (join `holdings` to the enriched frame
+in session, or fall back to the first with a `last_known_price`). Also trim the ~4 lines of prose
+above the first control to one line.
 
-**P3-9 · Confirm the "Connecting…" watchdog.** `unknown.` The v7.20 watchdog is verified installed
-but its efficacy is unconfirmed — it needs a real phone left backgrounded. If the symptom persists,
-**do P2-10 first** (`pages/` auto-discovery bypassing `app.py`) before suspecting the WebSocket.
+**P3-9 · "Connecting…" watchdog.** `unknown.` `connection_watchdog()` (`ui_components.py`, called
+`app.py` ~343, before `pg.run()`) is installed. Efficacy still unconfirmed — needs a real phone
+left backgrounded, then foregrounded, on a spun-down free-tier instance. P2-10 (the old "do this
+first" suspect) was dropped as a non-issue, so if the hang persists the WebSocket / free-tier
+cold-start is the remaining suspect; `$7/mo` paid tier removes the spin-down entirely.
 
-### The eight rules behind the redesign
+### New for Phase 3 — carried from Phase 2
 
-| Rule | Why | Applies to |
-|---|---|---|
-| One hero per page, near the top | The number the page exists for, once, above 200 px | every page |
-| Never render an em-dash cell above the fold | Collapse the grid; a 2-cell grid beats a 3-cell grid with a hole | Command Center, Dashboard |
-| Percentages get their money | −1.51% means nothing; −$4,120 is a decision | movers, positions, P&L |
-| Ranked bars, not donuts, under 768 px | Same information, one third of the height, no Plotly | Summary, Dashboard, Risk |
-| Tabs re-sort; they never rebuild | Streamlit tabs are eager — every hidden tab is still built and shipped | Dashboard, Risk, Deep Dive |
-| A page over 4 screens is two pages | Risk & Strategy at 11.93 is a scope problem, not a layout problem | Risk & Strategy |
-| Stale data is content, not an exception | Say "4 unpriced, ADX stale" on the face of the page | every priced surface |
-| No floating button over the nav bar | Measured overlap, and it duplicates a tab | `app.py` |
+**P3-10 · Durable `history_cache` table.** `medium.` P2-2 removed the Performance page's
+180-ticker `get_history` fan-out, but `get_history` is still session-cache-only and still called
+per-ticker by **Portfolio Summary** (risk section), **Technical Analysis**, **Equity Deep Dive**
+and **`core/portfolio_optimizer.py`**. A `history_cache` table keyed `(ticker, period, date)` with
+the read-through wrapper on `get_history` (try new columns / `except` / fall back to a re-fetch —
+the additive-migration rule, §4 #12) makes all of those survive a cold start. Untestable without
+Turso creds, so ship it with the user watching and a page that exercises it open.
 
-### Suggested order
+**P3-11 · `st.metric` → design system.** `small, per page.` §5 claims `st.metric` is gone; it is
+not — 23 `.metric()` calls remain in `8_Sentiment.py`, `7_Analyst_Consensus.py`, `5_Performance.py`
+and `core/grow_render.py` (all as `colN.metric(...)`, which is why the §11 grep missed them).
+Convert each cluster to `stat_grid` / `hero_metric`, then the `[data-testid="stMetric*"]` block in
+`app.py` can finally go (P2-9, done right this time).
 
-`P3-1` (delete the FAB) → `P3-8` (Deep Dive default) → `P3-2` (collapse empty cells) →
-`P3-3` (de-duplicate the hero) → `P3-5` + `P3-6` (the two redesigns) → `P3-4` (bars for donuts) →
-`P3-7` (split Risk) → `P3-9` (confirm the watchdog). The first four are a day and are all
-subtraction.
+### The design rules (unchanged — these held up)
 
-**Do Phase 2 before Phase 3 where they touch the same file.** P2-4 and P3-6 are the same Dashboard
-change; P2-10 and P3-1 are the same `app.py` change. Doing them together is one edit, not two.
+| Rule | Why |
+|---|---|
+| One hero per page, near the top | The number the page exists for, once, above 200 px |
+| Never render an em-dash cell above the fold | Collapse the grid; 2 real cells beat 3 with a hole |
+| Percentages get their money | `−1.51%` means nothing; `−$4,120` is a decision |
+| Ranked bars, not donuts, under 768 px | Same information, a third of the height, no Plotly bundle |
+| Streamlit tabs are eager | Every hidden tab is built and shipped — use `segmented_control` to render one slice (P2-4 is the worked example) |
+| A page over ~4 screens is two pages | Layout tweaks won't save a scope problem |
+| Stale data is content, not an exception | Say "4 unpriced, ADX stale" on the face of the page — §6 provenance makes it computable |
+| No floating button over the nav bar | It overlaps, and it duplicates a tab |
+
+### Suggested order for the next session
+
+`STEP 0` (re-measure in the harness) → `P3-1` (delete the FAB) → `P3-8` (Deep Dive default) →
+`P3-2` (`stat_grid` drops empty cells) → `P3-3` (Dashboard hero de-dup) → `P3-11` (st.metric
+cleanup, then finish P2-9) → `P3-6` (qty/avg-cost rows) → `P3-4` (bars for donuts) → `P3-7`
+(decide, from real numbers, whether Risk needs splitting) → `P3-10` (`history_cache`) →
+`P3-9` (watchdog, needs a phone). The first five are subtraction and low-risk; do them as one or
+two pushes and verify each on a phone before the next.
