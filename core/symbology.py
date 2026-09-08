@@ -46,6 +46,7 @@ KOREA = "korea"
 CANADA = "canada"
 EUROPE = "europe"           # Xetra, Euronext, Milan, Madrid, Nordics, Vienna…
 FUND_OFFSHORE = "fund_offshore"   # FUNDSERV / ALLFUNDS / SICAV lines with no venue
+CRYPTO = "crypto"           # Coinbase-held coins — bare symbols, no exchange suffix
 UNKNOWN = "unknown"
 
 # ── Yahoo-style suffix → market ──────────────────────────────────────────────
@@ -154,11 +155,22 @@ SYMBOL_ALIASES = {
     "ADNOCLS":   ["ADNOCLS"],
 }
 
+# Coinbase's transaction export gives bare asset symbols with no suffix, so
+# "BTC" is indistinguishable from an equity ticker on shape alone. The broker
+# tag is the reliable signal; this set is the backstop for rows imported without
+# one, and is deliberately limited to assets that are NOT also equity tickers.
+CRYPTO_SYMBOLS = {
+    "BTC", "ETH", "SOL", "ADA", "DOT", "AVAX", "MATIC", "LINK", "XLM", "XRP",
+    "DOGE", "LTC", "BCH", "ATOM", "ALGO", "FIL", "ICP", "NEAR", "APT", "ARB",
+    "OP", "SUI", "SHIB", "UNI", "AAVE", "MKR", "CRV", "SNX", "GRT", "SAND",
+    "MANA", "AXS", "USDC", "USDT", "DAI", "ETC", "XTZ", "EOS", "ZEC", "DASH",
+}
+
 # Markets whose home currency is not obvious from the ticker.
 MARKET_CURRENCY = {
     UAE: "AED", JAPAN: "JPY", SWISS: "CHF", SGX: "SGD",
     INDIA_EQ: "INR", INDIA_FUND: "INR", KOREA: "KRW", HK: "HKD",
-    CANADA: "CAD", US: "USD",
+    CANADA: "CAD", US: "USD", CRYPTO: "USD",
 }
 
 # London quotes many lines in pence. Anything priced in GBX must be divided by
@@ -217,17 +229,26 @@ def classify(
     listing_exchange: str = "",
     isin: str = "",
     asset_category: str = "",
+    broker_source: str = "",
 ) -> str:
     """Return the market code for a ticker.
 
     Trust order — broker statement, then suffix, then ISIN. The broker is the
     only source that actually knows; the others are inference.
     """
+    base, suffix = split_ticker(ticker)
+
+    # Crypto first: a Coinbase row is a coin whatever its symbol looks like, and
+    # sending "BTC" to an equity quote API wastes a call to learn nothing.
+    broker = (broker_source or "").strip().lower()
+    if "coinbase" in broker or "crypto" in broker or "crypto" in (asset_category or "").lower():
+        return CRYPTO
+    if not suffix and base in CRYPTO_SYMBOLS:
+        return CRYPTO
+
     exch = (listing_exchange or "").strip().upper()
     if exch in IBKR_EXCH_MARKET:
         return IBKR_EXCH_MARKET[exch]
-
-    base, suffix = split_ticker(ticker)
 
     # Colon forms carry the venue directly.
     if suffix in ("DFM", "ADX"):
@@ -264,6 +285,7 @@ def build(
     currency: str = "",
     asset_category: str = "",
     name: str = "",
+    broker_source: str = "",
 ) -> Instrument:
     """Assemble an Instrument from whatever identity fields are available."""
     base, suffix = split_ticker(ticker)
@@ -272,6 +294,7 @@ def build(
         listing_exchange=listing_exchange,
         isin=isin,
         asset_category=asset_category,
+        broker_source=broker_source,
     )
     return Instrument(
         ticker=(ticker or "").strip().upper(),

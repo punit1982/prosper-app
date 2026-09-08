@@ -1353,7 +1353,8 @@ def get_instrument_meta(tickers: List[str] = None) -> Dict[str, dict]:
     pid = get_active_portfolio_id()
     try:
         conn = _get_connection()
-        sql = ("SELECT ticker, isin, conid, listing_exchange, currency, asset_category "
+        sql = ("SELECT ticker, isin, conid, listing_exchange, currency, "
+               "asset_category, broker_source "
                "FROM holdings WHERE user_id = ? AND portfolio_id = ?")
         params = [uid, pid]
         if tickers:
@@ -1372,6 +1373,9 @@ def get_instrument_meta(tickers: List[str] = None) -> Dict[str, dict]:
                 "listing_exchange": row["listing_exchange"] or "",
                 "currency":         row["currency"] or "",
                 "asset_category":   row["asset_category"] or "",
+                # Routes Coinbase rows to the crypto provider: a bare "BTC" is
+                # indistinguishable from an equity ticker on shape alone.
+                "broker_source":    row["broker_source"] or "",
             }
         except (KeyError, IndexError):
             continue

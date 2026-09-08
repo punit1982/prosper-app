@@ -202,32 +202,29 @@ def _try_finnhub(symbol: str) -> bool:
     return bool(fh and fh.get("c", 0) > 0)
 
 
-def _try_twelve_data_uae(base_ticker: str) -> Optional[str]:
-    """
-    Try to resolve a UAE ticker via Twelve Data (DFM / XADS exchanges).
-    base_ticker: symbol without .AE suffix (e.g. "EMAAR", "ADCB").
-    Returns the resolved Twelve Data symbol (e.g. "EMAAR:DFM") or None.
-    """
-    try:
-        from core.twelve_data_client import resolve_uae_symbol, is_configured
-        if not is_configured():
-            return None
-        return resolve_uae_symbol(base_ticker)
-    except Exception:
-        return None
+# _try_twelve_data_uae() was removed on 8 Sep 2026. It rewrote UAE tickers into
+# Twelve Data's "EMAAR:DFM" form — a symbol Twelve Data's own plan then refused
+# to quote (404 "available starting with the Pro or Venture plan") and that no
+# other source recognised. Worse, resolve_tickers_batch cached that rewrite in
+# Turso for 24 hours, so a single bad resolution poisoned every subsequent load.
+# UAE identity now comes from the broker's listing exchange via core/symbology.py
+# and UAE prices from the TradingView provider, neither of which needs a rewrite.
 
 
 def resolve_ticker(ticker: str, currency: str = "USD") -> str:
     """
     Resolve a ticker that may be missing its exchange suffix.
 
-    Multi-source cascade:
-    1. If ticker already has a suffix (.NS, .AE, etc.) → try yfinance, then Twelve Data (UAE), then Finnhub
+    1. If the ticker already has a suffix (.NS, .AE, …) → try yfinance, then Finnhub
     2. Try the bare ticker on Yahoo Finance
     3. Try common suffixes for the given currency on Yahoo Finance
-    4. For AED currency / .AE tickers → try Twelve Data (DFM / XADS)
-    5. Try bare ticker on Finnhub (if API key configured)
-    6. Cache the resolved ticker for 24 hours
+    4. Try the bare ticker on Finnhub (if a key is configured)
+    5. Cache the resolved ticker for 24 hours
+
+    NOTE: for anything imported from a broker statement this function should not
+    be reached at all — core/symbology.py derives identity from the ISIN and
+    listing exchange the statement already stated. This remains for manually
+    typed tickers and legacy rows.
 
     Returns the working ticker symbol, or the original if nothing works.
     """
@@ -280,13 +277,6 @@ def resolve_ticker(ticker: str, currency: str = "USD") -> str:
         if _try_yfinance(ticker):
             _cache_set(f"resolved_{ticker}", ticker)
             return ticker
-        # For .AE tickers, try Twelve Data before Finnhub
-        if is_uae:
-            td_sym = _try_twelve_data_uae(base_ticker)
-            if td_sym:
-                _cache_set(f"resolved_{ticker}", td_sym)
-                _cache_set(f"source_{ticker}", "twelvedata")
-                return td_sym
         if _try_finnhub(ticker):
             _cache_set(f"resolved_{ticker}", ticker)
             _cache_set(f"source_{ticker}", "finnhub")
@@ -309,14 +299,6 @@ def resolve_ticker(ticker: str, currency: str = "USD") -> str:
         if _try_yfinance(candidate):
             _cache_set(f"resolved_{ticker}", candidate)
             return candidate
-
-    # For AED currency, try Twelve Data (DFM / XADS)
-    if is_uae:
-        td_sym = _try_twelve_data_uae(base_ticker)
-        if td_sym:
-            _cache_set(f"resolved_{ticker}", td_sym)
-            _cache_set(f"source_{ticker}", "twelvedata")
-            return td_sym
 
     # Try bare ticker on Finnhub (secondary source)
     if _try_finnhub(ticker):

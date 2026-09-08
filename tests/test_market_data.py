@@ -241,28 +241,58 @@ def test_actionability():
     check("stale cache is not actionable", stale.is_actionable, False)
 
 
-def test_tradingview_is_off_unless_enabled():
-    """Shipping an undocumented endpoint enabled-by-default would make the
-    decision for the owner. It has to be switched on deliberately."""
+def test_tradingview_has_a_kill_switch():
+    """On by default since the production probe confirmed it answers from
+    Render (200 in 191ms, correct AED prices). PROSPER_DISABLE_TRADINGVIEW must
+    still turn it off cleanly — a source that starts lying needs an off switch
+    that does not require a code change."""
     original = md.TRADINGVIEW_ENABLED
     try:
         md.TRADINGVIEW_ENABLED = False
-        check("disabled returns nothing",
+        check("kill switch returns nothing",
               md.TradingViewProvider().fetch([sym.build("ALDAR.AE")]), {})
     finally:
         md.TRADINGVIEW_ENABLED = original
+    check("enabled by default", original, True)
 
 
 def test_every_market_has_a_tier_list():
     """A market with no tier list silently prices nothing."""
     for market in (sym.US, sym.UAE, sym.INDIA_EQ, sym.INDIA_FUND, sym.JAPAN,
                    sym.SWISS, sym.LSE, sym.SGX, sym.HK, sym.KOREA, sym.CANADA,
-                   sym.EUROPE, sym.FUND_OFFSHORE, sym.UNKNOWN):
+                   sym.EUROPE, sym.FUND_OFFSHORE, sym.CRYPTO, sym.UNKNOWN):
         check_true(f"tier list exists for {market}", md.TIERS.get(market))
-    # And every tier ends somewhere that always has an answer for a held position.
-    for market in (sym.UAE, sym.JAPAN, sym.SWISS, sym.US):
-        last = md.TIERS[market][-1]
-        check(f"{market} falls back to the broker mark", last.name, "ibkr-mark")
+    # Every equity tier ends somewhere that always has an answer for a held
+    # position. Crypto is the exception: the broker snapshot is IBKR's, and IBKR
+    # does not hold the coins.
+    for market in (sym.UAE, sym.JAPAN, sym.SWISS, sym.US, sym.LSE, sym.EUROPE):
+        check(f"{market} falls back to the broker mark",
+              md.TIERS[market][-1].name, "ibkr-mark")
+
+
+def test_dead_sources_are_gone_not_disabled():
+    """Mubasher returned HTTP 403 from Render's network in the production probe
+    — Cloudflare blocking datacenter IPs. Leaving it in a tier list costs one
+    guaranteed-failing call per UAE holding on every refresh."""
+    names = {p.name for tier in md.TIERS.values() for p in tier}
+    check("mubasher not in any tier", "mubasher" in names, False)
+    check("twelve data not in any tier", any("twelve" in n for n in names), False)
+    # UAE is now exactly two hops: the one source that works, then the mark.
+    check("uae tier is lean", [p.name for p in md.TIERS[sym.UAE]],
+          ["tradingview", "ibkr-mark"])
+
+
+def test_crypto_routing():
+    """A Coinbase row is a coin whatever its symbol looks like. Sending "BTC" to
+    an equity provider wastes a call to learn nothing."""
+    check("coinbase broker tag wins",
+          sym.classify("BTC", broker_source="Coinbase"), sym.CRYPTO)
+    check("known coin without a broker tag",
+          sym.classify("ETH"), sym.CRYPTO)
+    # And an equity must not be dragged into crypto by accident.
+    check("ADBE stays US equity", sym.classify("ADBE"), sym.US)
+    check("crypto tier is the crypto provider",
+          [p.name for p in md.TIERS[sym.CRYPTO]], ["coinbase"])
 
 
 def test_empty_input():

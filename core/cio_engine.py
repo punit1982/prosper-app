@@ -112,50 +112,6 @@ def no_live_source_reason(ticker) -> Optional[str]:
 # LIVE QUOTES  (parallel)
 # ─────────────────────────────────────────
 
-def _is_twelve_data_symbol(sym: str) -> bool:
-    """Check if a symbol is in Twelve Data exchange format (e.g. 'EMAAR:DFM').
-
-    Must accept every exchange code twelve_data_client.resolve_uae_symbol() can
-    produce (DFM, ADX, XADS) — previously ':ADX' symbols were never routed to
-    Twelve Data and always ended up as "No live price".
-    """
-    if ":" not in sym:
-        return False
-    try:
-        from core.twelve_data_client import UAE_EXCHANGES
-    except Exception:
-        UAE_EXCHANGES = ["DFM", "ADX", "XADS"]
-    return any(sym.endswith(f":{ex}") for ex in UAE_EXCHANGES)
-
-
-def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
-    """
-    Return True if the price looks valid.  Suppresses:
-      - None / NaN / infinite prices (data error)
-      - Negative prices (data error)
-      - ETF/fund prices > 10 000 (likely wrong ticker or currency mismatch)
-    """
-    if price is None:
-        return False
-    try:
-        price = float(price)
-    except (TypeError, ValueError):
-        return False
-    if math.isnan(price) or math.isinf(price) or price < 0:
-        return False
-    # ETF / fund prices should not exceed 10 000 — flag as suspicious
-    # (most ETFs/funds trade well below 1 000; > 10 000 usually means wrong ticker)
-    if price > 10_000:
-        # Only flag for known ETF-like tickers (suffix-based heuristic)
-        etf_hints = (".L", ".SW", ".PA", ".DE", ".AS")
-        if any(sym.upper().endswith(h) for h in etf_hints):
-            import logging
-            logging.getLogger(__name__).warning(
-                "Price sanity: %s has price %.2f from %s — possibly incorrect ETF/fund price",
-                sym, price, source,
-            )
-            return False
-    return True
 
 
 # ── UAE circuit breaker ───────────────────────────────────────────────────────
@@ -179,322 +135,71 @@ def _price_sanity_check(sym: str, price: float, source: str = "") -> bool:
 # deliberate — a Render instance lives ~16 minutes, so a restart re-arms it soon
 # enough, and probing a blocked CDN on every request to find out costs exactly the
 # 5s-per-name this exists to avoid. reset_uae_circuit() re-arms it explicitly.
-_UAE_FAILURES = 0
-_UAE_BREAKER_THRESHOLD = 3
+# The UAE circuit breaker lived here. It existed only to stop re-trying
+# Mubasher after repeated Cloudflare 403s; with Mubasher removed from the price
+# path there is nothing to break the circuit on.
 
 
-def _uae_circuit_open() -> bool:
-    return _UAE_FAILURES >= _UAE_BREAKER_THRESHOLD
-
-
-def reset_uae_circuit():
-    """Re-arm the breaker explicitly (tests, and after a known network change)."""
-    global _UAE_FAILURES
-    _UAE_FAILURES = 0
-
-
-def _fetch_one_quote(sym: str) -> tuple:
-    """
-    Fetch price data for a single ticker.
-    Cascade: ADX/Mubasher (ADX stocks) → Twelve Data (UAE/DFM) → yfinance → Finnhub
-    """
-    import yfinance as yf
-
-    # Short-circuit: this network cannot reach the only UAE source, so the rest
-    # of the cascade is 5s of certain failure per name.
-    try:
-        from core.adx_client import is_uae_symbol as _is_uae
-        if _is_uae(sym) and _uae_circuit_open():
-            return sym, None
-    except Exception:
-        pass
-
-    # Source 0a: Mubasher intraday CSV — the ONLY working free source for UAE
-    # (ADX + DFM) prices. Gated on is_uae_symbol(), not is_adx_ticker(): the
-    # latter is an exact-key lookup in a 7-entry static chart-ID map, so
-    # ALDAR.AE / BURJEEL.AE / PUREHEALTH.AE and every ":DFM"/":ADX" colon form
-    # never reached Mubasher at all and fell through to sources with no UAE
-    # coverage. adx_client discovers chart IDs at runtime for anything not in
-    # the map, so the map is an optimisation, not the supported-ticker list.
-    # The counter must be incremented on BOTH failure shapes. The first version put it
-    # inside the try after the call, so a Cloudflare 403 — which RAISES rather than
-    # returning falsy — jumped straight to `except Exception: pass` and never counted.
-    # Verified in production 07-Sep-2026: the breaker never tripped and all seven UAE
-    # names still took 58 seconds. Counting now happens in a finally-style path.
-    global _UAE_FAILURES
-    _uae_attempted = False
-    try:
-        from core.adx_client import get_quote as adx_quote, is_uae_symbol
-        if is_uae_symbol(sym):
-            _uae_attempted = True
-            adx = adx_quote(sym)
-            if adx and adx.get("price", 0) > 0:
-                adx["symbol"] = sym
-                adx.setdefault("currency", "AED")
-                _UAE_FAILURES = 0            # this network CAN reach Mubasher
-                return sym, adx
-    except Exception:
-        pass
-    if _uae_attempted:
-        _UAE_FAILURES += 1
-        if _UAE_FAILURES == _UAE_BREAKER_THRESHOLD:
-            import logging as _lg
-            _lg.getLogger(__name__).warning(
-                "UAE price source unreachable %d times — skipping live UAE lookups for the rest "
-                "of this process and using broker marks instead. Expected on Render (Cloudflare "
-                "blocks datacenter IPs); a restart re-arms it.", _UAE_FAILURES)
-        # Everything after this point has no ADX/DFM coverage: Twelve Data excludes it on
-        # this plan, Yahoo 404s quoteSummary, Finnhub is US-only. Walking them costs ~5s
-        # per name to arrive at the same answer.
-        if _uae_circuit_open():
-            return sym, None
-
-    # Source 0b: Twelve Data — for UAE symbols resolved as TICKER:DFM / TICKER:ADX
-    if _is_twelve_data_symbol(sym):
-        try:
-            from core.twelve_data_client import get_quote as td_quote
-            td = td_quote(sym)
-            if td:
-                price = float(td.get("close", 0) or 0)
-                prev  = float(td.get("previous_close", price) or price)
-                change     = round(price - prev, 6)
-                change_pct = round(float(td.get("percent_change", 0) or 0), 4)
-                if price > 0:
-                    return sym, {
-                        "symbol":            sym,
-                        "price":             price,
-                        "change":            change,
-                        "changesPercentage": change_pct,
-                        "source":            "twelvedata",
-                    }
-        except Exception:
-            pass
-
-    # Source 1: yfinance
-    # Hard per-call timeout — same reasoning as core/data_engine.py
-    # _yf_fetch_info: a slow/blocked yfinance call can occupy its worker slot
-    # far longer than the batch's own outer timeout accounts for, since that
-    # outer timeout only bounds how long the CALLER waits for already-done
-    # futures, not how long a still-running call keeps its slot. fast_info
-    # currently appears to still work reliably, but .info (a different Yahoo
-    # endpoint) started silently failing slowly across the board — bounding
-    # this call too prevents that same failure mode from ever reintroducing a
-    # multi-minute page hang here.
-    try:
-        from core.parallel import run_with_timeout
-
-        def _fetch_fast_info():
-            tk = yf.Ticker(sym)
-            fi = tk.fast_info
-            return fi.last_price, fi.previous_close, getattr(fi, "currency", None)
-
-        _fi_result = run_with_timeout(_fetch_fast_info, timeout=6, default=None)
-        price, prev_close, yf_ccy = _fi_result if _fi_result else (None, None, None)
-        if price is not None and _price_sanity_check(sym, price, "yfinance"):
-            prev  = prev_close
-            change     = round(price - prev, 6) if prev else None
-            change_pct = round((change / prev) * 100, 4) if (prev and change is not None) else None
-            # Include trading currency so enrichment can override suffix-based guess
-            yf_currency = yf_ccy or ""
-            result = {
-                "symbol":            sym,
-                "price":             price,
-                "change":            change,
-                "changesPercentage": change_pct,
-                "source":            "yfinance",
-            }
-            if yf_currency:
-                result["currency"] = yf_currency.upper()
-            return sym, result
-    except Exception:
-        pass
-
-    # Source 1b: Yahoo's public `chart` endpoint, called directly.
-    # The reliability audit (5 Sep 2026) confirmed live that `chart` still
-    # serves quotes with no auth and no crumb, while the `quoteSummary` and v7
-    # `quote` endpoints yfinance also relies on now return "Unauthorized /
-    # Invalid Crumb" on a raw call — yfinance only works because of an internal
-    # crumb workaround that has already broken once (v7.4). This is the same
-    # data from the same vendor without that fragility, and it covers the
-    # non-US exchanges Finnhub below does not (Borsa Italiana, BSE, SGX, SIX).
-    try:
-        import requests as _rq
-        r = _rq.get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
-            # range=1d: meta.chartPreviousClose is then the PREVIOUS SESSION's
-            # close, which is what a day change is measured against. Over a
-            # longer range it is instead the close before the window starts
-            # (5d gave Prysmian a "+0.16%" and an SME line a "-47%" day move).
-            params={"range": "1d", "interval": "1d"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=8,
-        )
-        if r.status_code == 200:
-            meta = ((r.json().get("chart") or {}).get("result") or [{}])[0].get("meta") or {}
-            price = meta.get("regularMarketPrice")
-            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-            if prev is not None and float(prev) <= 0:
-                prev = None
-            if price and _price_sanity_check(sym, price, "yahoo-chart"):
-                price = float(price)
-                change = round(price - float(prev), 6) if prev else None
-                result = {
-                    "symbol":            sym,
-                    "price":             price,
-                    "change":            change,
-                    "changesPercentage": round((change / float(prev)) * 100, 4) if (prev and change is not None) else None,
-                    "source":            "yahoo-chart",
-                }
-                if meta.get("currency"):
-                    result["currency"] = str(meta["currency"]).upper()
-                return sym, result
-    except Exception:
-        pass
-
-    # Source 2: Finnhub (fallback for everything else)
-    try:
-        from core.finnhub_client import quote as fh_quote
-        fh = fh_quote(sym)
-        if fh and fh.get("c", 0) > 0 and _price_sanity_check(sym, fh["c"], "finnhub"):
-            price = fh["c"]
-            prev  = fh.get("pc", price)
-            change     = round(price - prev, 6)
-            change_pct = round((change / prev) * 100, 4) if prev else None
-            return sym, {
-                "symbol":            sym,
-                "price":             price,
-                "change":            change,
-                "changesPercentage": change_pct,
-                "source":            "finnhub",
-            }
-    except Exception:
-        pass
-
-    # Source 3: Twelve Data general fallback — for anything NOT already routed
-    # to it above (i.e. not UAE). Twelve Data's symbol format is
-    # "TICKER:EXCHANGE"; only include suffixes verified against the live API.
-    # NOTE (2026-09-05): NSE/BSE (India) and OTC mutual-fund symbols currently
-    # return "available starting with the Grow or Venture plan" on the
-    # TWELVE_DATA_API_KEY free tier configured for this app — this fallback
-    # will keep failing for Indian tickers/funds until that plan is upgraded,
-    # but costs nothing extra when it does (it's a last resort, after
-    # yfinance+Finnhub both already failed) and starts working immediately
-    # the day the plan changes, with no further code changes.
-    if not _is_twelve_data_symbol(sym):
-        try:
-            from core.twelve_data_client import get_quote as td_quote, is_configured as td_configured
-            if td_configured():
-                base, _, suffix = sym.partition(".")
-                td_symbol = {
-                    "NS": f"{base}:NSE", "BO": f"{base}:BSE", "L": f"{base}:LSE",
-                }.get(suffix.upper(), sym if "." not in sym else None)
-                if td_symbol:
-                    td = td_quote(td_symbol)
-                    if td:
-                        price = float(td.get("close", 0) or 0)
-                        prev  = float(td.get("previous_close", price) or price)
-                        if price > 0 and _price_sanity_check(sym, price, "twelvedata"):
-                            return sym, {
-                                "symbol":            sym,
-                                "price":             price,
-                                "change":            round(price - prev, 6),
-                                "changesPercentage": round(((price - prev) / prev) * 100, 4) if prev else None,
-                                "source":            "twelvedata",
-                            }
-        except Exception:
-            pass
-
-    # UAE last resort: Mubasher is Cloudflare-gated from datacenter IPs, so on
-    # Render the live scrape above often 403s even though it works from a
-    # residential IP and from the GitHub Actions pre-warm job. Before giving
-    # up, serve the most recent cached price (written by that job, or by an
-    # earlier request that got through) rather than showing the holding as
-    # unpriced. Do NOT _mark_failed here — a stale AED price is fine and we
-    # want to keep trying live.
-    try:
-        from core.adx_client import is_uae_symbol
-        if is_uae_symbol(sym):
-            from core.database import get_price_cache
-            cp = get_price_cache([sym]).get(sym)
-            if cp and cp.get("price"):
-                return sym, {
-                    "symbol": sym,
-                    "price": float(cp["price"]),
-                    "change": cp.get("change"),
-                    "changesPercentage": cp.get("changesPercentage"),
-                    "source": f"{cp.get('source') or 'cache'} (cached)",
-                    "currency": "AED",
-                }
-            return sym, None   # unpriced, but not cooled-down
-    except Exception:
-        pass
-
-    # All sources failed — mark as failed so we skip for 30 min
-    _mark_failed(sym)
-    return sym, None
+# _fetch_one_quote() was here until 8 Sep 2026 — ~240 lines walking up to six
+# sources per ticker, 186 times a refresh. core/market_data.py replaced it with
+# per-market tier lists of batch-shaped providers, and everything the cascade
+# could reach is now a provider there (including yfinance fast_info, which was
+# the last thing only it contributed).
+#
+# Three of its six sources were known-dead and were being called anyway:
+#   * Mubasher      HTTP 403 from Render — Cloudflare blocks datacenter IPs
+#   * Twelve Data   404 "available starting with the Pro or Venture plan" for
+#                   UAE, India and OTC funds on this subscription
+#   * Twelve Data's UAE symbol rewrite, which turned EMAAR into "EMAAR:DFM" —
+#                   a form no source could quote — and then cached it for 24h
+#
+# Deleting it removes the second, divergent price path rather than leaving two
+# implementations to drift apart.
 
 
 def fetch_batch_quotes(tickers: List[str]) -> tuple:
-    """
-    Fetch live price and day change for all tickers in parallel.
-    Cap at 12 workers to avoid memory spikes and API rate-limit bans.
+    """Price every ticker via core.market_data.
 
     Returns: (results, explicit_failures)
-      results:           { ticker: {price, change, changesPercentage, source} }  — successful fetches
-      explicit_failures: set of tickers that were processed AND returned no price (all sources tried)
+      results:           { ticker: {price, change, changesPercentage, source,
+                                    currency, latency, asof} }
+      explicit_failures: tickers every tier declined to price
 
-    Tickers that didn't complete before the 60s timeout are NOT in explicit_failures —
-    they are silently skipped so the caller can retry them later without the 30-min cooldown.
+    Unlike the cascade this replaced, a "failure" here is a real answer: the
+    pipeline walked each market's whole tier list, ending at the broker's own
+    mark, and nothing had a number. Those are genuinely unpriceable instruments
+    (a suspended listing, an offshore fund with no public NAV), so marking them
+    failed and backing off is correct rather than pessimistic.
     """
     if not tickers:
         return {}, set()
 
-    results: Dict[str, dict] = {}
-    explicit_failures: set = set()
+    from core.database import get_instrument_meta
+    from core.market_data import fetch_for_tickers
 
-    # ── Fast path: the batched, market-routed pipeline ──────────────────────
-    # core.market_data groups tickers by market and asks each market's best
-    # provider for all of them at once, so a whole exchange is normally one
-    # HTTP call instead of one cascade per ticker. Whatever it cannot price
-    # falls through to the per-ticker cascade below, unchanged — so this is
-    # strictly additive and a failure here costs nothing but the attempt.
     try:
-        from core.market_data import fetch_for_tickers
-        from core.database import get_instrument_meta
         meta = get_instrument_meta(list(tickers))
+    except Exception:
+        meta = {}
+
+    try:
         quotes, report = fetch_for_tickers(list(tickers), meta)
-        for tkr, quote in quotes.items():
-            results[tkr] = quote.to_cache_row()
-        if report.priced:
-            logging.getLogger(__name__).info(
-                "pipeline priced %d/%d in %dms (%s); %d to cascade",
-                report.priced, report.requested, report.elapsed_ms,
-                report.by_source, len(report.unpriced),
-            )
-    except Exception as exc:  # noqa: BLE001 — never let the new path break the old one
-        logging.getLogger(__name__).warning("market_data pipeline unavailable: %r", exc)
+    except Exception as exc:  # noqa: BLE001
+        # There is no second price path any more, so a total pipeline failure
+        # must not also destroy the cached prices the caller already holds.
+        logging.getLogger(__name__).error("quote pipeline failed: %r", exc)
+        return {}, set()
 
-    tickers = [t for t in tickers if t not in results]
-    if not tickers:
-        return results, explicit_failures
+    results = {tkr: quote.to_cache_row() for tkr, quote in quotes.items()}
+    explicit_failures = set(report.unpriced)
 
-    # Scale timeout: 30s base + 2s per ticker beyond 20. This is now a REAL
-    # deadline — core.parallel.gather() abandons stragglers instead of waiting.
-    batch_timeout = max(30, 30 + (len(tickers) - 20) * 2) if len(tickers) > 20 else 30
-
-    done, _errored = gather(
-        _fetch_one_quote,
-        [(sym, (sym,)) for sym in tickers],
-        max_workers=6,
-        timeout=batch_timeout,
-    )
-    for sym, (_, data) in done.items():
-        if data is not None:
-            results[sym] = data
-        else:
-            explicit_failures.add(sym)
-    # Timed-out / errored tickers are NOT marked failed — they retry next cycle.
-
+    if report.requested:
+        logging.getLogger(__name__).info(
+            "quotes: %d/%d priced in %dms — sources %s, latency %s%s",
+            report.priced, report.requested, report.elapsed_ms,
+            report.by_source, report.by_latency,
+            f", no source for {report.unpriced}" if report.unpriced else "",
+        )
     return results, explicit_failures
 
 

@@ -52,10 +52,12 @@ STALE_CACHE = "stale_cache"  # a previously good number, past its TTL
 _LATENCY_RANK = {LIVE: 0, DELAYED: 1, EOD: 2, BROKER_MARK: 3, STALE_CACHE: 4}
 
 # TradingView's screener is undocumented and its terms do not license
-# redistribution. It is the only free source that prices ADX/DFM at all, so it
-# ships — but OFF unless explicitly enabled, so turning it on stays a decision
-# somebody makes rather than one that happens to them.
-TRADINGVIEW_ENABLED = os.getenv("PROSPER_ENABLE_TRADINGVIEW", "").strip().lower() in ("1", "true", "yes", "on")
+# redistribution. It is also the only free source that prices ADX/DFM at all,
+# and the production probe on 8 Sep 2026 confirmed it answers from Render's
+# network in 191ms with correct AED prices. On the owner's instruction it is now
+# ON by default and needs no configuration; PROSPER_DISABLE_TRADINGVIEW is the
+# kill switch if it ever starts returning nonsense or blocking us.
+TRADINGVIEW_ENABLED = os.getenv("PROSPER_DISABLE_TRADINGVIEW", "").strip().lower() not in ("1", "true", "yes", "on")
 
 _HTTP_TIMEOUT = 8
 
@@ -335,6 +337,124 @@ class YahooChartProvider:
         return _parallel_fetch(insts, one, workers=4, timeout=30)
 
 
+class YFinanceProvider:
+    """yfinance `fast_info` — a different Yahoo endpoint from `chart`.
+
+    Worth keeping as a separate provider rather than folding into
+    YahooChartProvider: they hit different hosts and fail independently, and
+    `fast_info` has survived several breakages of the `.info`/`quoteSummary`
+    path. This is the only thing the retired per-ticker cascade still
+    contributed, so it moves here rather than being lost.
+
+    Note it segfaults for every ticker in the LOCAL Python 3.14 venv — a
+    pre-existing environment problem, unrelated to this code, and harmless
+    because the provider simply returns nothing there. Production is 3.12.
+    """
+
+    name = "yfinance"
+    latency = DELAYED
+    markets = set(sym.TRADINGVIEW_SCAN_GROUP) | {sym.UNKNOWN}
+
+    def fetch(self, insts: List[Instrument]) -> Dict[str, Quote]:
+        try:
+            import yfinance as yf
+        except Exception:
+            return {}
+
+        # yfinance prints its own "No data found, symbol may be delisted" lines
+        # for every miss. Here a miss is normal — the ticker falls to the next
+        # tier — so those lines are pure noise in the production log, and noise
+        # is how real errors get missed. Silence its logger, not ours: the
+        # pipeline's own FetchReport already says what could not be priced.
+        try:
+            logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+        except Exception:
+            pass
+
+        def one(inst):
+            try:
+                fi = yf.Ticker(inst.ticker).fast_info
+                price, prev = fi.last_price, fi.previous_close
+                ccy = (getattr(fi, "currency", None) or inst.currency or "USD").upper()
+            except Exception:
+                return None
+            if not price or float(price) <= 0:
+                return None
+            price = float(price)
+            prev = float(prev) if prev and float(prev) > 0 else None
+            note = None
+            if ccy == "GBP" and inst.quotes_in_pence and price > 1000:
+                price, note = price / 100.0, "converted from GBX"
+            return Quote(
+                symbol=inst.ticker, price=price, currency=ccy,
+                source=self.name, latency=DELAYED, asof=time.time(),
+                change=round(price - prev, 6) if prev else None,
+                change_pct=round((price - prev) / prev * 100, 4) if prev else None,
+                note=note,
+            )
+
+        return _parallel_fetch(insts, one, workers=6, timeout=30)
+
+
+class CryptoProvider:
+    """Coinbase spot, then CoinGecko. Both keyless, both verified.
+
+    The Coinbase transaction export gives bare asset symbols (BTC, ETH), which
+    every equity provider in this file will fail to price. Coinbase is asked
+    first because it is the venue the holdings actually came from, so its mark
+    reconciles with the statement; CoinGecko covers anything Coinbase has
+    delisted or never listed.
+    """
+
+    name = "coinbase"
+    latency = LIVE
+    markets = {sym.CRYPTO}
+
+    # CoinGecko wants slugs, not tickers, and only for the assets Coinbase misses.
+    _GECKO_IDS = {
+        "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "ADA": "cardano",
+        "DOT": "polkadot", "AVAX": "avalanche-2", "MATIC": "matic-network",
+        "LINK": "chainlink", "XLM": "stellar", "XRP": "ripple",
+        "DOGE": "dogecoin", "LTC": "litecoin", "BCH": "bitcoin-cash",
+        "ATOM": "cosmos", "ALGO": "algorand", "FIL": "filecoin",
+        "USDC": "usd-coin", "USDT": "tether", "DAI": "dai",
+    }
+
+    def fetch(self, insts: List[Instrument]) -> Dict[str, Quote]:
+        def one(inst):
+            asset = inst.base.upper()
+            # Stablecoins are 1:1 by construction; skip the round trip.
+            if asset in ("USDC", "USDT", "DAI", "USD"):
+                return Quote(symbol=inst.ticker, price=1.0, currency="USD",
+                             source="peg", latency=LIVE, asof=time.time(),
+                             note="stablecoin, pegged 1:1")
+            spot = _http_json(f"https://api.coinbase.com/v2/prices/{asset}-USD/spot")
+            amount = ((spot or {}).get("data") or {}).get("amount")
+            if amount:
+                try:
+                    price = float(amount)
+                except (TypeError, ValueError):
+                    price = 0.0
+                if price > 0:
+                    return Quote(symbol=inst.ticker, price=price, currency="USD",
+                                 source="coinbase", latency=LIVE, asof=time.time())
+            gecko_id = self._GECKO_IDS.get(asset)
+            if not gecko_id:
+                return None
+            payload = _http_json(
+                f"https://api.coingecko.com/api/v3/simple/price"
+                f"?ids={gecko_id}&vs_currencies=usd&include_24hr_change=true")
+            row = (payload or {}).get(gecko_id) or {}
+            price = row.get("usd")
+            if not price or float(price) <= 0:
+                return None
+            return Quote(symbol=inst.ticker, price=float(price), currency="USD",
+                         source="coingecko", latency=LIVE, asof=time.time(),
+                         change_pct=row.get("usd_24h_change"))
+
+        return _parallel_fetch(insts, one, workers=6, timeout=25)
+
+
 class JustEtfProvider:
     """LSE- and Irish-domiciled ETFs, by ISIN, keyless.
 
@@ -487,38 +607,14 @@ class BoerseFrankfurtProvider:
         return _parallel_fetch([i for i in insts if i.isin], one, workers=6, timeout=25)
 
 
-class MubasherProvider:
-    """UAE, via the existing scraper. Works from residential IPs and from the
-    GitHub Actions pre-warm job; Cloudflare 403s Render's datacenter IPs, so on
-    production this reliably contributes nothing. Kept because it costs one
-    call and is the only *official-ish* UAE path."""
-
-    name = "mubasher"
-    latency = DELAYED
-    markets = {sym.UAE}
-
-    def fetch(self, insts: List[Instrument]) -> Dict[str, Quote]:
-        out: Dict[str, Quote] = {}
-        try:
-            from core.adx_client import get_quote as adx_quote
-            from core.cio_engine import _uae_circuit_open
-        except Exception:
-            return {}
-        if _uae_circuit_open():
-            return {}
-        for inst in insts:
-            try:
-                q = adx_quote(inst.ticker)
-            except Exception:
-                continue
-            if not q or not q.get("price"):
-                continue
-            out[inst.ticker] = Quote(
-                symbol=inst.ticker, price=float(q["price"]), currency="AED",
-                source=self.name, latency=DELAYED, asof=time.time(),
-                change=q.get("change"), change_pct=q.get("changesPercentage"),
-            )
-        return out
+# MubasherProvider was here until 8 Sep 2026. Removed, not disabled: the
+# production probe returned HTTP 403 from Render's network, which is Cloudflare
+# blocking datacenter IPs exactly as the v7.15 investigation predicted. It works
+# from a laptop and from the GitHub Actions pre-warm runner, and every "verified
+# live" claim about it came from one of those. Keeping it in the Render tier list
+# cost one guaranteed-failing HTTP call per UAE holding on every refresh to learn
+# something already known. core/adx_client.py stays — scripts/prewarm.py still
+# calls it from a GitHub runner, where it does work.
 
 
 class IbkrMarkProvider:
@@ -577,32 +673,36 @@ class IbkrMarkProvider:
 _TV = TradingViewProvider()
 _FH = FinnhubProvider()
 _YC = YahooChartProvider()
+_YF = YFinanceProvider()
 _JE = JustEtfProvider()
 _AM = AmfiProvider()
 _BF = BoerseFrankfurtProvider()
-_MB = MubasherProvider()
+_CX = CryptoProvider()
 _IB = IbkrMarkProvider()
 
 TIERS: Dict[str, List] = {
-    # Finnhub is first for US because it is paid for, reliable and unthrottled.
-    # TradingView first because it is ONE call for all 84 US names; Finnhub is
-    # one call each. When TradingView is disabled Finnhub takes over unchanged.
-    sym.US:           [_TV, _FH, _YC, _IB],
-    # Mubasher first: it is the closest thing to an official UAE source, and it
-    # costs one call to find out whether this network can reach it.
-    sym.UAE:          [_MB, _TV, _IB],
-    sym.INDIA_EQ:     [_TV, _YC, _IB],
-    sym.INDIA_FUND:   [_AM, _IB],
-    sym.JAPAN:        [_TV, _YC, _BF, _IB],
-    sym.SWISS:        [_TV, _YC, _BF, _IB],
-    sym.LSE:          [_TV, _JE, _YC, _IB],
-    sym.SGX:          [_TV, _YC, _BF, _IB],
-    sym.HK:           [_TV, _YC, _BF, _IB],
-    sym.KOREA:        [_TV, _YC, _BF, _IB],
-    sym.CANADA:       [_TV, _YC, _IB],
-    sym.EUROPE:       [_TV, _YC, _BF, _IB],
-    sym.FUND_OFFSHORE:[_JE, _IB],
-    sym.UNKNOWN:      [_YC, _IB],
+    # TradingView leads everywhere it has coverage: one call per country beats
+    # one call per ticker, and it is the only source that prices ADX/DFM at all.
+    # Each list then falls through independent Yahoo endpoints and ends at the
+    # broker's own mark, so every held position resolves to *something*.
+    sym.US:            [_TV, _FH, _YC, _YF, _IB],
+    # UAE is two entries now. Mubasher was the third and is gone: HTTP 403 from
+    # Render, confirmed by the production probe.
+    sym.UAE:           [_TV, _IB],
+    sym.INDIA_EQ:      [_TV, _YC, _YF, _IB],
+    # AMFI is the official all-schemes NAV file; nothing else covers these.
+    sym.INDIA_FUND:    [_AM, _IB],
+    sym.JAPAN:         [_TV, _YC, _YF, _BF, _IB],
+    sym.SWISS:         [_TV, _YC, _YF, _BF, _IB],
+    sym.LSE:           [_TV, _JE, _YC, _YF, _IB],
+    sym.SGX:           [_TV, _YC, _YF, _BF, _IB],
+    sym.HK:            [_TV, _YC, _YF, _BF, _IB],
+    sym.KOREA:         [_TV, _YC, _YF, _BF, _IB],
+    sym.CANADA:        [_TV, _YC, _YF, _IB],
+    sym.EUROPE:        [_TV, _YC, _YF, _BF, _IB],
+    sym.FUND_OFFSHORE: [_JE, _IB],
+    sym.CRYPTO:        [_CX],
+    sym.UNKNOWN:       [_YC, _YF, _IB],
 }
 
 
@@ -688,6 +788,7 @@ def fetch_for_tickers(tickers: List[str], meta: Optional[Dict[str, dict]] = None
             conid=(meta.get(t) or {}).get("conid", ""),
             currency=(meta.get(t) or {}).get("currency", ""),
             asset_category=(meta.get(t) or {}).get("asset_category", ""),
+            broker_source=(meta.get(t) or {}).get("broker_source", ""),
         )
         for t in tickers
     ]

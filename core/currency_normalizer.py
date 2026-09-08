@@ -99,6 +99,30 @@ def _fetch_rate_open_er_api(base: str):
     except Exception:
         return None
 
+def _fetch_rate_frankfurter(base: str):
+    """European Central Bank reference rates, via Frankfurter. Free, keyless,
+    no quota, and authoritative for the majors — verified 200 from Render.
+
+    Deliberately tried BEFORE open.er-api: it is a central bank's own published
+    rate rather than an aggregator's. It covers only 30 currencies though, and
+    **AED is not one of them**, which is why the hard peg above stays
+    load-bearing rather than being replaced by this.
+    """
+    try:
+        import requests
+        from core.parallel import run_with_timeout
+
+        def _go():
+            r = requests.get(f"https://api.frankfurter.app/latest?from={base}", timeout=6)
+            if r.status_code != 200:
+                return None
+            return (r.json() or {}).get("rates") or None
+
+        return run_with_timeout(_go, timeout=8, default=None)
+    except Exception:
+        return None
+
+
 # Maps common incorrect/non-standard currency codes → correct ISO codes
 # Claude sometimes returns exchange names (DFM, NSE) instead of proper currencies
 CURRENCY_CORRECTIONS = {
@@ -229,7 +253,22 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
     except Exception:
         pass
 
-    # Layer 4: independent live source (open.er-api.com — free, no key, no Yahoo)
+    # Layer 4: ECB reference rates (Frankfurter — free, keyless, no quota).
+    # A central bank's own number, so it goes ahead of the aggregator below.
+    # 30 currencies only, and AED is not among them — hence Layer 0's peg.
+    try:
+        fr = _fetch_rate_frankfurter(from_currency)
+        if fr and to_currency in fr and float(fr[to_currency]) > 0:
+            return _remember_rate(cache_key, float(fr[to_currency]))
+        usd_fr = _fetch_rate_frankfurter("USD")
+        if usd_fr:
+            crossed = _rate_from_usd_table(usd_fr, from_currency, to_currency)
+            if crossed:
+                return _remember_rate(cache_key, float(crossed))
+    except Exception:
+        pass
+
+    # Layer 5: independent live source (open.er-api.com — free, no key, no Yahoo)
     try:
         rates = _fetch_rate_open_er_api(from_currency)
         if rates and to_currency in rates and float(rates[to_currency]) > 0:
@@ -243,7 +282,7 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
     except Exception:
         pass
 
-    # Layer 5: STALE cached rate of any age — a day-old rate beats 1.0 by miles
+    # Layer 6: STALE cached rate of any age — a day-old rate beats 1.0 by miles
     try:
         from core.database import get_fx_rate_cache
         stale = get_fx_rate_cache([cache_key], max_age=float("inf"))
@@ -254,7 +293,7 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
     except Exception:
         pass
 
-    # Layer 6: static hand-maintained approximate table
+    # Layer 7: static hand-maintained approximate table
     static = _rate_from_usd_table(_STATIC_USD_RATES, from_currency, to_currency)
     if static is not None:
         _fx_log.warning("FX %s: all live+cache sources failed, using static approx rate %.4f",
@@ -262,7 +301,7 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float:
         _fx_cache[cache_key] = static
         return static
 
-    # Layer 7: genuinely unknown currency and every source failed. 1.0 would
+    # Layer 8: genuinely unknown currency and every source failed. 1.0 would
     # misstate the holding; log loudly so it surfaces rather than hides.
     _fx_log.error("FX %s: NO rate available from any source — returning 1.0 (holding value will be wrong)", cache_key)
     _fx_cache[cache_key] = 1.0
