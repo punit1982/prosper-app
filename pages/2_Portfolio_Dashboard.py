@@ -5,7 +5,7 @@ Live prices, P&L, extended metrics with persistent preferences.
 
 v4 Enhancements:
 - Persistent sidebar preferences (saved to settings)
-- Currency tabs — one tab per portfolio currency
+- Region picker (segmented control) — one table for the chosen currency/country
 - Consensus rating + upside/downside potential next to price
 - Funds/ETF separation with fund-specific metrics
 - Auto-load extended metrics option
@@ -834,20 +834,32 @@ def portfolio_section():
     if len(currencies) <= 1:
         _render_currency_section(df, sym, currencies[0] if currencies else sym, "single")
     else:
-        tab_labels = ["All"]
-        for cur in currencies:
-            country = _CUR_COUNTRY.get(cur, cur)
-            tab_labels.append(country)
+        # One picker, one table — was st.tabs(), which is eager: every country
+        # tab's stock + fund dataframe was built and shipped on every render
+        # (12 tabs → 24 stDataFrames at 375px). segmented_control renders only
+        # the chosen slice.
+        _labels_by_cur = {cur: _CUR_COUNTRY.get(cur, cur) for cur in currencies}
+        # Guard against two currencies mapping to the same country label.
+        _seen = {}
+        for cur, lbl in _labels_by_cur.items():
+            if lbl in _seen.values():
+                lbl = f"{lbl} ({cur})"
+            _seen[cur] = lbl
+        _labels_by_cur = _seen
+        _cur_by_label = {lbl: cur for cur, lbl in _labels_by_cur.items()}
 
-        tabs = st.tabs(tab_labels)
-        # "All" tab
-        with tabs[0]:
+        seg_options = ["All"] + [_labels_by_cur[c] for c in currencies]
+        picked = st.segmented_control(
+            "Region", seg_options, default="All",
+            key="dash_region", label_visibility="collapsed",
+        ) or "All"
+
+        if picked == "All":
             _render_currency_section(df, sym, "All", "tab_all")
-        # Per-currency tabs
-        for i, cur in enumerate(currencies):
-            with tabs[i + 1]:
-                cur_df = df[df["currency"] == cur].copy()
-                _render_currency_section(cur_df, sym, cur, f"tab_{cur}")
+        else:
+            cur = _cur_by_label.get(picked, picked)
+            cur_df = df[df["currency"] == cur].copy()
+            _render_currency_section(cur_df, sym, cur, f"tab_{cur}")
 
     # ── Restricted / Illiquid Holdings ──────────────────────────────────────
     # Unvested RSUs/PSUs and 401(k)/DCP retirement balances — real net worth,
