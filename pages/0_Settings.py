@@ -233,6 +233,74 @@ PROSPER_AUTH_ENABLED = true
 st.divider()
 
 # ─────────────────────────────────────────
+# DATA SOURCE HEALTH
+# ─────────────────────────────────────────
+# The recurring lesson on this project: "verified live" from a laptop is not the
+# same as verified on Render. Mubasher works from a residential IP and 403s
+# datacenter IPs; Yahoo rate-limits both, intermittently. Reachability is a
+# property of the network, so it has to be checkable from the network the app
+# actually runs on — which, in production, means from this page.
+st.subheader("📡 Data Source Health")
+st.caption(
+    "Asks every price source whether it answers **from this server**. "
+    "A pass on your laptop says nothing about production — run it here."
+)
+
+_probe_col1, _probe_col2 = st.columns([1, 2])
+with _probe_col1:
+    _run_probe = st.button("Run source probe", use_container_width=True)
+with _probe_col2:
+    from core.market_data import TRADINGVIEW_ENABLED as _TV_ON
+    st.caption(
+        ("🟢 Batched pricing **on** — one call per market."
+         if _TV_ON else
+         "⚪ Batched pricing **off** — set `PROSPER_ENABLE_TRADINGVIEW=true` to enable it. "
+         "Prices still resolve without it, roughly 3× slower.")
+    )
+
+if _run_probe:
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location(
+        "probe_sources",
+        _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                      "scripts", "probe_sources.py"),
+    )
+    with st.spinner("Probing every source from this server…"):
+        try:
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _results = []
+            for _probe in _mod.PROBES:
+                try:
+                    _name, _ok, _status, _ms, _detail = _probe()
+                except Exception as _exc:            # noqa: BLE001
+                    _name, _ok, _status, _ms, _detail = _probe.__name__, False, "ERR", 0, repr(_exc)[:80]
+                _results.append({
+                    "Source": _name,
+                    "Result": "—" if _ok is None else ("PASS" if _ok else "FAIL"),
+                    "HTTP": str(_status),
+                    "Time": f"{_ms} ms",
+                    "Detail": (_detail or "")[:70],
+                })
+        except Exception as _exc:                    # noqa: BLE001
+            _results = None
+            from core.ui_errors import fetch_failed
+            fetch_failed("the source probe", _exc)
+
+    if _results:
+        from core.ui_components import render_responsive_table
+        import pandas as _pd
+        render_responsive_table(_pd.DataFrame(_results))
+        _dead = [r["Source"] for r in _results if r["Result"] == "FAIL"]
+        if _dead:
+            st.warning(f"Unreachable from this server: {', '.join(_dead)}")
+        else:
+            st.success("Every source answered from this server.")
+
+st.divider()
+
+# ─────────────────────────────────────────
 # DATA MANAGEMENT
 # ─────────────────────────────────────────
 st.subheader("🗄️ Data Management")

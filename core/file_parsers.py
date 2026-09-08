@@ -77,6 +77,20 @@ def is_ibkr_statement(text: str) -> bool:
             or "Financial Instrument Information,Header" in text)
 
 
+_ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
+
+
+def _as_isin(value: str) -> str:
+    """Return value if it is shaped like an ISIN, else "".
+
+    Two letters of country, nine alphanumerics, one check digit. Cheap to check
+    and it keeps CUSIPs and SEDOLs out of a field the pricing pipeline treats as
+    an ISIN.
+    """
+    v = (value or "").strip().upper()
+    return v if _ISIN_RE.match(v) else ""
+
+
 def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
     """Parse an IBKR Activity Statement CSV → (holdings, cash_rows, meta)."""
     rows = list(csv.reader(io.StringIO(text)))
@@ -103,8 +117,14 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
     broker = f"IBKR {label}".strip()
     meta["broker_source"] = broker
 
-    # Symbol → (description, listing exchange, asset category)
-    instruments: Dict[str, Tuple[str, str, str]] = {}
+    # Symbol → identity fields from the statement's own instrument table.
+    #
+    # This section is authoritative: IBKR states the ISIN, its own contract id
+    # and the listing exchange for every position. Prosper used to read only the
+    # description and exchange and then re-derive identity over the network —
+    # which is where PRYm/PRY.MI, 17041163.NS/543895.BO and the Morningstar
+    # fund ids that became fake ".NS" tickers all came from. Record it instead.
+    instruments: Dict[str, Dict[str, str]] = {}
     fii = sections.get("Financial Instrument Information", [])
     fii_header = next((r for r in fii if len(r) > 1 and r[1] == "Header"), None)
     if fii_header:
@@ -114,7 +134,16 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
                 def g(col):
                     i = idx.get(col)
                     return r[i].strip() if i is not None and i < len(r) else ""
-                instruments[g("Symbol")] = (g("Description"), g("Listing Exch"), g("Asset Category"))
+                instruments[g("Symbol")] = {
+                    "description": g("Description"),
+                    "listing_exchange": g("Listing Exch"),
+                    "asset_category": g("Asset Category"),
+                    # "Security ID" is an ISIN for every row seen so far, but the
+                    # column can also carry a CUSIP/SEDOL, so validate the shape
+                    # rather than trusting the header.
+                    "isin": _as_isin(g("Security ID")),
+                    "conid": g("Conid"),
+                }
 
     holdings: List[Dict] = []
     op = sections.get("Open Positions", [])
@@ -144,7 +173,9 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
             # yfinance/Twelve Data's free tier don't cover) — without it the
             # position's market value silently drops to zero.
             close_price = _num(g("Close Price"))
-            desc, exch, _ = instruments.get(symbol, ("", "", asset_cat))
+            ident = instruments.get(symbol, {})
+            desc = ident.get("description", "")
+            exch = ident.get("listing_exchange", "")
             holdings.append({
                 "ticker": ibkr_symbol_to_ticker(symbol, exch, currency, asset_cat),
                 "name": desc or symbol,
@@ -155,6 +186,9 @@ def parse_ibkr_statement(text: str) -> Tuple[List[Dict], List[Dict], Dict]:
                 "asset_category": asset_cat,
                 "last_known_price": close_price if close_price > 0 else None,
                 "ibkr_symbol": symbol,
+                "isin": ident.get("isin") or None,
+                "conid": ident.get("conid") or None,
+                "listing_exchange": exch or None,
             })
 
     cash_rows: List[Dict] = []

@@ -13,6 +13,7 @@ Why yfinance?
 - Returns prices, day change, P/E, Debt/Equity, and more
 """
 
+import logging
 import math
 import pandas as pd
 from typing import Dict, List, Optional
@@ -450,6 +451,32 @@ def fetch_batch_quotes(tickers: List[str]) -> tuple:
 
     results: Dict[str, dict] = {}
     explicit_failures: set = set()
+
+    # ── Fast path: the batched, market-routed pipeline ──────────────────────
+    # core.market_data groups tickers by market and asks each market's best
+    # provider for all of them at once, so a whole exchange is normally one
+    # HTTP call instead of one cascade per ticker. Whatever it cannot price
+    # falls through to the per-ticker cascade below, unchanged — so this is
+    # strictly additive and a failure here costs nothing but the attempt.
+    try:
+        from core.market_data import fetch_for_tickers
+        from core.database import get_instrument_meta
+        meta = get_instrument_meta(list(tickers))
+        quotes, report = fetch_for_tickers(list(tickers), meta)
+        for tkr, quote in quotes.items():
+            results[tkr] = quote.to_cache_row()
+        if report.priced:
+            logging.getLogger(__name__).info(
+                "pipeline priced %d/%d in %dms (%s); %d to cascade",
+                report.priced, report.requested, report.elapsed_ms,
+                report.by_source, len(report.unpriced),
+            )
+    except Exception as exc:  # noqa: BLE001 — never let the new path break the old one
+        logging.getLogger(__name__).warning("market_data pipeline unavailable: %r", exc)
+
+    tickers = [t for t in tickers if t not in results]
+    if not tickers:
+        return results, explicit_failures
 
     # Scale timeout: 30s base + 2s per ticker beyond 20. This is now a REAL
     # deadline — core.parallel.gather() abandons stragglers instead of waiting.

@@ -411,9 +411,29 @@ def init_db():
         # price source fails — funds like offshore SICAVs or India Morningstar-ID
         # mutual funds are never covered by yfinance/Twelve Data's free tier, so
         # without this their market value silently drops to zero.
-        for _col, _type in (("asset_category", "TEXT"), ("last_known_price", "REAL")):
+        # isin / conid / listing_exchange come straight out of the broker
+        # statement's Financial Instrument Information section. They are the
+        # identity fields the pricing pipeline routes on (core/symbology.py) —
+        # storing them is what turns ticker resolution from a network search
+        # into a lookup, and what lets ISIN-keyed providers (AMFI, justETF,
+        # Boerse Frankfurt) work at all.
+        for _col, _type in (
+            ("asset_category", "TEXT"), ("last_known_price", "REAL"),
+            ("isin", "TEXT"), ("conid", "TEXT"), ("listing_exchange", "TEXT"),
+        ):
             try:
                 conn2.execute(f"ALTER TABLE holdings ADD COLUMN {_col} {_type}")
+                conn2.commit()
+            except Exception:
+                pass  # Column already exists
+        # Provenance on every cached price: which source, how far behind the
+        # market, and in what currency. Without these a broker mark from
+        # yesterday and a live print are indistinguishable once cached.
+        for _col, _type in (
+            ("latency", "TEXT"), ("quote_currency", "TEXT"),
+        ):
+            try:
+                conn2.execute(f"ALTER TABLE price_cache ADD COLUMN {_col} {_type}")
                 conn2.commit()
             except Exception:
                 pass  # Column already exists
@@ -970,7 +990,15 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             if _asset_cat.lower() in ("", "nan", "none"):
                 _asset_cat = None
             _last_price = _num_or_none(row.get("last_known_price"))
-            rows.append((_ticker, _name, _qty, _cost, _ccy, _src, _asset_cat, _last_price))
+
+            def _ident(col):
+                v = str(row.get(col, "") or "").strip()
+                return None if v.lower() in ("", "nan", "none") else v
+
+            rows.append((
+                _ticker, _name, _qty, _cost, _ccy, _src, _asset_cat, _last_price,
+                _ident("isin"), _ident("conid"), _ident("listing_exchange"),
+            ))
 
         if not rows:
             conn.close()
@@ -1020,9 +1048,11 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             for t in rows:
                 stmts.append((
                     "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, "
-                    "asset_category, last_known_price, portfolio_id, user_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], pid, uid),
+                    "asset_category, last_known_price, isin, conid, listing_exchange, "
+                    "portfolio_id, user_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7],
+                     t[8], t[9], t[10], pid, uid),
                 ))
             conn.execute_in_transaction(stmts)
         else:
@@ -1044,9 +1074,11 @@ def save_holdings(df: pd.DataFrame, broker_source: str = None, portfolio_id: int
             )
             conn.executemany(
                 "INSERT INTO holdings (ticker, name, quantity, avg_cost, currency, broker_source, "
-                "asset_category, last_known_price, portfolio_id, user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], pid, uid) for t in rows],
+                "asset_category, last_known_price, isin, conid, listing_exchange, "
+                "portfolio_id, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7],
+                  t[8], t[9], t[10], pid, uid) for t in rows],
             )
             conn.commit()
 
@@ -1264,12 +1296,34 @@ def get_price_cache(tickers: List[str]) -> Dict[str, dict]:
     try:
         conn = _get_connection()
         placeholders = ",".join("?" * len(tickers))
-        rows = conn.execute(
-            f"SELECT ticker, price, change_val, change_pct, source, fetched_at "
-            f"FROM price_cache WHERE ticker IN ({placeholders})",
-            tickers,
-        ).fetchall()
+        # The provenance columns are additive (init_db migration). Selecting them
+        # on a database where the migration has not yet run raises, and this
+        # function returning {} makes EVERY ticker look stale — a full live
+        # re-fetch on every page load. So ask for them, and fall back to the
+        # legacy column set rather than losing the cache entirely.
+        try:
+            rows = conn.execute(
+                f"SELECT ticker, price, change_val, change_pct, source, fetched_at, "
+                f"latency, quote_currency "
+                f"FROM price_cache WHERE ticker IN ({placeholders})",
+                tickers,
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                f"SELECT ticker, price, change_val, change_pct, source, fetched_at "
+                f"FROM price_cache WHERE ticker IN ({placeholders})",
+                tickers,
+            ).fetchall()
         conn.close()
+
+        def _col(row, key):
+            # The provenance columns are added by an additive migration, so a
+            # database that has not been migrated yet simply lacks them.
+            try:
+                return row[key]
+            except (KeyError, IndexError):
+                return None
+
         return {
             row["ticker"]: {
                 "price":             row["price"],
@@ -1277,12 +1331,51 @@ def get_price_cache(tickers: List[str]) -> Dict[str, dict]:
                 "changesPercentage": row["change_pct"],
                 "source":            row["source"] or "cached",
                 "fetched_at":        row["fetched_at"] or 0,
+                "latency":           _col(row, "latency"),
+                "currency":          _col(row, "quote_currency"),
             }
             for row in rows
             if row["price"] is not None
         }
     except Exception:
         return {}
+
+
+def get_instrument_meta(tickers: List[str] = None) -> Dict[str, dict]:
+    """Identity fields per ticker, for core.market_data's routing.
+
+    Reads what the broker statement already told us — ISIN, IBKR contract id and
+    listing exchange — so the pricing pipeline can route on facts instead of
+    guessing from a suffix. Returns {} rather than raising on an unmigrated
+    database, in which case routing falls back to suffix inference.
+    """
+    uid = _current_user_id()
+    pid = get_active_portfolio_id()
+    try:
+        conn = _get_connection()
+        sql = ("SELECT ticker, isin, conid, listing_exchange, currency, asset_category "
+               "FROM holdings WHERE user_id = ? AND portfolio_id = ?")
+        params = [uid, pid]
+        if tickers:
+            sql += f" AND ticker IN ({','.join('?' * len(tickers))})"
+            params += list(tickers)
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+    except Exception:
+        return {}
+    out: Dict[str, dict] = {}
+    for row in rows:
+        try:
+            out[row["ticker"]] = {
+                "isin":             row["isin"] or "",
+                "conid":            row["conid"] or "",
+                "listing_exchange": row["listing_exchange"] or "",
+                "currency":         row["currency"] or "",
+                "asset_category":   row["asset_category"] or "",
+            }
+        except (KeyError, IndexError):
+            continue
+    return out
 
 
 def save_price_cache(quotes: Dict[str, dict]) -> None:
@@ -1305,6 +1398,13 @@ def save_price_cache(quotes: Dict[str, dict]) -> None:
             data.get("changesPercentage") if data else None,
             data.get("source", "failed") if data else "failed",
             now,
+            # Provenance travels with the price. "latency" says how far behind
+            # the market this number is (live / delayed / eod / broker_mark) —
+            # not how old the cache row is. Without it a broker mark from
+            # yesterday and a live print look identical once cached, which is
+            # exactly how unpriced UAE lines used to pass for real quotes.
+            (data.get("latency") if data else None),
+            (data.get("currency") if data else None),
         )
         for ticker, data in quotes.items()
     ]
@@ -1314,14 +1414,33 @@ def save_price_cache(quotes: Dict[str, dict]) -> None:
         conn = _get_connection()
         conn.executemany(
             """INSERT OR REPLACE INTO price_cache
-               (ticker, price, change_val, change_pct, source, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (ticker, price, change_val, change_pct, source, fetched_at,
+                latency, quote_currency)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
         conn.commit()
         conn.close()
     except Exception:
-        pass
+        # The provenance columns arrive via an additive migration in init_db().
+        # Any path that writes prices before that migration has run — a script,
+        # a direct page render, a deploy where the code is live a moment before
+        # the migration — would otherwise fail this INSERT silently and cache
+        # NOTHING, turning every page load into a full re-fetch. Fall back to
+        # the legacy six-column shape rather than lose the whole write.
+        try:
+            legacy = [r[:6] for r in rows]
+            conn = _get_connection()
+            conn.executemany(
+                """INSERT OR REPLACE INTO price_cache
+                   (ticker, price, change_val, change_pct, source, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                legacy,
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 def save_failed_tickers(tickers: List[str]) -> None:
@@ -1589,14 +1708,33 @@ def save_fx_rate_cache(rates: Dict[str, float]) -> None:
         conn = _get_connection()
         conn.executemany(
             """INSERT OR REPLACE INTO price_cache
-               (ticker, price, change_val, change_pct, source, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (ticker, price, change_val, change_pct, source, fetched_at,
+                latency, quote_currency)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
         conn.commit()
         conn.close()
     except Exception:
-        pass
+        # The provenance columns arrive via an additive migration in init_db().
+        # Any path that writes prices before that migration has run — a script,
+        # a direct page render, a deploy where the code is live a moment before
+        # the migration — would otherwise fail this INSERT silently and cache
+        # NOTHING, turning every page load into a full re-fetch. Fall back to
+        # the legacy six-column shape rather than lose the whole write.
+        try:
+            legacy = [r[:6] for r in rows]
+            conn = _get_connection()
+            conn.executemany(
+                """INSERT OR REPLACE INTO price_cache
+                   (ticker, price, change_val, change_pct, source, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                legacy,
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────
