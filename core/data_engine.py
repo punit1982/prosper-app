@@ -941,66 +941,6 @@ def _fetch_rss_feed(url: str, source_name: str, max_items: int = 15) -> List[Dic
         return []
 
 
-# RSS feeds from credible financial sources
-MARKET_RSS_FEEDS = [
-    ("https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", "CNBC"),
-    ("https://feeds.marketwatch.com/marketwatch/topstories/", "MarketWatch"),
-    ("https://www.fool.com/feeds/index.aspx?id=market-news", "Motley Fool"),
-    ("https://feeds.bloomberg.com/markets/news.rss", "Bloomberg"),
-    # feeds.reuters.com was shut down (DNS no longer resolves) — removed.
-    ("https://seekingalpha.com/market_currents.xml", "Seeking Alpha"),
-    ("https://news.google.com/rss/search?q=stock+market+today&hl=en-US&gl=US&ceid=US:en", "Google News"),
-    ("https://www.ft.com/rss/home", "Financial Times"),
-    ("https://feeds.feedburner.com/zerohedge/feed", "ZeroHedge"),
-    ("https://www.investing.com/rss/news.rss", "Investing.com"),
-]
-
-
-def get_market_news() -> List[Dict]:
-    """Fetch news for major market indices from yfinance + Finnhub + multiple RSS sources."""
-    market_tickers = ["^GSPC", "^NDX", "^DJI", "^NSEI", "^BSESN", "^FTSE"]
-    yf_news = get_portfolio_news(market_tickers, limit=30)
-
-    # Add Finnhub general news
-    try:
-        from core.finnhub_client import general_news as fh_general
-        fh_items = fh_general("general")
-        for item in (fh_items or [])[:20]:
-            yf_news.append({
-                "title": item.get("headline", ""),
-                "publisher": item.get("source", ""),
-                "link": item.get("url", ""),
-                "providerPublishTime": item.get("datetime", 0),
-                "related_ticker": "Market",
-            })
-    except Exception:
-        pass
-
-    # Fetch from multiple credible RSS sources in parallel (15s hard deadline)
-    try:
-        done, _ = gather(
-            _fetch_rss_feed,
-            [(url, (url, source, 10)) for url, source in MARKET_RSS_FEEDS],
-            max_workers=5,
-            timeout=15,
-        )
-        for rss_items in done.values():
-            yf_news.extend(rss_items or [])
-    except Exception:
-        pass
-
-    # Deduplicate by title
-    seen = set()
-    unique = []
-    for item in sorted(yf_news, key=lambda x: x.get("providerPublishTime", 0), reverse=True):
-        title = item.get("title", "")
-        if title and title not in seen:
-            seen.add(title)
-            unique.append(item)
-
-    return unique[:80]
-
-
 # ─────────────────────────────────────────
 # AI NEWS SUMMARY
 # ─────────────────────────────────────────

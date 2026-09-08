@@ -234,6 +234,10 @@ with col_movers:
         movers_df["day_change_pct"] = pd.to_numeric(movers_df["day_change_pct"], errors="coerce")
         movers_df["day_gain"] = pd.to_numeric(movers_df["day_gain"], errors="coerce")
         movers_df = movers_df.dropna(subset=["day_change_pct"])
+        # Drop exactly-zero rows: a missing day change is filled as 0, not null,
+        # so without this the top-3 / bottom-3 fill with "+0.0%" lines in ticker
+        # order and the widget looks like it has data when it has none.
+        movers_df = movers_df[movers_df["day_change_pct"] != 0]
 
         if not movers_df.empty:
             gainers = movers_df.nlargest(3, "day_change_pct")

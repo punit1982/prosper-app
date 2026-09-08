@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 
 from core.data_engine import get_ticker_news, summarize_news_with_ai, apply_global_filter
+from core.database import get_news_cache, save_news_cache
 from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
 NEWS_TTL = 900  # 15 minutes
@@ -61,13 +62,26 @@ with st.sidebar:
         cache_key = f"mkt_news_{focus}"
         st.session_state.pop(cache_key, None)
         st.session_state.pop(f"{cache_key}_ts", None)
+        st.session_state["_mkt_news_force"] = True   # also skip the SQLite layer this run
 
 tickers   = focus_map.get(focus, ["^GSPC"])
 cache_key = f"mkt_news_{focus}"
+_force    = st.session_state.pop("_mkt_news_force", False)
 
 # ── Load from session_state cache (15-min TTL) ────────────────────────────────
 cached_ts = st.session_state.get(f"{cache_key}_ts", 0)
 has_cache = cache_key in st.session_state and (time.time() - cached_ts) < NEWS_TTL
+
+# ── Durable SQLite layer (1-hour TTL) — survives cold starts and free-tier
+#    spin-downs, which is what made this page take ~12s on every first visit.
+sqlite_key = f"mktnews_{hashlib.md5(focus.encode()).hexdigest()[:12]}"
+if not has_cache and not _force:
+    _sq = get_news_cache(sqlite_key)   # None if missing or older than 1 hour
+    if _sq is not None:
+        st.session_state[cache_key]         = _sq[:max_articles]
+        st.session_state[f"{cache_key}_ts"] = time.time()
+        cached_ts = st.session_state[f"{cache_key}_ts"]
+        has_cache = True
 
 if not has_cache:
     with st.spinner(f"Loading {focus} news…"):
@@ -90,6 +104,8 @@ if not has_cache:
 
         st.session_state[cache_key]          = unique[:max_articles]
         st.session_state[f"{cache_key}_ts"]  = time.time()
+        if unique:
+            save_news_cache(sqlite_key, unique)   # full set — the slider re-slices on read
 
 news = st.session_state.get(cache_key, [])[:max_articles]
 

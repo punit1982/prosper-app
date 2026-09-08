@@ -48,7 +48,7 @@ _mobile_shell()
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-html, body, [class*="css"], .stMarkdown, .stMetricValue, .stMetricLabel,
+html, body, [class*="css"], .stMarkdown,
 .stDataFrame, .stTextInput input, .stSelectbox select, .stButton button,
 [data-testid="stSidebar"], [data-testid="stHeader"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
@@ -56,34 +56,6 @@ html, body, [class*="css"], .stMarkdown, .stMetricValue, .stMetricLabel,
 h1, h2, h3, h4, h5, h6 {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     letter-spacing: -0.5px;
-}
-[data-testid="stMetricValue"] {
-    font-weight: 600 !important;
-    font-size: clamp(1rem, 2.2vw, 1.8rem) !important;
-    overflow: visible !important;
-    text-overflow: unset !important;
-    white-space: nowrap !important;
-    word-break: keep-all !important;
-    min-width: 0;
-    line-height: 1.3 !important;
-}
-[data-testid="stMetricValue"] > div,
-[data-testid="stMetricLabel"],
-[data-testid="stMetricDelta"] {
-    overflow: visible !important;
-    text-overflow: unset !important;
-    white-space: nowrap !important;
-}
-[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
-[data-testid="stMetric"],
-[data-testid="metric-container"],
-[data-testid="stMetric"] > div,
-[data-testid="stMetric"] > div > div,
-[data-testid="stMetric"] label,
-[data-testid="stMetric"] label > div {
-    overflow: visible !important;
-    min-width: 0;
-    text-overflow: unset !important;
 }
 [data-testid="stColumn"],
 [data-testid="stColumn"] > div,
@@ -98,7 +70,6 @@ h1, h2, h3, h4, h5, h6 {
     h2 { font-size: 1.2rem !important; }
     h3 { font-size: 1.05rem !important; }
     [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 4px !important; }
-    [data-testid="stMetricValue"] { font-size: 1rem !important; }
     .js-plotly-plot { max-width: 100vw !important; overflow: hidden; }
     button[data-baseweb="tab"] { font-size: 0.8rem !important; padding: 4px 8px !important; }
 }

@@ -9,10 +9,10 @@ ticker and returns two verdicts:
                                computed from expected return vs required return,
                                with the four-level price ladder
 
-This module replaces core/prosper_analysis.py as the analysis engine. The
-PROSPER context builder is reused only to hand Claude a Tier-5 data snapshot
-(aggregator data = confirmation only, per GROW §6.2); retrieval of filings is
-done by Claude itself through server-side web search / web fetch tools.
+This module replaced the retired core/prosper_analysis.py (PROSPER v3.0) as the
+analysis engine. Claude is handed only a Tier-5 data snapshot (aggregator data =
+confirmation only, per GROW §6.2); retrieval of filings is done by Claude itself
+through server-side web search / web fetch tools.
 
 Tiers
   screen    provider data only, no web retrieval, margin-room screen (cheap)
@@ -454,7 +454,7 @@ def build_data_snapshot(ticker: str, info: dict = None, price_quote: dict = None
 
     # Finnhub analyst intelligence (reuse existing formatter)
     try:
-        from core.prosper_analysis import _fetch_finnhub_analyst
+        from core.finnhub_client import _fetch_finnhub_analyst
         fh = _fetch_finnhub_analyst(ticker)
         if fh:
             lines.append("Analyst actions (Finnhub, aggregator):\n" + fh)
