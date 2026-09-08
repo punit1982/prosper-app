@@ -13,10 +13,11 @@ Run it anywhere:
     venv/bin/python3 scripts/probe_sources.py           # human-readable
     venv/bin/python3 scripts/probe_sources.py --json    # for CI / logging
 
-On Render, run it from the service shell, or call
-core.market_data diagnostics from the Settings page. The one result that
-matters most is TradingView: the whole UAE fix depends on it answering from a
-datacenter IP, and that has never been tested.
+In production, use the "Data Source Health" panel on the Settings page, which
+runs these same probes server-side. TradingView is the result that matters most:
+it is the primary for every market and the only source that prices ADX/DFM.
+Confirmed answering from Render on 8 Sep 2026 (200, 191ms); Mubasher confirmed
+403 on the same run and was removed from the price path as a result.
 
 No API keys are required for the keyless probes; keyed ones are skipped with a
 clear note when the key is absent.
@@ -89,10 +90,18 @@ def probe_yahoo_chart():
 
 
 def probe_mubasher():
+    """Informational only — Mubasher is no longer in the price path.
+
+    Removed on 8 Sep 2026 after this probe returned 403 from Render. Still
+    checked because scripts/prewarm.py calls it from a GitHub Actions runner,
+    where it does work, and because a green here would mean Cloudflare had
+    stopped blocking us.
+    """
     status, ms, raw = _call("https://english.mubasher.info/markets/ADX/stocks")
     ok = status == 200
-    return ("mubasher (UAE)", ok, status, ms,
-            "reachable" if ok else "Cloudflare blocks datacenter IPs — expected on Render")
+    return ("mubasher (prewarm only)", ok, status, ms,
+            "reachable — datacenter block lifted?" if ok
+            else "403 as expected; not used for pricing")
 
 
 def probe_amfi():
@@ -167,10 +176,23 @@ def probe_cboe():
     return "cboe (US options)", status == 200, status, ms, f"{len(raw):,} bytes"
 
 
+def probe_crypto():
+    status, ms, raw = _call("https://api.coinbase.com/v2/prices/BTC-USD/spot")
+    ok = False
+    detail = raw[:90].decode("utf-8", "replace")
+    if status == 200:
+        try:
+            amt = (json.loads(raw).get("data") or {}).get("amount")
+            ok, detail = bool(amt), f"BTC = ${amt}"
+        except Exception:
+            pass
+    return "coinbase (crypto)", ok, status, ms, detail
+
+
 PROBES = [
     probe_tradingview, probe_yahoo_chart, probe_mubasher, probe_amfi,
     probe_justetf, probe_boerse_frankfurt, probe_finnhub, probe_edgar,
-    probe_fx, probe_cboe,
+    probe_fx, probe_cboe, probe_crypto,
 ]
 
 
@@ -210,12 +232,11 @@ def main() -> int:
         print("  every source reachable from this network")
 
     tv = next((r for r in results if r["source"].startswith("tradingview")), None)
-    if tv and tv["ok"]:
-        print("\n  TradingView answers from this network. If this ran on Render, the")
-        print("  UAE gap is closable — set PROSPER_ENABLE_TRADINGVIEW=true to turn it on.")
-    elif tv:
-        print("\n  TradingView did NOT answer here. Leave PROSPER_ENABLE_TRADINGVIEW unset;")
-        print("  UAE lines keep falling back to the committed IBKR marks.")
+    if tv and not tv["ok"]:
+        print("\n  TradingView did NOT answer from this network. It is the primary for")
+        print("  every market and the ONLY source that prices ADX/DFM, so expect UAE")
+        print("  lines to fall back to the committed IBKR marks until it recovers.")
+        print("  Kill switch, if it starts returning nonsense: PROSPER_DISABLE_TRADINGVIEW=true")
     return 0
 
 
