@@ -11,12 +11,12 @@ import streamlit as st
 from core.ui_components import show_chart
 import pandas as pd
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.database import get_all_holdings, get_nav_history
-from core.data_engine import get_history, get_benchmark_history, BENCHMARKS, calc_max_drawdown, calc_cagr
-from core.cio_engine import enrich_portfolio
-from core.settings import SETTINGS, save_user_settings, enriched_cache_key
+from core.data_engine import get_benchmark_history, BENCHMARKS, calc_cagr
+from core.settings import SETTINGS, save_user_settings
 
 from core.ui_components import page_header
 page_header('Performance', 'How the portfolio has actually done')
@@ -57,145 +57,125 @@ with st.sidebar:
         save_user_settings({"pref_perf_benchmarks": selected_benchmarks})
         SETTINGS["pref_perf_benchmarks"] = selected_benchmarks
 
-# ── Get enriched holdings (use cached if available) ──
-cache_key = enriched_cache_key(base_currency)
-if cache_key not in st.session_state:
-    with st.spinner("Fetching portfolio data…"):
-        st.session_state[cache_key] = enrich_portfolio(holdings, base_currency)
-
-from core.data_engine import apply_global_filter, calc_cagr, deduplicate_tickers
-enriched = apply_global_filter(st.session_state[cache_key]).copy()
-t_col = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-
-# OPTIMIZATION: only fetch history for tickers that have a live price
-has_price = pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)), errors="coerce").notna()
-# Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
-live_tickers = deduplicate_tickers(enriched.loc[has_price, t_col].dropna().tolist())
-
-if not live_tickers:
-    st.warning("No tickers with live price data. Cannot build performance chart.")
-    st.stop()
+# ── Period → start date ────────────────────────────────────────────────────
+_PERIOD_DAYS = {"5d": 7, "1mo": 31, "3mo": 93, "6mo": 186,
+                "1y": 366, "2y": 731, "3y": 1096, "5y": 1826}
+_today = datetime.now().date()
+if period == "ytd":
+    _period_start = pd.Timestamp(datetime(_today.year, 1, 1))
+else:
+    _period_start = pd.Timestamp(_today - timedelta(days=_PERIOD_DAYS.get(period, 366)))
 
 
 try:
-    # Calculate weights
-    if "market_value" in enriched.columns and enriched["market_value"].notna().any():
-        total = enriched.loc[has_price, "market_value"].sum()
-        weights = {}
-        # Build weights from deduplicated tickers, summing if duplicate rows exist
-        for t in live_tickers:
-            mv = enriched.loc[(has_price) & (enriched[t_col] == t), "market_value"].sum()
-            weights[t] = mv / total if total > 0 else 1.0 / len(live_tickers)
+    # ── Portfolio return, from the daily NAV snapshots ──────────────────────
+    # This page used to rebuild the portfolio curve from a full history fetch
+    # for every one of ~180 holdings (4 workers, 6s each) — the "Performance
+    # never loads" freeze. nav_snapshots is written every time the Dashboard
+    # is opened and already holds exactly this series, so the only network
+    # work left here is the handful of selected benchmarks.
+    nav_all = get_nav_history(days=3660, base_currency=base_currency)
+    if not nav_all.empty:
+        nav_all = nav_all.copy()
+        nav_all["date"] = pd.to_datetime(nav_all["date"])
+        nav_all = nav_all.sort_values("date").drop_duplicates("date", keep="last")
+        nav_win = nav_all[nav_all["date"] >= _period_start]
     else:
-        weights = {t: 1.0 / len(live_tickers) for t in live_tickers}
+        nav_win = nav_all
 
-    # ── Parallel history fetch ──
-    with st.spinner(f"Loading {period} data for {len(live_tickers)} tickers + {len(selected_benchmarks)} benchmarks…"):
-        port_histories = {}
+    bench_histories = {}
 
-        def _fetch_hist(ticker):
-            from core.yf_utils import extract_close_series
-            h = get_history(ticker, period)
-            if not h.empty:
-                close = extract_close_series(h, ticker)
-                return ticker, close if not close.empty else None
-            return ticker, None
+    if nav_win.empty or len(nav_win) < 2:
+        portfolio_return = pd.Series(dtype=float)
+        st.info(
+            "Not enough portfolio history for this period yet. Your total value is saved "
+            "as a daily snapshot every time you open the **Dashboard** — the comparison "
+            "chart fills in as those build up. The value chart below shows whatever has "
+            "been recorded so far."
+        )
+    else:
+        _pv = nav_win.set_index("date")["total_value"].astype(float)
+        portfolio_return = (_pv / _pv.iloc[0]) * 100
+        _win_start = nav_win["date"].iloc[0]
 
-        with ThreadPoolExecutor(max_workers=min(len(live_tickers), 4)) as pool:
-            futures = {pool.submit(_fetch_hist, t): t for t in live_tickers}
-            for f in as_completed(futures):
-                t, series = f.result()
-                if series is not None:
-                    port_histories[t] = series
-
-        bench_histories = {}
+        # Benchmarks over the same window — a handful of fetches, not ~180
         def _fetch_bench(name):
             from core.yf_utils import extract_close_series
             h = get_benchmark_history(name, period)
-            if not h.empty:
-                close = extract_close_series(h, name)
-                return name, close if not close.empty else None
-            return name, None
+            if h.empty:
+                return name, None
+            close = extract_close_series(h, name)
+            if close.empty:
+                return name, None
+            close.index = pd.to_datetime(close.index)
+            close = close[close.index >= _win_start]
+            return name, close if len(close) >= 2 else None
 
         if selected_benchmarks:
-            with ThreadPoolExecutor(max_workers=len(selected_benchmarks)) as pool:
-                futures = {pool.submit(_fetch_bench, n): n for n in selected_benchmarks}
-                for f in as_completed(futures):
-                    name, series = f.result()
-                    if series is not None:
-                        bench_histories[name] = series
-
-    # ── Portfolio return (indexed to 100) ──
-    if port_histories:
-        normalized = {}
-        for t, series in port_histories.items():
-            if len(series) > 0:
-                normalized[t] = (series / series.iloc[0]) * 100
-        if normalized:
-            port_df = pd.DataFrame(normalized)
-            # Forward-fill then back-fill to handle different start dates & missing days
-            port_df = port_df.ffill().bfill()
-            w_series = pd.Series({t: weights.get(t, 0) for t in port_df.columns})
-            w_series = w_series / w_series.sum()
-            portfolio_return = (port_df * w_series).sum(axis=1)
-        else:
-            portfolio_return = pd.Series(dtype=float)
-    else:
-        portfolio_return = pd.Series(dtype=float)
+            with st.spinner(f"Loading {len(selected_benchmarks)} benchmark(s)…"):
+                with ThreadPoolExecutor(max_workers=max(1, len(selected_benchmarks))) as pool:
+                    futures = {pool.submit(_fetch_bench, n): n for n in selected_benchmarks}
+                    for f in as_completed(futures):
+                        name, series = f.result()
+                        if series is not None:
+                            bench_histories[name] = series
 
     # ── Plotly chart ──
-    fig = go.Figure()
-
-    if not portfolio_return.empty:
-        fig.add_trace(go.Scatter(
-            x=portfolio_return.index, y=portfolio_return.values,
-            name="📈 Your Portfolio", line=dict(color="#2962FF", width=3),
-        ))
-
-    colors = ["#FF6D00", "#00C853", "#AA00FF", "#DD2C00", "#00BFA5", "#6200EA", "#FFD600", "#304FFE"]
-    for i, (name, series) in enumerate(bench_histories.items()):
-        norm = (series / series.iloc[0]) * 100
-        fig.add_trace(go.Scatter(
-            x=norm.index, y=norm.values, name=name,
-            line=dict(color=colors[i % len(colors)], width=2, dash="dash"),
-        ))
-
-    fig.update_layout(
-        title=f"Portfolio vs Benchmarks — {period} (Indexed to 100)",
-        yaxis_title="Indexed Value", xaxis_title="Date",
-        hovermode="x unified",
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-        height=500, margin=dict(t=50, b=30),
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    )
-    fig.add_hline(y=100, line_dash="dot", line_color="gray", annotation_text="Start = 100")
-    show_chart(fig)
+    if not portfolio_return.empty or bench_histories:
+        fig = go.Figure()
+        if not portfolio_return.empty:
+            fig.add_trace(go.Scatter(
+                x=portfolio_return.index, y=portfolio_return.values,
+                name="📈 Your Portfolio", line=dict(color="#2962FF", width=3),
+            ))
+        colors = ["#FF6D00", "#00C853", "#AA00FF", "#DD2C00", "#00BFA5", "#6200EA", "#FFD600", "#304FFE"]
+        for i, (name, series) in enumerate(bench_histories.items()):
+            norm = (series / series.iloc[0]) * 100
+            fig.add_trace(go.Scatter(
+                x=norm.index, y=norm.values, name=name,
+                line=dict(color=colors[i % len(colors)], width=2, dash="dash"),
+            ))
+        fig.update_layout(
+            title=f"Portfolio vs Benchmarks — {PERIOD_LABELS.get(period, period)} (Indexed to 100)",
+            yaxis_title="Indexed Value", xaxis_title="Date",
+            hovermode="x unified",
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            height=500, margin=dict(t=50, b=30),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        )
+        fig.add_hline(y=100, line_dash="dot", line_color="gray", annotation_text="Start = 100")
+        show_chart(fig)
 
     # ── Summary table ──
-    st.subheader("Return Summary")
-    rows = []
-    years = PERIOD_YEARS.get(period)
-    if not portfolio_return.empty:
-        port_ret = (portfolio_return.iloc[-1] / portfolio_return.iloc[0] - 1) * 100
-        row = {"Name": "📈 Your Portfolio", "Return": f"{port_ret:+.2f}%",
-               "Start": f"{portfolio_return.iloc[0]:.1f}", "End": f"{portfolio_return.iloc[-1]:.1f}"}
-        if years:
-            cagr = calc_cagr(portfolio_return.iloc[0], portfolio_return.iloc[-1], years)
-            row["CAGR"] = f"{cagr*100:+.2f}%" if cagr is not None else ""
-        rows.append(row)
-    for name, series in bench_histories.items():
-        if len(series) >= 2:
-            ret = (series.iloc[-1] / series.iloc[0] - 1) * 100
-            row = {"Name": name, "Return": f"{ret:+.2f}%",
-                   "Start": f"{series.iloc[0]:,.1f}", "End": f"{series.iloc[-1]:,.1f}"}
+    if not portfolio_return.empty or bench_histories:
+        st.subheader("Return Summary")
+        rows = []
+        years = PERIOD_YEARS.get(period)
+        if not portfolio_return.empty:
+            port_ret = (portfolio_return.iloc[-1] / portfolio_return.iloc[0] - 1) * 100
+            row = {"Name": "📈 Your Portfolio", "Return": f"{port_ret:+.2f}%",
+                   "Start": f"{portfolio_return.iloc[0]:.1f}", "End": f"{portfolio_return.iloc[-1]:.1f}"}
             if years:
-                cagr = calc_cagr(series.iloc[0], series.iloc[-1], years)
+                cagr = calc_cagr(portfolio_return.iloc[0], portfolio_return.iloc[-1], years)
                 row["CAGR"] = f"{cagr*100:+.2f}%" if cagr is not None else ""
             rows.append(row)
-    if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        for name, series in bench_histories.items():
+            if len(series) >= 2:
+                ret = (series.iloc[-1] / series.iloc[0] - 1) * 100
+                row = {"Name": name, "Return": f"{ret:+.2f}%",
+                       "Start": f"{series.iloc[0]:,.1f}", "End": f"{series.iloc[-1]:,.1f}"}
+                if years:
+                    cagr = calc_cagr(series.iloc[0], series.iloc[-1], years)
+                    row["CAGR"] = f"{cagr*100:+.2f}%" if cagr is not None else ""
+                rows.append(row)
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    st.caption(f"ℹ️ Based on {len(port_histories)} of {len(live_tickers)} tickers with available history.")
+        if not portfolio_return.empty:
+            st.caption(
+                f"ℹ️ Portfolio line from {len(nav_win)} daily NAV snapshots since "
+                f"{nav_win['date'].iloc[0].strftime('%Y-%m-%d')}. Benchmarks clipped to the same window."
+            )
 
     # ── NAV History — Portfolio Value Over Time ──────────────────────────────
     st.divider()
