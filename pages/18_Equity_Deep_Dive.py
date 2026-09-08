@@ -18,8 +18,6 @@ from core.database import get_all_holdings, get_prosper_analysis, save_prosper_a
 from core.data_engine import (
     get_ticker_info, get_history, get_ticker_sentiment, get_ticker_news,
     get_analyst_price_targets, get_upgrade_downgrade,
-    get_insider_transactions, get_insider_purchases,
-    get_institutional_holders, get_major_holders,
     fmt_large, clean_nan, summarize_news_with_ai,
 )
 from core.grow_engine import run_grow, GROW_TIERS
@@ -775,158 +773,59 @@ with tab_ownership:
     try:
         @st.fragment
         def ownership_section():
-            st.subheader("Ownership & Insider Activity")
+            st.subheader("Ownership")
 
-            # Fetch all ownership data
-            major = get_major_holders(ticker)
-            inst_holders = get_institutional_holders(ticker)
-            purchases = get_insider_purchases(ticker)
-            transactions = get_insider_transactions(ticker)
-
-            # Parse ownership percentages from info
+            # Ownership split from the ticker info already fetched for this page.
+            # The Top-Holders and Insider-Transactions tables were removed in
+            # Phase 2 (P2-8): four uncached yfinance calls per render for data
+            # that is quarterly-stale by nature and that this book never traded on.
             insider_pct = info.get("heldPercentInsiders")
             inst_pct = info.get("heldPercentInstitutions")
 
-            # ── Ownership Split (metrics + pie) ──
-            if insider_pct is not None or inst_pct is not None:
-                ins_v = (insider_pct or 0) * 100 if insider_pct and insider_pct < 1 else (insider_pct or 0)
-                inst_v = (inst_pct or 0) * 100 if inst_pct and inst_pct < 1 else (inst_pct or 0)
-                retail_v = max(0, 100 - ins_v - inst_v)
+            if insider_pct is None and inst_pct is None:
+                empty_state("ownership breakdown",
+                            action="No held-percent data is published for this ticker.")
+                return
 
-                pie_col, insight_col = st.columns([2, 3])
-                with pie_col:
-                    fig_pie = go.Figure(go.Pie(
-                        labels=["Insiders", "Institutions", "Retail/Other"],
-                        values=[ins_v, inst_v, retail_v],
-                        marker_colors=["#f39c12", "#1a9e5c", "#888"],
-                        hole=0.5,
-                        textinfo="label+percent",
-                    ))
-                    fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
-                                           template="plotly_dark", showlegend=False)
-                    show_chart(fig_pie)
+            ins_v = (insider_pct or 0) * 100 if insider_pct and insider_pct < 1 else (insider_pct or 0)
+            inst_v = (inst_pct or 0) * 100 if inst_pct and inst_pct < 1 else (inst_pct or 0)
+            retail_v = max(0, 100 - ins_v - inst_v)
 
-                with insight_col:
-                    st.markdown("**Ownership Insights**")
-                    insights = []
-                    if inst_v > 70:
-                        insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
-                    elif inst_v > 40:
-                        insights.append("Moderate institutional ownership — balanced between smart money and retail")
-                    elif inst_v < 15:
-                        insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
+            pie_col, insight_col = st.columns([2, 3])
+            with pie_col:
+                fig_pie = go.Figure(go.Pie(
+                    labels=["Insiders", "Institutions", "Retail/Other"],
+                    values=[ins_v, inst_v, retail_v],
+                    marker_colors=["#f39c12", "#1a9e5c", "#888"],
+                    hole=0.5,
+                    textinfo="label+percent",
+                ))
+                fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
+                                       template="plotly_dark", showlegend=False)
+                show_chart(fig_pie)
 
-                    if ins_v > 20:
-                        insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
-                    elif ins_v > 5:
-                        insights.append("Moderate insider ownership — management maintains meaningful stake")
-                    elif ins_v < 1 and ins_v > 0:
-                        insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
+            with insight_col:
+                st.markdown("**Ownership Insights**")
+                insights = []
+                if inst_v > 70:
+                    insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
+                elif inst_v > 40:
+                    insights.append("Moderate institutional ownership — balanced between smart money and retail")
+                elif inst_v < 15:
+                    insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
 
-                    if retail_v > 50:
-                        insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
+                if ins_v > 20:
+                    insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
+                elif ins_v > 5:
+                    insights.append("Moderate insider ownership — management maintains meaningful stake")
+                elif ins_v < 1 and ins_v > 0:
+                    insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
 
-                    for insight in insights:
-                        st.markdown(f"- {insight}")
+                if retail_v > 50:
+                    insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
 
-                    # Insider activity trend
-                    if not transactions.empty:
-                        type_col = "Text" if "Text" in transactions.columns else None
-                        if type_col:
-                            buys = transactions[transactions[type_col].str.contains("Purchase|Buy|Acquisition", case=False, na=False)]
-                            sells = transactions[transactions[type_col].str.contains("Sale|Sell|Disposition", case=False, na=False)]
-                            if len(buys) > len(sells):
-                                st.markdown(f"- **Insider trend: NET BUYING** ({len(buys)} buys vs {len(sells)} sells in past 12 months)")
-                            elif len(sells) > len(buys):
-                                st.markdown(f"- **Insider trend: NET SELLING** ({len(sells)} sells vs {len(buys)} buys in past 12 months)")
-                            else:
-                                st.markdown(f"- **Insider trend: BALANCED** ({len(buys)} buys, {len(sells)} sells)")
-
-            # ── Top Institutional Holders + Recent Insider Transactions ──
-            inst_tab, insider_tab = st.columns(2)
-
-            with inst_tab:
-                if not inst_holders.empty:
-                    st.markdown("**Top 5 Institutional Holders**")
-                    display_inst = inst_holders.head(5).copy()
-                    if "Holder" in display_inst.columns:
-                        cols_show = ["Holder"]
-                        if "pctHeld" in display_inst.columns:
-                            display_inst["Ownership"] = display_inst["pctHeld"].apply(
-                                lambda x: f"{x * 100:.2f}%" if pd.notna(x) and x < 1 else (f"{x:.2f}%" if pd.notna(x) else "—")
-                            )
-                            cols_show.append("Ownership")
-                        if "Shares" in display_inst.columns:
-                            display_inst["Shares"] = display_inst["Shares"].apply(
-                                lambda x: f"{x/1e6:.1f}M" if pd.notna(x) and x >= 1e6 else (f"{x:,.0f}" if pd.notna(x) else "—")
-                            )
-                            cols_show.append("Shares")
-                        render_responsive_table(display_inst[cols_show])
-                else:
-                    st.caption("No institutional holder data available")
-
-            with insider_tab:
-                if not transactions.empty:
-                    st.markdown("**Recent Insider Transactions**")
-                    recent_txns = transactions.head(5).copy()
-
-                    # Normalize column names across data sources
-                    # yfinance uses "Insider", legacy Finnhub mapping used "Insider Trading"
-                    if "Insider Trading" in recent_txns.columns and "Insider" not in recent_txns.columns:
-                        recent_txns = recent_txns.rename(columns={"Insider Trading": "Insider"})
-
-                    # Rename "Insider" to a clearer display label
-                    if "Insider" in recent_txns.columns:
-                        recent_txns = recent_txns.rename(columns={"Insider": "Name"})
-
-                    # Rename "Text" to "Transaction" for clarity (only if no existing Transaction col)
-                    if "Text" in recent_txns.columns and "Transaction" not in recent_txns.columns:
-                        recent_txns = recent_txns.rename(columns={"Text": "Transaction"})
-                    elif "Text" in recent_txns.columns:
-                        recent_txns = recent_txns.drop(columns=["Text"], errors="ignore")
-
-                    # Drop any duplicate columns
-                    recent_txns = recent_txns.loc[:, ~recent_txns.columns.duplicated()]
-
-                    # Build display columns — name, title/position, transaction type, date, shares, value
-                    display_cols = []
-
-                    # Insider name
-                    if "Name" in recent_txns.columns:
-                        display_cols.append("Name")
-
-                    # Title/Position (yfinance sometimes provides this)
-                    for title_col in ["Title", "Position", "Relationship"]:
-                        if title_col in recent_txns.columns:
-                            display_cols.append(title_col)
-                            break
-
-                    # Transaction type
-                    if "Transaction" in recent_txns.columns:
-                        display_cols.append("Transaction")
-
-                    # Date
-                    if "Start Date" in recent_txns.columns:
-                        display_cols.append("Start Date")
-
-                    # Shares and Value
-                    if "Shares" in recent_txns.columns:
-                        display_cols.append("Shares")
-                    if "Value" in recent_txns.columns:
-                        display_cols.append("Value")
-
-                    # Filter to only existing, unique columns
-                    display_cols = list(dict.fromkeys(c for c in display_cols if c in recent_txns.columns))
-                    if display_cols:
-                        render_responsive_table(clean_nan(recent_txns[display_cols]))
-                    else:
-                        # Fallback: show whatever columns exist
-                        render_responsive_table(clean_nan(recent_txns))
-                elif not purchases.empty:
-                    st.markdown("**Insider Purchase Summary**")
-                    render_responsive_table(purchases.head(3))
-                else:
-                    st.caption("No insider activity data available")
+                for insight in insights:
+                    st.markdown(f"- {insight}")
 
         ownership_section()
 

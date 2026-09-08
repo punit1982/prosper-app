@@ -52,35 +52,50 @@ if not tickers:
     st.stop()
 
 # ── Sentiment cache (30-min TTL in session_state) ─────────────────────────────
+# The whole-book sweep (5 sources × ~186 holdings) was measured at >200s — a
+# page nobody waits for. It is now behind an explicit button; the per-ticker
+# view further down fetches one name on demand, which is all this page is
+# actually used for.
 sent_key = f"sentiment_data_{hash(tuple(sorted(tickers)))}"
 now      = time.time()
 
-if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts", 0)) > SENT_TTL:
+
+def _fetch_one(ticker):
+    """One ticker's news sentiment + composite. Same calls the batch made.
+    A bare ticker ("TCS") is ambiguous for a news search; the company name
+    ("Tata Consultancy Services") is not — get_ticker_sentiment's
+    company_name parameter existed but was never passed before v7.x."""
+    news_sent = get_ticker_sentiment(ticker, names.get(ticker, ""))
+    comp = get_composite_sentiment(
+        ticker, news_sent["score"], news_has_data=news_sent.get("total_headlines", 0) > 0,
+        company_name=names.get(ticker, ""),
+    )
+    return news_sent, comp
+
+
+_have_fresh = (
+    sent_key in st.session_state
+    and (now - st.session_state[sent_key].get("ts", 0)) <= SENT_TTL
+)
+_run_all = st.button(
+    f"📊 Analyse all {len(tickers)} holdings",
+    help="Runs all 5 sources across the whole book — takes 1–3 minutes.",
+)
+
+if _run_all and not _have_fresh:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with st.spinner(f"Analysing sentiment for {len(tickers)} holdings (News · StockTwits · Reddit · Analyst · Google News)…"):
         sentiments = {}
         composites = {}
 
-        def _fetch(ticker):
-            # A bare ticker ("TCS") is genuinely ambiguous for a news search;
-            # the company name ("Tata Consultancy Services") is not — this
-            # was the single biggest lever on relevant coverage for this
-            # portfolio's non-US names, and get_ticker_sentiment's
-            # company_name parameter existed but was never actually passed.
-            news_sent = get_ticker_sentiment(ticker, names.get(ticker, ""))
-            comp      = get_composite_sentiment(
-                ticker, news_sent["score"], news_has_data=news_sent.get("total_headlines", 0) > 0,
-                company_name=names.get(ticker, ""),
-            )
-            return ticker, news_sent, comp
-
         pool = ThreadPoolExecutor(max_workers=min(len(tickers), 5))
-        futures = {pool.submit(_fetch, t): t for t in tickers}
+        futures = {pool.submit(_fetch_one, t): t for t in tickers}
         try:
-            for f in as_completed(futures, timeout=60):
+            for f in as_completed(futures, timeout=180):
+                t = futures[f]
                 try:
-                    t, ns, comp = f.result()
+                    ns, comp = f.result()
                     sentiments[t] = ns
                     composites[t] = comp
                 except Exception:
@@ -96,9 +111,9 @@ if sent_key not in st.session_state or (now - st.session_state[sent_key].get("ts
         "ts":         now,
     }
 
-cached     = st.session_state[sent_key]
-sentiments = cached["sentiments"]
-composites = cached["composites"]
+cached     = st.session_state.get(sent_key, {})
+sentiments = cached.get("sentiments", {})
+composites = cached.get("composites", {})
 fetched_at = cached.get("ts", now)
 
 
@@ -115,19 +130,22 @@ def _to_100(v):
     return round(v * 100)
 
 
-# ── Status bar + manual refresh ──────────────────────────────────────────────
-age_min = int((time.time() - fetched_at) / 60)
-hdr1, hdr2 = st.columns([7, 1])
-with hdr1:
-    st.caption(f"📡 Sentiment data: **{age_min}m ago** · refreshes every 30 min · {len(tickers)} holdings analysed")
-with hdr2:
-    if st.button("🔄", key="sent_refresh", help="Force refresh sentiment data"):
-        st.session_state.pop(sent_key, None)
-        st.rerun()
+# ── Status bar + manual refresh (only once a whole-book run exists) ──────────
+if composites:
+    age_min = int((time.time() - fetched_at) / 60)
+    hdr1, hdr2 = st.columns([7, 1])
+    with hdr1:
+        st.caption(f"📡 Whole-book sentiment: **{age_min}m ago** · {len(composites)} of {len(tickers)} holdings analysed")
+    with hdr2:
+        if st.button("🔄", key="sent_refresh", help="Force refresh sentiment data"):
+            st.session_state.pop(sent_key, None)
+            st.rerun()
+else:
+    st.info("Pick a holding below for its sentiment, or **Analyse all** for the whole-book chart.")
 
-# ── Portfolio overview chart ─────────────────────────────────────────────────
+# ── Portfolio overview chart (only after a whole-book run) ───────────────────
 rows = []
-for t in tickers:
+for t in (tickers if composites else []):
     c = composites.get(t, {})
     s = sentiments.get(t, {})
     rows.append({
@@ -214,8 +232,21 @@ def ticker_detail():
     if not selected:
         return
 
-    s = sentiments.get(selected, {})
-    c = composites.get(selected, {})
+    # On-demand single-ticker fetch (cached 30 min in session_state). Falls
+    # back to the whole-book run's data if one exists.
+    one_key = f"_sent_one_{selected}"
+    _one = st.session_state.get(one_key)
+    if _one and (time.time() - _one.get("ts", 0)) <= SENT_TTL:
+        s, c = _one["s"], _one["c"]
+    elif selected in sentiments and selected in composites:
+        s, c = sentiments[selected], composites[selected]
+    else:
+        with st.spinner(f"Analysing {selected} — News · StockTwits · Reddit · Analyst · Google News…"):
+            try:
+                s, c = _fetch_one(selected)
+            except Exception:
+                s, c = {}, {}
+        st.session_state[one_key] = {"s": s, "c": c, "ts": time.time()}
 
     comp_score = c.get("composite_score", 0)
     label      = score_label(comp_score)
