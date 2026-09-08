@@ -1,195 +1,195 @@
 {
-  "as_of": "2026-09-06T20:11:26Z",
+  "as_of": "2026-09-08T08:44:06Z",
   "source": "IBKR connector snapshot (get_account_positions), refreshed in-session",
   "note": "Broker mark prices, not live quotes — a previous close for most markets. Written into holdings.last_known_price on app start; never overrides a live quote. Regenerate with scripts/refresh_ibkr_marks.py.",
   "count": 96,
   "marks": {
     "4519.T": {
-      "price": 6731.0,
+      "price": 6532.0,
       "currency": "JPY"
     },
     "4568.T": {
-      "price": 2794.0,
+      "price": 2751.0,
       "currency": "JPY"
     },
     "5631.T": {
-      "price": 7300.0,
+      "price": 7050.0,
       "currency": "JPY"
     },
     "5803.T": {
-      "price": 5180.0,
+      "price": 5101.0,
       "currency": "JPY"
     },
     "5E2.SI": {
-      "price": 2.16,
+      "price": 2.19,
       "currency": "SGD"
     },
+    "6501.T": {
+      "price": 5186.0,
+      "currency": "JPY"
+    },
     "6976.T": {
-      "price": 9560.5,
+      "price": 9050.0,
       "currency": "JPY"
     },
     "7013.T": {
-      "price": 2627.0,
+      "price": 2643.0,
       "currency": "JPY"
     },
     "7974.T": {
-      "price": 8845.0,
+      "price": 8754.0,
       "currency": "JPY"
     },
     "AAOI": {
-      "price": 105.650002,
+      "price": 106.800003,
       "currency": "USD"
     },
     "ADBE": {
-      "price": 266.5,
+      "price": 264.234894,
       "currency": "USD"
     },
     "ADCB.AE": {
-      "price": 15.24,
+      "price": 15.34,
       "currency": "AED"
     },
     "ADNOCDRIL.AE": {
-      "price": 5.83,
+      "price": 5.86,
       "currency": "AED"
     },
     "ADNOCLS.AE": {
-      "price": 6.87,
+      "price": 6.8,
       "currency": "AED"
     },
     "AIY.SI": {
-      "price": 8.9,
+      "price": 9.05,
       "currency": "SGD"
     },
     "ALDAR.AE": {
-      "price": 7.72,
+      "price": 7.83,
       "currency": "AED"
     },
     "ALT": {
-      "price": 3.44,
+      "price": 3.45,
       "currency": "USD"
     },
     "AMPG": {
-      "price": 3.43,
+      "price": 3.36,
       "currency": "USD"
     },
     "APP": {
-      "price": 320.559998,
+      "price": 319.119995,
       "currency": "USD"
     },
     "ASPI": {
-      "price": 4.185,
+      "price": 4.13,
       "currency": "USD"
     },
     "ASTS": {
-      "price": 62.080002,
+      "price": 62.5,
       "currency": "USD"
     },
     "BANB.SW": {
-      "price": 77.099998,
+      "price": 77.199997,
       "currency": "CHF"
     },
     "BIOA": {
-      "price": 9.55,
+      "price": 9.44,
       "currency": "USD"
     },
     "BMAG.SW": {
-      "price": 30.0,
+      "price": 29.549999,
       "currency": "CHF"
     },
     "BURJEEL.AE": {
-      "price": 1.26,
+      "price": 1.24,
       "currency": "AED"
     },
     "BZAI": {
-      "price": 0.4705,
+      "price": 0.4715,
       "currency": "USD"
     },
     "CATX": {
-      "price": 3.13,
+      "price": 3.15,
       "currency": "USD"
     },
     "CELH": {
-      "price": 30.744499,
+      "price": 30.629999,
       "currency": "USD"
     },
     "CICN.SW": {
-      "price": 126.800003,
+      "price": 129.0,
       "currency": "CHF"
     },
     "COTN.SW": {
-      "price": 343.200012,
+      "price": 346.600006,
       "currency": "CHF"
     },
     "CRDO": {
-      "price": 169.537003,
+      "price": 172.5,
       "currency": "USD"
     },
     "CRM": {
-      "price": 259.230011,
+      "price": 255.960007,
       "currency": "USD"
     },
     "DUOL": {
-      "price": 154.615005,
+      "price": 153.0,
       "currency": "USD"
     },
     "EMAAR.AE": {
-      "price": 11.0,
+      "price": 11.06,
       "currency": "AED"
     },
     "EMAARDEV.AE": {
-      "price": 12.92,
+      "price": 12.98,
       "currency": "AED"
     },
     "EMIRATESN.AE": {
-      "price": 30.299999,
+      "price": 30.6,
       "currency": "AED"
     },
     "ENPH": {
-      "price": 36.369999,
+      "price": 36.299999,
       "currency": "USD"
     },
     "ENVX": {
-      "price": 3.34,
+      "price": 3.32,
       "currency": "USD"
     },
     "EOSE": {
-      "price": 3.92,
+      "price": 3.8508,
       "currency": "USD"
     },
     "FISV": {
-      "price": 52.801399,
+      "price": 52.790001,
       "currency": "USD"
     },
     "FLNC": {
-      "price": 10.34,
-      "currency": "USD"
-    },
-    "FTCHQ": {
-      "price": 1e-06,
+      "price": 10.32,
       "currency": "USD"
     },
     "GEV": {
-      "price": 941.950012,
+      "price": 942.900024,
       "currency": "USD"
     },
     "HBBD.SI": {
-      "price": 3.59,
+      "price": 3.54,
       "currency": "SGD"
     },
     "HIMS": {
-      "price": 27.82,
+      "price": 27.780001,
       "currency": "USD"
     },
     "HLIT": {
-      "price": 11.78,
+      "price": 11.76,
       "currency": "USD"
     },
     "HSAI": {
-      "price": 18.9676,
+      "price": 18.52,
       "currency": "USD"
     },
     "HTCD.SI": {
-      "price": 7.17,
+      "price": 7.05,
       "currency": "SGD"
     },
     "HUBB": {
@@ -197,67 +197,67 @@
       "currency": "USD"
     },
     "IA": {
-      "price": 18.74,
+      "price": 18.799999,
       "currency": "USD"
     },
     "IB01.L": {
-      "price": 121.739998,
+      "price": 121.760002,
       "currency": "USD"
     },
     "IDN": {
-      "price": 2.78,
+      "price": 2.79,
       "currency": "USD"
     },
     "IGLN.L": {
-      "price": 86.120003,
+      "price": 85.230003,
       "currency": "USD"
     },
     "IPWR": {
-      "price": 5.1,
+      "price": 4.82,
       "currency": "USD"
     },
     "IREN": {
-      "price": 44.4678,
+      "price": 44.150002,
       "currency": "USD"
     },
     "ISLN.L": {
-      "price": 62.945,
+      "price": 62.607498,
       "currency": "USD"
     },
     "JEPG.SW": {
-      "price": 21.610001,
+      "price": 21.51,
       "currency": "CHF"
     },
     "LEU": {
-      "price": 173.889999,
+      "price": 175.0,
       "currency": "USD"
     },
     "MELI": {
-      "price": 1978.359985,
+      "price": 1968.099976,
       "currency": "USD"
     },
     "MGNI": {
-      "price": 25.15,
+      "price": 24.01,
       "currency": "USD"
     },
     "MP": {
-      "price": 54.464001,
+      "price": 54.009998,
       "currency": "USD"
     },
     "NAUT": {
-      "price": 0.9175,
+      "price": 0.92,
       "currency": "USD"
     },
     "NCMI": {
-      "price": 2.48,
+      "price": 2.47,
       "currency": "USD"
     },
     "NDIA.L": {
-      "price": 8.916,
+      "price": 8.783,
       "currency": "USD"
     },
     "NESN.SW": {
-      "price": 78.309998,
+      "price": 80.760002,
       "currency": "CHF"
     },
     "OM": {
@@ -265,87 +265,87 @@
       "currency": "USD"
     },
     "ONDS": {
-      "price": 7.6109,
+      "price": 7.54,
       "currency": "USD"
     },
     "ORCL": {
-      "price": 159.699997,
+      "price": 163.089996,
       "currency": "USD"
     },
     "OSS": {
-      "price": 9.8112,
+      "price": 9.99,
       "currency": "USD"
     },
     "OUST": {
-      "price": 36.43,
+      "price": 37.099998,
       "currency": "USD"
     },
     "PDYN": {
-      "price": 5.71,
+      "price": 5.6606,
       "currency": "USD"
     },
     "PLTR": {
-      "price": 174.399002,
+      "price": 172.820007,
       "currency": "USD"
     },
     "POET": {
-      "price": 7.92,
+      "price": 7.9589,
       "currency": "USD"
     },
     "PRY.MI": {
-      "price": 122.650002,
+      "price": 124.599998,
       "currency": "EUR"
     },
     "PUREHEALT.AE": {
-      "price": 2.62,
+      "price": 2.63,
       "currency": "AED"
     },
     "QTEX": {
-      "price": 0.8378,
+      "price": 0.8834,
       "currency": "USD"
     },
     "RDW": {
-      "price": 10.5499,
+      "price": 10.509,
       "currency": "USD"
     },
     "RHM.DE": {
-      "price": 1036.800049,
+      "price": 1026.599976,
       "currency": "EUR"
     },
     "SEZL": {
-      "price": 121.0,
+      "price": 120.0,
       "currency": "USD"
     },
     "SIDU": {
-      "price": 2.07,
+      "price": 2.0696,
       "currency": "USD"
     },
     "SLI": {
-      "price": 2.42,
+      "price": 2.43,
       "currency": "USD"
     },
     "SPACE42.AE": {
-      "price": 2.08,
+      "price": 2.05,
       "currency": "AED"
     },
     "SQN.SW": {
-      "price": 41.939999,
+      "price": 40.860001,
       "currency": "CHF"
     },
     "TE": {
-      "price": 4.6,
+      "price": 4.57,
       "currency": "USD"
     },
     "TECOM.AE": {
-      "price": 3.35,
+      "price": 3.37,
       "currency": "AED"
     },
     "TIGR": {
-      "price": 5.042,
+      "price": 5.0,
       "currency": "USD"
     },
     "U": {
-      "price": 41.66,
+      "price": 41.299999,
       "currency": "USD"
     },
     "U03A.L": {
@@ -353,19 +353,19 @@
       "currency": "USD"
     },
     "U96.SI": {
-      "price": 6.11,
+      "price": 6.2,
       "currency": "SGD"
     },
     "UPST": {
-      "price": 28.049999,
-      "currency": "USD"
-    },
-    "URNU.L": {
       "price": 27.93,
       "currency": "USD"
     },
+    "URNU.L": {
+      "price": 28.209999,
+      "currency": "USD"
+    },
     "VEEV": {
-      "price": 275.089996,
+      "price": 273.980011,
       "currency": "USD"
     },
     "VNP.TO": {
@@ -373,25 +373,21 @@
       "currency": "CAD"
     },
     "VOR": {
-      "price": 24.950001,
+      "price": 25.049999,
       "currency": "USD"
     },
     "XE": {
-      "price": 17.7477,
+      "price": 17.92,
       "currency": "USD"
     },
     "XFAB.PA": {
-      "price": 6.055,
+      "price": 6.235,
       "currency": "EUR"
     },
     "XYZ": {
-      "price": 82.760002,
+      "price": 81.720001,
       "currency": "USD"
     }
   },
-  "_skipped": [
-    "IBCID288654906 @FUNDSERV",
-    "IBCID358679986 @ALLFUNDS",
-    "OZON @VALUE"
-  ]
+  "_skipped": []
 }
