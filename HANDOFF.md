@@ -1,11 +1,11 @@
-# Prosper — Handoff (9 Sep 2026, current at v7.31)
+# Prosper — Handoff (9 Sep 2026, current at v7.34)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
 **Where the work stands.** Phases 1, 2 and six pushes of Phase 3 are shipped and live.
-**Phase 3 (mobile) is IN PROGRESS** — pushes 1-9 are live (`695f4f6` … `818e498`). §13 carries
+**Phase 3 (mobile) is IN PROGRESS** — pushes 1-12 are live (`695f4f6` … `bc5dabf`). §13 carries
 what shipped, what is left, and in what order, through to done.
 
 Phase 3 is being built against a second design review (9 Sep) that audited the 8 Sep proposal
@@ -916,6 +916,9 @@ contradictions, and it is worth preserving.
 | 7 | `893ebb5` | HANDOFF roadmap |
 | 8 | `4efc234` | **Security** — Deep Dive renamed and made the single research entry point; publishes `research_ticker`; drill-down links; nav group "Security — full analysis"; **Research Hub deleted** |
 | 9 | `818e498` | **Activity** — Portfolio News + Market News + Earnings + Transactions merged into one page (`pages/9_Activity.py` + `core/activity_views.py`), sliced by segmented control |
+| 10 | `7024e09` | CIO briefing leads with pulse + actions, explanation behind a tap (parses, does not re-prompt) · **all 8 donuts → `ranked_bars`** · Summary's 5 eager pie-tabs → one picker with selectbox drill-down |
+| 11 | `6c67c17` | **Risk** 4 tabs + nested set → segmented controls · **Income** (renamed from Dividends) 4 tabs → picker, hero de-eyebrowed |
+| 12 | `bc5dabf` | **Security** 7 tabs → segmented control · **Peer Comparison** 5 tabs → segmented control |
 
 **The bug worth remembering.** Push 2 guarded `design_shell()` with a session flag. Streamlit
 rebuilds the DOM every rerun, so after the first load the stylesheet was never re-emitted and
@@ -942,22 +945,34 @@ renders one slice, not `st.tabs`, which renders all of them.
 **The general rule:** merge when the pages duplicate; subordinate when one
 summarises the other. Never fold a heavy page into a Streamlit tab.
 
+### st.tabs is gone from the daily path
+
+Pushes 10-12 removed every eager tab set that costs anything: Summary (5),
+Risk (4 + a nested 4), Income (4), Security (7), Peer Comparison (5). Streamlit
+builds and ships EVERY tab on EVERY render, so Security alone was running a
+price-history fetch, a fundamentals pull, an analyst call and a peer batch for
+a visit that reads one section.
+
+The replacement is `st.segmented_control` plus a three-line `_Section` class
+that is truthy only when selected and is a no-op context manager. `with tab_x:`
+becomes `if tab_x:`, no body is re-indented, and an unselected body does not
+run. Copy that pattern rather than inventing another.
+
+Only User Management's three per-user tabs remain — admin-only, inside a
+collapsed expander, no fetches. Leave them.
+
 ### Remaining, in order — through to done
 
 Each row is roughly one working session. The order is dependency-correct: do not reorder 7 and 8.
 
 | # | Item | Why it is where it is |
 |---|---|---|
-| **1** | **CIO briefing** — structured "What changed / Why it matters / What to do", three lines by default, expandable | Last big block on Command Center. Content is good; the packaging is a wall of editorial on a phone. |
-| **2** | **Remaining donuts → `ranked_bars`** — 5 on Portfolio Summary, 1 each on Risk, Deep Dive, Dividends | The surviving page set is now known. |
-| **3** | **Risk** — flatten 4 eager tabs + 1 nested tab set into one scroll of pass/fail guardrails | Streamlit tabs are eager: every hidden tab is built and shipped on every render. |
-| **4** | **Income** (rename from Dividends) — widen to coupons and option premium, monthly shape strip | The owner's tax position makes the *mix* the interesting number, not the total. |
-| **5** | **Token sweep** — replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the `ledger_ui` tokens | **Prerequisite for 6.** Mechanical and greppable. |
-| **6** | **Flip to light** — `.streamlit/config.toml` → light, delete `_THEME_PIN` | Only after 5. The whole point of light-first is the use scene: read outdoors in Gulf daylight, where a dark ground stops emitting and the dimmest token disappears first. **Flipping without 5 paints half the app light-on-light.** |
-| **7** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
-| **8** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Security and Activity are done, so the surviving page set is now known. |
-| **9** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
-| **10** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
+| **1** | **Token sweep** — replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the `ledger_ui` tokens | **Prerequisite for 2.** Mechanical and greppable. |
+| **2** | **Flip to light** — `.streamlit/config.toml` → light, delete `_THEME_PIN` | Only after 1. The whole point of light-first is the use scene: read outdoors in Gulf daylight, where a dark ground stops emitting and the dimmest token disappears first. **Flipping without 1 paints half the app light-on-light.** |
+| **3** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
+| **4** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Security and Activity are done, so the surviving page set is now known. |
+| **5** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
+| **6** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
 
 **Done is:** 24 destinations → 11, five tabs, one navigation system, every page on `ledger_ui`
 tokens, light by default, and loading/empty/error drawn everywhere they can occur.
