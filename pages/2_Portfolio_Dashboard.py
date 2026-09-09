@@ -282,6 +282,19 @@ def _load_extended_metrics():
         ext["analyst_target"]  = ext[t_col].map(lambda t: info_map.get(t, {}).get("targetMeanPrice"))
         ext["beta"]            = ext[t_col].map(lambda t: info_map.get(t, {}).get("beta"))
         ext["dividend_yield"]  = ext[t_col].map(lambda t: info_map.get(t, {}).get("dividendYield"))
+
+        # Ex-dividend date, for the holdings row. yfinance returns a POSIX
+        # timestamp; the Dividend Dashboard already reads the same field.
+        def _exdiv(t):
+            v = info_map.get(t, {}).get("exDividendDate")
+            if not v:
+                return ""
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                return _dt.fromtimestamp(float(v), tz=_tz.utc).strftime("%d %b")
+            except (TypeError, ValueError, OSError, OverflowError):
+                return ""
+        ext["ex_dividend_date"] = ext[t_col].map(_exdiv)
         ext["sector"]          = ext[t_col].map(lambda t: info_map.get(t, {}).get("sector", ""))
         ext["industry"]        = ext[t_col].map(lambda t: info_map.get(t, {}).get("industry", ""))
         ext["country"]         = ext[t_col].map(lambda t: info_map.get(t, {}).get("country", ""))

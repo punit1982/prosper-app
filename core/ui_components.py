@@ -554,10 +554,13 @@ def responsive_holdings(rows, *, group: str = "", limit: int = 25) -> int:
 def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
     """Turn an enriched holdings slice into row data, biggest position first.
 
-    Carries the fields IBKR's own positions list leads with — last price, day
-    change, market value, unrealised P&L% — because "what is it worth and what
-    did it do" is the whole reason for opening the screen. Quantity, average
-    cost and the ratios stay on the desktop table and the deep dive.
+    Carries what a decision needs, on the phone, without opening anything:
+    market value, today in money and percent, quantity at average cost,
+    unrealised in money and percent, dividend yield and ex-date.
+
+    Quantity and average cost used to be desktop-only by an explicit decision
+    recorded here. That was wrong — they are the two figures that say whether
+    a percentage matters, and they were asked for repeatedly.
     """
     import pandas as pd
     # Biggest positions first — a phone shows a couple of dozen rows before the
@@ -579,6 +582,20 @@ def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
         mv  = _num(r.get("market_value"))
         px  = _num(r.get("current_price"))
         chg = _num(r.get("change_pct"))
+        qty = _num(r.get("quantity"))
+        avg = _num(r.get("avg_cost"))
+        dy  = _num(r.get("dividend_yield"))
+        exd = r.get("ex_dividend_date") or ""
+        pos = ""
+        if qty is not None and qty:
+            pos = f"{qty:,.4f}".rstrip("0").rstrip(".")
+            if avg:
+                pos += f" @ {avg:,.2f}"
+        income = []
+        if dy:
+            income.append(f"Div {dy * 100:.1f}%" if dy < 1 else f"Div {dy:.1f}%")
+        if exd:
+            income.append(f"ex {exd}")
         rows.append({
             "symbol":     str(r.get("ticker", "")),
             "name":       str(r.get(name_col, "") or "")[:38],
@@ -586,6 +603,11 @@ def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
             "change_pct": chg,
             "value":      fmt_compact(mv, symbol) if mv is not None else "—",
             "pnl_pct":    _num(r.get("unrealized_pnl_pct")),
+            "position":   pos,
+            "day_gain":   _num(r.get("day_gain")),
+            "unrealized": _num(r.get("unrealized_pnl")),
+            "income":     " · ".join(income),
+            "ccy":        symbol,
             # consumed by the older read-only responsive_holdings list
             "change":       f"{chg:+.2f}%" if chg is not None else "",
             "change_value": chg,
@@ -858,12 +880,22 @@ _TAP_ROWS_CSS = """
   margin:0 !important;font-variant-numeric:tabular-nums;line-height:1.34;
   text-align:left;
 }
+/* Four lines now, not two: identity+value, name+today, position+unrealised,
+   income+price. Size steps down the stack so the eye lands on line 1 first,
+   and every right-hand figure sits in the same column so the list scans
+   vertically the way a broker statement does. */
 [data-testid="stElementContainer"]:has(.p-rowmark)
-  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:first-child{
-  font-size:0.88rem;}
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:nth-child(1){
+  font-size:0.9rem;font-weight:600;}
 [data-testid="stElementContainer"]:has(.p-rowmark)
-  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:last-child{
-  font-size:0.73rem;opacity:0.75;}
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:nth-child(2){
+  font-size:0.78rem;opacity:0.9;margin-top:2px !important;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:nth-child(3){
+  font-size:0.75rem;opacity:0.82;margin-top:3px !important;}
+[data-testid="stElementContainer"]:has(.p-rowmark)
+  ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p:nth-child(4){
+  font-size:0.72rem;opacity:0.62;margin-top:3px !important;}
 [data-testid="stElementContainer"]:has(.p-rowmark)
   ~ [data-testid="stElementContainer"] [data-testid="stButton"] > button p > span{
   white-space:nowrap;flex:0 0 auto;}
@@ -928,19 +960,44 @@ def position_rows(rows, *, key_prefix: str, limit: int = 25,
         value = r.get("value") or ""
         pnl = r.get("pnl_pct")
 
-        right_top = []
-        if price:
-            right_top.append(str(price))
-        if chg is not None:
-            right_top.append(f"{float(chg):+.2f}%")
-        line1_right = _colour_wrap(_sr("  ".join(right_top)), chg) if right_top else ":gray[—]"
+        ccy = r.get("ccy", "")
+        pos = _sr(r.get("position", "") or "")
+        income = _sr(r.get("income", "") or "")
+        day_amt = r.get("day_gain")
+        unreal = r.get("unrealized")
 
-        right_bot = [str(value)] if value else []
-        if pnl is not None:
-            right_bot.append(f"{float(pnl):+.1f}%")
-        line2_right = _colour_wrap(_sr("  ".join(right_bot)), pnl) if right_bot else ":gray[ ]"
+        def _amt(v):
+            """Money, signed, abbreviated only once the digits stop mattering."""
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            sign = "+" if f > 0 else "-" if f < 0 else ""
+            a = abs(f)
+            body = (f"{a / 1e6:,.1f}M" if a >= 1e6
+                    else f"{a / 1e3:,.1f}K" if a >= 100_000
+                    else f"{a:,.0f}")
+            return f"{sign}{ccy + ' ' if ccy else ''}{body}"
 
-        label = f"**{sym}** {line1_right}\n\n{name or ' '} {line2_right}"
+        # Line 1 — identity and what it is worth.
+        line1 = f"**{sym}** {_sr(str(value)) if value else '—'}"
+
+        # Line 2 — name and today, in money AND percent.
+        today = [x for x in (_amt(day_amt), f"{float(chg):+.2f}%" if chg is not None else None) if x]
+        line2 = (f"{name or ' '} "
+                 f"{_colour_wrap(_sr('  '.join(today)), day_amt if day_amt is not None else chg)}"
+                 if today else f"{name or ' '} :gray[ ]")
+
+        # Line 3 — the position, and what it has made, in money AND percent.
+        opened = [x for x in (_amt(unreal), f"{float(pnl):+.1f}%" if pnl is not None else None) if x]
+        line3 = (f"{pos or ' '} "
+                 f"{_colour_wrap(_sr('  '.join(opened)), unreal if unreal is not None else pnl)}"
+                 if opened else None)
+
+        # Line 4 — income, and the last price it is all derived from.
+        line4 = f"{income or ' '} :gray[{_sr(str(price))}]" if (income or price) else None
+
+        label = "\n\n".join([x for x in (line1, line2, line3, line4) if x])
         if st.button(label, key=f"{key_prefix}_row_{i}_{sym}",
                      use_container_width=True):
             clicked = r.get("symbol", "")

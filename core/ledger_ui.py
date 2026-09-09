@@ -245,6 +245,10 @@ CSS = f"""<style>
 .p-stats.c2{{grid-template-columns:repeat(2,1fr);}}
 .p-stats.c3{{grid-template-columns:repeat(3,1fr);}}
 .p-stat{{background:var(--p-paper);padding:var(--p-s3) var(--p-s2);}}
+/* Any cell left alone on the final row spans it, rather than sitting beside
+   a hole. Belt-and-braces with the column stepping in stat_row(). */
+.p-stats.c2>.p-stat:last-child:nth-child(2n+1){{grid-column:span 2;}}
+.p-stats.c3>.p-stat:last-child:nth-child(3n+1){{grid-column:span 3;}}
 .p-stat .k{{font-size:{TYPE['xs'][0]};color:var(--p-ink-3);
   letter-spacing:.04em;text-transform:uppercase;font-weight:600;}}
 .p-stat .v{{font-size:{TYPE['lg'][0]};font-weight:600;color:var(--p-ink);
@@ -276,6 +280,14 @@ CSS = f"""<style>
 .p-row .c{{font-size:{TYPE['sm'][0]};font-weight:500;margin-top:1px;
   font-variant-numeric:tabular-nums;}}
 .p-row .p{{font-size:{TYPE['xs'][0]};color:var(--p-mark);margin-top:2px;}}
+.p-row{{align-items:flex-start;}}
+.p-row .l{{min-width:0;}}
+.p-row .nm{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+/* Second right-hand figure line (unrealized). Same size and weight as the
+   day change above it, so the two read as one column of figures. */
+.p-row .c2{{font-size:{TYPE['sm'][0]};font-weight:500;margin-top:2px;
+  font-variant-numeric:tabular-nums;}}
+.p-row .in{{font-size:{TYPE['xs'][0]};color:var(--p-mark);margin-top:3px;}}
 .p-grp{{display:flex;align-items:baseline;justify-content:space-between;
   padding:var(--p-s4) var(--p-s1) var(--p-s2);
   border-bottom:2px solid var(--p-ink);}}
@@ -571,7 +583,13 @@ def stat_row(stats: Sequence[tuple], *, columns: int = 3) -> str:
     live = [s for s in stats if s[1] not in (None, "", "—")]
     if not live:
         return ""
+    # Never leave a single cell alone on the last row. 4 items in a 3-column
+    # grid renders 3 + 1, and the orphan reads as a rendering fault — which is
+    # exactly what "CURRENCIES 9" beside an empty cell looked like on a phone.
+    # Step the column count down until the rows divide evenly.
     n = max(2, min(3, min(columns, len(live))))
+    while n > 2 and len(live) % n == 1:
+        n -= 1
     cells = []
     for s in live:
         label, value = s[0], s[1]
@@ -601,22 +619,43 @@ def group(label: str, value: str = "") -> str:
 
 
 def ledger_row(ticker: str, name: str, value: str, *, qty: str = "",
-               change: str = "", change_value=None, prov: str = "") -> str:
-    """The IBKR two-line position row — identity left, figures hard right.
+               change: str = "", change_value=None, prov: str = "",
+               unrealized: str = "", unrealized_value=None,
+               income: str = "") -> str:
+    """One position, up to four lines, everything a decision needs.
 
-    v2 adds `qty` (quantity @ average cost) to the identity block and `prov`
-    to the figures block. Both were asked for and neither is in
-    _build_stock_table / _build_fund_table today (§12 P3-6b).
+        LITE                                    USD 9.8K
+        LUMENTUM HOLDINGS INC          +USD 973  +11.04%
+        135 @ 65.20                  +USD 1,240  +14.62%
+        Div 2.1% · ex 12 Sep              live · 191ms
+
+    Figures are right-aligned in one column so the eye scans straight down the
+    list instead of hunting across each row — the reason a broker statement is
+    set this way, and the reason IBKR's positions table stays readable at this
+    density. Lines are omitted when their inputs are absent, so a fund line
+    with no cost basis collapses to two rather than showing empty scaffolding.
+
+    `qty` is quantity @ average cost, `unrealized` the open P&L in money and
+    percent, `income` the yield and ex-date. All four were asked for and none
+    is in _build_stock_table / _build_fund_table today.
     """
-    left = f'<div><div class="tk">{_e(ticker)}</div><div class="nm">{_e(name)}</div>'
-    if qty:
-        left += f'<div class="qt">{_e(qty)}</div>'
-    right = f'<div class="r"><div class="v">{_e(value)}</div>'
+    left = [f'<div class="tk">{_e(ticker)}</div>']
+    right = [f'<div class="v">{_e(value)}</div>']
+    if name:
+        left.append(f'<div class="nm">{_e(name)}</div>')
     if change:
-        right += f'<div class="c {_dir(change_value)}">{change}</div>'
+        right.append(f'<div class="c {_dir(change_value)}">{change}</div>')
+    if qty:
+        left.append(f'<div class="qt">{_e(qty)}</div>')
+    if unrealized:
+        right.append(f'<div class="c2 {_dir(unrealized_value)}">{unrealized}</div>')
+    if income:
+        left.append(f'<div class="in">{_e(income)}</div>')
     if prov:
-        right += prov
-    return f'<div class="p-row" role="link" tabindex="0">{left}</div>{right}</div></div>'
+        right.append(prov)
+    return (f'<div class="p-row" role="link" tabindex="0">'
+            f'<div class="l">{"".join(left)}</div>'
+            f'<div class="r">{"".join(right)}</div></div>')
 
 
 def attention(items: Sequence[Mapping], *, limit: int = 3) -> str:
