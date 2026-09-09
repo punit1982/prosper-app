@@ -220,37 +220,45 @@ mobile_shell()
 # Phase 3: the label moves BELOW the figure. A kicker above a heading is the
 # single most recognisable generated-UI tell, and here it also pushed the one
 # number the page exists for further down the opening screen.
+# Unrealized rides on the SAME line as the total, hard right. It used to be a
+# cell in the stat row below, which meant the two figures a reader actually
+# holds in their head — what it is worth, and what it has made — were a scroll
+# apart. The stat row's "Today" cell repeated the hero's own delta word for
+# word; it is gone.
+_priced = int(pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)),
+                            errors="coerce").notna().sum())
+_unpriced = max(0, holdings_count - _priced)
+_sub = f"{holdings_count} holdings"
+if _unpriced:
+    _sub += f" · {_unpriced} unpriced"
 _ui.write(_ui.hero(
     fmt_compact(net_portfolio, base_currency),
     delta=f"{day_gain:+,.0f} ({day_pct:+.2f}%) today",
     delta_value=day_gain,
-    sub=f"Net portfolio value · {holdings_count} holdings · {base_currency}",
+    sub=_sub,
     title=f"{base_currency} {net_portfolio:,.2f}",
+    aside_label="Unrealized",
+    aside_value=fmt_compact(unrealized_pnl, base_currency),
+    aside_delta=f"{unrealized_pct:+.1f}%",
+    aside_value_num=unrealized_pnl,
 ))
 
-# Two 3-cell carded grids become one ruled block. stat_row drops cells with no
-# value before laying out, so "Realized —" and "Div / yr —" stop occupying a
-# slot each instead of rendering as holes.
-_priced = int(pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)),
-                            errors="coerce").notna().sum())
-_unpriced = max(0, holdings_count - _priced)
-
+# The carded stat grid is one small line now. Cash, equity, realized and the
+# income estimate are context, not headlines: they belong at caption weight
+# under the two figures that are. Today and Unrealized are NOT here — the hero
+# above states both, and stating them twice was the first thing the owner
+# noticed on the live screen.
 _div_cache_key = f"cmd_div_income_{base_currency}"
 div_income_est = st.session_state.get(_div_cache_key, 0)
-_ui.write(_ui.stat_row([
-    ("Today", fmt_compact(day_gain, base_currency), f"{day_pct:+.2f}%", day_gain),
-    ("Unrealized", fmt_compact(unrealized_pnl, base_currency), f"{unrealized_pct:+.1f}%", unrealized_pnl),
-    ("Realized", fmt_compact(realized_pnl, base_currency) if realized_pnl else "", "", realized_pnl),
-    ("Cash", fmt_compact(total_cash, base_currency) if total_cash else ""),
-    # "Currencies: 9" was here. It is trivia — the count never changes what
-    # you do, and it cost a cell on the screen you look at every morning.
-    # Replaced with how much of the book is actually priced right now, which
-    # is the first thing that explains a total that looks wrong. Phase 1 made
-    # this computable and nothing displayed it.
-    ("Priced", f"{_priced}/{holdings_count}" if holdings_count else "",
-     f"{_unpriced} unpriced" if _unpriced else "", -1 if _unpriced else None),
-    ("Div / yr", fmt_compact(div_income_est, base_currency) if div_income_est > 0 else ""),
-], columns=3))
+_equity = net_portfolio - (total_cash or 0)
+_facts = [f"Equity {fmt_compact(_equity, base_currency)}"]
+if total_cash:
+    _facts.append(f"Cash {fmt_compact(total_cash, base_currency)}")
+if realized_pnl:
+    _facts.append(f"Realized {fmt_compact(realized_pnl, base_currency)}")
+if div_income_est > 0:
+    _facts.append(f"Income {fmt_compact(div_income_est, base_currency)}/yr")
+_ui.write(_ui.facts(_facts))
 
 # Market regime — one line, with the guidance behind a tap rather than a
 # permanently-open 173px block of chips. The regime still reads at a glance;
@@ -258,271 +266,40 @@ _ui.write(_ui.stat_row([
 from core.ui_components import status_chip as _chip
 _regime_level = {"Growing": "good", "Bouncing Back": "good",
                  "Heating Up": "warn", "Slowing Down": "critical"}.get(regime_name, "neutral")
-st.markdown(
-    "<div style='display:flex;align-items:center;gap:8px;margin:0.1rem 0 0.5rem;"
-    "font-size:0.8rem'>"
-    "<span style='opacity:0.55;text-transform:uppercase;letter-spacing:0.05em;"
-    f"font-size:0.68rem;font-weight:600'>Market cycle</span>{_chip(regime_name, _regime_level)}"
-    "</div>",
-    unsafe_allow_html=True,
-)
+# One row, not two. The label, the chip and the explanation were a 15px line
+# plus a 48px disclosure — 63px on the screen you open every morning to say a
+# single word. The word is the trigger now: tap it and the meaning appears.
 if _regime_explanation:
-    with st.expander(f"What “{regime_name}” means for you", expanded=False):
+    with st.popover(f"Market cycle · {regime_name} ⓘ", use_container_width=False):
         st.markdown(f"{_regime_icon} **{regime_name}** — {_regime_explanation}")
         st.markdown(f"**What to do:** {_regime_action}")
-
-st.divider()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3: WHAT NEEDS YOU, THEN WHAT MOVED
-# ══════════════════════════════════════════════════════════════════════════════
-# Order reversed and one block deleted, from a live measurement at 375px.
-#
-# Was: Top Movers (360px) + P&L Attribution (611px) + Attention Required,
-# in that order, inside st.columns(3) — which stacks on a phone. So the
-# decision queue, the whole point of this page, began 1,728px down, on
-# screen 3, behind 971px of "what moved today" split across two blocks.
-#
-# The two were not duplicates: movers ranked by PERCENT, attribution by
-# MONEY. But on a 2.3M book the money ranking is the one that matters —
-# +11% on a small line is not news, +1.5% on the largest holding is — so
-# there is now one list, ranked by money, showing both figures. Roughly
-# 700px saved and the queue moved to screen one.
-
-st.markdown("#### Attention Required")
-alerts = []
-
-# Concentration alerts
-if "market_value" in enriched.columns:
-    mv = pd.to_numeric(enriched["market_value"], errors="coerce").fillna(0)
-    total = mv.sum()
-    if total > 0:
-        weights = mv / total
-        for idx, w in weights.items():
-            if w > 0.15:
-                ticker = enriched.loc[idx, "ticker"]
-                alerts.append(("critical", "🎯", f"**{ticker}** is {w:.0%} of portfolio"))
-
-        if "sector" in enriched.columns:
-            sector_weights = enriched.copy()
-            sector_weights["mv"] = mv
-            sector_agg = sector_weights.groupby("sector")["mv"].sum() / total
-            for sec, sw in sector_agg.items():
-                if sw > 0.35 and sec not in ("", "Unknown", None):
-                    alerts.append(("warn", "🎯", f"**{sec}** sector {sw:.0%}"))
-
-# Big daily drops
-if "day_change_pct" in enriched.columns:
-    big_drops = enriched[pd.to_numeric(enriched["day_change_pct"], errors="coerce") < -3]
-    for _, row in big_drops.iterrows():
-        pct = float(row["day_change_pct"])
-        alerts.append(("warn", "📉", f"**{row['ticker']}** down {pct:.1f}%"))
-
-# Earnings within 5 days — use cached earnings data if available (avoid slow batch fetch)
-_earnings_cache = st.session_state.get("cmd_earnings_alerts", [])
-for tk, days in _earnings_cache:
-    tag = "TODAY" if days == 0 else f"in {days}d"
-    alerts.append(("neutral", "📅", f"**{tk}** earnings {tag}"))
-
-# AI analysis coverage
-try:
-    analyses = get_all_prosper_analyses()
-    if not analyses.empty:
-        cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        recent = analyses[analyses["analysis_date"] >= cutoff]
-        coverage = len(recent) / holdings_count * 100 if holdings_count > 0 else 0
-        if coverage < 50:
-            alerts.append(("neutral", "🤖", f"Only {coverage:.0f}% analysed (7d)"))
-except Exception:
-    pass
-
-# FORTRESS regime warnings
-try:
-    from core.fortress import check_circuit_breakers
-    if regime_name == "Slowing Down":
-        alerts.append(("warn", "🏰", "**Slowing Down** regime active — reduce risk"))
-    elif regime_name == "Heating Up":
-        alerts.append(("warn", "🏰", "**Heating Up** — tighten stops, trim winners"))
-
-    if total_cost > 0:
-        dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
-        if dd_pct <= -5:
-            cb = check_circuit_breakers(dd_pct)
-            level = cb["portfolio_level"]["level"]
-            if level != "NONE":
-                alerts.append(("critical", "🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
-except Exception:
-    pass
-
-if alerts:
-    # Phase 3: the same alerts, rendered as ruled rows instead of eight
-    # tinted pills of one visual class. Severity now reads from a dot and
-    # the row's own words; the emoji, the status chip and the
-    # rgba(255,255,255,0.03) fill (which only works on a dark ground) are
-    # gone. Alert text and ordering are unchanged.
-    #
-    # Sorted so critical outranks warn outranks neutral — previously the
-    # first eight in generation order won, which is concentration-then-
-    # drops-then-earnings, not severity.
-    import re as _re
-    from core.ledger_ui import attention as _attention
-
-    _rank = {"critical": 0, "warn": 1, "neutral": 2}
-    _lvl = {"critical": "critical", "warn": "warn", "neutral": "info"}
-    _ordered = sorted(alerts, key=lambda a: _rank.get(a[0], 3))
-
-    _items = []
-    for level, _icon, text in _ordered:
-        # Alert text is authored with Markdown emphasis ("**ADBE** down
-        # 6.7%") and goes into raw HTML, where Streamlit does not run the
-        # Markdown parser. attention() escapes its inputs, so strip the
-        # emphasis markers rather than converting them to tags.
-        _items.append({
-            "level": _lvl.get(level, "info"),
-            "title": _re.sub(r"\*\*(.+?)\*\*", r"\1", text),
-            "why": "",
-            "source": "",
-        })
-    st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
 else:
-    # The healthy state, designed. This is the modal condition — most days
-    # nothing has breached anything — so it should read as a finished
-    # answer, not as an absence of content.
-    st.markdown(_ui.empty(
-        "Nothing needs you today",
-        "No holding is outside its concentration limit, no position moved "
-        "more than 3%, and the market cycle has not changed. The next thing "
-        "that could need attention is an earnings date.",
-    ), unsafe_allow_html=True)
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:8px;margin:0.1rem 0 0.5rem;"
+        "font-size:0.8rem'>"
+        "<span style='opacity:0.55;text-transform:uppercase;letter-spacing:0.05em;"
+        f"font-size:0.68rem;font-weight:600'>Market cycle</span>{_chip(regime_name, _regime_level)}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
-
-st.markdown("#### What moved the portfolio today")
-
-if "day_change_pct" in enriched.columns:
-    movers_df = enriched[["ticker", "name", "day_change_pct", "day_gain", "market_value"]].copy()
-    movers_df["day_change_pct"] = pd.to_numeric(movers_df["day_change_pct"], errors="coerce")
-    movers_df["day_gain"] = pd.to_numeric(movers_df["day_gain"], errors="coerce")
-    movers_df = movers_df.dropna(subset=["day_change_pct"])
-    # Drop exactly-zero rows: a missing day change is filled as 0, not null,
-    # so without this the top-3 / bottom-3 fill with "+0.0%" lines in ticker
-    # order and the widget looks like it has data when it has none.
-    movers_df = movers_df[movers_df["day_change_pct"] != 0]
-
-    if not movers_df.empty:
-        # Ranked by MONEY, not percent. On a book this size a +11% move on a
-        # small line contributes less than +1.5% on the largest holding, and
-        # the old percent ranking put the former at the top every time. Both
-        # figures are still shown; only the ordering changed.
-        _mv = movers_df.dropna(subset=["day_gain"])
-        if _mv.empty:
-            _mv = movers_df.assign(day_gain=0.0)
-        gainers = _mv.nlargest(3, "day_gain")
-        losers = _mv.nsmallest(3, "day_gain")
-
-        # Phase 3: tinted cards with a 3px coloured border-left become
-        # ruled rows. Two substantive changes, not just styling:
-        #   * the MONEY is now the same size and weight as the percent,
-        #     right-aligned with it. It was 0.85em in #666 — about 2.8:1
-        #     on this ground, which is below the AA floor and is why it
-        #     read as faint grey noise beside the number that matters.
-        #   * the position's market value leads the row, so a +11% on a
-        #     small line no longer looks like a +11% on a large one.
-        _rows = []
-        for _, row in pd.concat([gainers, losers]).iterrows():
-            pct = float(row["day_change_pct"])
-            amt = row.get("day_gain")
-            amt = float(amt) if pd.notna(amt) else None
-            _rows.append(_ui.ledger_row(
-                str(row["ticker"]),
-                str(row.get("name") or "")[:38],
-                fmt_compact(row.get("market_value"), base_currency),
-                change=_ui.money(amt, pct, base_currency) if amt is not None
-                       else f'<span class="{"up" if pct > 0 else "down"}">{pct:+.1f}%</span>',
-                change_value=amt if amt is not None else pct,
-            ))
-        st.markdown("".join(_rows), unsafe_allow_html=True)
-    else:
-        st.caption("No price data available yet.")
-else:
-    st.caption("Visit Portfolio Dashboard to load live prices.")
-
-# ── Performance Attribution ──
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4: PORTFOLIO HEAT MAP
+# ORDER OF THIS PAGE
 # ══════════════════════════════════════════════════════════════════════════════
-# The heat map uses the full width now: the allocation pie that shared
-# this row was removed as a duplicate of Holdings -> Allocation.
+# Set by the owner after reading the live screen, and it is a judgement about
+# what the page is for rather than about layout:
 #
-# It is behind a disclosure on purpose. Measured on the live app: 401px — an
-# eighth of this page — for a treemap of 193 tiles inside 260px of usable width
-# (a colour bar takes the rest), where exactly one tile was wide enough to
-# carry a readable label. "What moved the portfolio today", directly above it,
-# answers the same question in money and in words. Closed it costs 48px; open
-# it is still there for anyone on a wider screen.
-_hm_open = st.expander("Portfolio heat map — every holding by weight, coloured by today")
-with _hm_open:
-  if "day_change_pct" in enriched.columns and "market_value" in enriched.columns:
-      hm_df = enriched[["ticker", "name", "market_value", "day_change_pct"]].copy()
-      hm_df["market_value"] = pd.to_numeric(hm_df["market_value"], errors="coerce").fillna(0)
-      hm_df["day_change_pct"] = pd.to_numeric(hm_df["day_change_pct"], errors="coerce").fillna(0)
-      hm_df = hm_df[hm_df["market_value"] > 0]
-      hm_df["label"] = hm_df["ticker"] + "<br>" + hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%")
-
-      if not hm_df.empty:
-          try:
-              # Add sector if available for hierarchical treemap
-              if "sector" in enriched.columns:
-                  sector_map = dict(zip(enriched["ticker"], enriched.get("sector", "").fillna("Other")))
-                  hm_df["sector"] = hm_df["ticker"].map(sector_map).fillna("Other")
-                  hm_df["sector"] = hm_df["sector"].replace({"": "Other", "nan": "Other"})
-                  path_cols = ["sector", "label"]
-              else:
-                  path_cols = ["label"]
-
-              fig = px.treemap(
-                  hm_df,
-                  path=path_cols,
-                  values="market_value",
-                  color="day_change_pct",
-                  color_continuous_scale=_ui.DIVERGING,
-                  color_continuous_midpoint=0,
-              )
-              fig.update_layout(
-                  margin=dict(t=5, l=5, r=5, b=5),
-                  height=350,
-                  coloraxis_colorbar=dict(title="Day %", len=0.5),
-                  paper_bgcolor="rgba(0,0,0,0)",
-              )
-              fig.update_traces(textfont=dict(size=13), textposition="middle center")
-              show_chart(fig, key="cmd_heatmap")
-          except Exception:
-              # Fallback: simple bar chart if treemap fails
-              hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
-              colors = ["#047857" if v >= 0 else "#b91c1c" for v in hm_df["day_change_pct"]]
-              fig = go.Figure(go.Bar(
-                  x=hm_df["market_value"], y=hm_df["ticker"],
-                  orientation="h", marker_color=colors,
-                  text=hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%"),
-                  textposition="outside",
-              ))
-              fig.update_layout(
-                  height=350, margin=dict(t=5, l=5, r=40, b=5),
-                  paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                  xaxis_title="Market Value", yaxis_title="",
-              )
-              show_chart(fig, key="cmd_heatmap_fallback")
-
-# Allocation by Sector was REMOVED from the Command Center (Phase 3).
+#   value and what it made  →  what to do about it  →  what moved  →  what is
+#   merely flagged  →  the long view
 #
-# This page answers "am I fine, and does anything need me today?". A sector
-# breakdown answers "how is the book composed?", which is a different question
-# asked at a different time — and it was the third place the same split
-# appeared, after Holdings -> Allocation and Portfolio Summary. Removing it
-# takes ~350px off the scroll and leaves one owner of the question.
-st.divider()
+# The briefing used to sit on screen four, below a heat map. It is the only
+# block on the page that answers "so what", so it now follows the figures
+# directly, and collapses to its own headline once read. "Attention Required"
+# used to open the page; it lists conditions, not actions — a 3% drop on a
+# small line and a sector concentration read identically — so it comes after
+# the briefing that already accounts for them.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 5: AI BRIEFING (auto-generated)
@@ -666,33 +443,53 @@ def _split_briefing(text: str) -> dict:
     return {k: "\n".join(v).strip() for k, v in parts.items() if "\n".join(v).strip()}
 
 
+def _briefing_headline(text: str) -> str:
+    """The first sentence of the pulse — what the whole briefing collapses to."""
+    _p = _split_briefing(text)
+    _pulse = (_p.get("portfolio pulse") or text or "").strip()
+    _pulse = _pulse.replace("**", "").replace("\n", " ")
+    for _stop in (". ", "; "):
+        if _stop in _pulse:
+            _pulse = _pulse.split(_stop, 1)[0]
+            break
+    _pulse = _pulse.strip(" .")
+    return (_pulse[:96] + "…") if len(_pulse) > 96 else (_pulse or "Today's briefing")
+
+
 def _render_briefing(text: str, meta: str = "") -> None:
-    """Pulse and actions up front, explanation behind a tap."""
+    """Pulse and actions up front, explanation behind a tap.
+
+    The whole block sits in a disclosure whose LABEL is the briefing's own
+    headline, open on arrival. Read it, tap it, and 800px of the page becomes
+    one line that still says what today was — which is what you want on the
+    second and third visit of the same day, and it was 27% of the screen.
+    """
     _p = _split_briefing(text)
     _pulse = _p.get("portfolio pulse")
     _actions = _p.get("action items")
     _rest = [(k.title(), v) for k, v in _p.items()
              if k not in ("portfolio pulse", "action items")]
 
-    if not _pulse and not _actions:
-        st.markdown(_safe_md(text))            # unrecognised shape — show it all
+    with st.expander(_briefing_headline(text), expanded=True):
+        if not _pulse and not _actions:
+            st.markdown(_safe_md(text))        # unrecognised shape — show it all
+            if meta:
+                st.caption(meta)
+            return
+
+        if _pulse:
+            st.markdown(_ui.read(f"<b>What changed.</b> {_html.escape(_pulse)}"),
+                        unsafe_allow_html=True)
+        if _actions:
+            st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
+            st.markdown(_safe_md(_actions))
+        if _rest:
+            with st.expander("Why it matters — key moves and risk watch", expanded=False):
+                for _title, _body in _rest:
+                    st.markdown(f"**{_title}**")
+                    st.markdown(_safe_md(_body))
         if meta:
             st.caption(meta)
-        return
-
-    if _pulse:
-        st.markdown(_ui.read(f"<b>What changed.</b> {_html.escape(_pulse)}"),
-                    unsafe_allow_html=True)
-    if _actions:
-        st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
-        st.markdown(_safe_md(_actions))
-    if _rest:
-        with st.expander("Why it matters — key moves and risk watch", expanded=False):
-            for _title, _body in _rest:
-                st.markdown(f"**{_title}**")
-                st.markdown(_safe_md(_body))
-    if meta:
-        st.caption(meta)
 
 
 # Auto-show: check session → DB → offer generate button
@@ -743,6 +540,241 @@ else:
 
 st.divider()
 
+st.markdown("#### Holdings")
+
+# Was "What moved the portfolio today" — a fixed top-3-up / bottom-3-down list.
+# The owner's brief: this should be the holdings list, top ten, ranked by the
+# thing being asked about, with the ranking switchable. A list you can re-rank
+# answers four questions in the same 10 rows; a fixed one answers a third of
+# one. The cut is still the top TEN, not the whole book — the full ledger is
+# one tap away and is what the Holdings page is for.
+_VIEWS = {
+    "Today":      ("day_gain",           "money"),
+    "Today %":    ("day_change_pct",     "pct"),
+    "Value":      ("market_value",       "size"),
+    "Unrealized": ("unrealized_pnl",     "money"),
+    "Country":    ("__country",          "group"),
+}
+_ui.keep_row()
+_vc1, _vc2 = st.columns([1, 3])
+with _vc1:
+    st.caption("Rank by")
+with _vc2:
+    _view = st.segmented_control(
+        "Rank by", list(_VIEWS), default="Today",
+        key="cmd_holdings_view", label_visibility="collapsed",
+    ) or "Today"
+
+_col, _kind = _VIEWS[_view]
+
+if "market_value" not in enriched.columns:
+    st.caption("Visit Holdings to load live prices.")
+elif _kind == "group":
+    # Currency is the country proxy this book already uses everywhere else.
+    _CUR_COUNTRY = {
+        "USD": "United States", "AED": "UAE", "EUR": "Europe", "GBP": "United Kingdom",
+        "INR": "India", "SGD": "Singapore", "HKD": "Hong Kong", "AUD": "Australia",
+        "CAD": "Canada", "JPY": "Japan", "CHF": "Switzerland", "CNY": "China",
+        "BRL": "Brazil", "KRW": "South Korea", "SEK": "Sweden", "NOK": "Norway",
+    }
+    _g = enriched.copy()
+    _g["_mv"] = pd.to_numeric(_g.get("market_value"), errors="coerce").fillna(0)
+    _g["_dg"] = pd.to_numeric(_g.get("day_gain"), errors="coerce").fillna(0)
+    _g["_cty"] = _g.get("currency", pd.Series("", index=_g.index)).fillna("").map(
+        lambda c: _CUR_COUNTRY.get(str(c).upper(), str(c).upper() or "Unknown"))
+    _agg = _g.groupby("_cty").agg(mv=("_mv", "sum"), dg=("_dg", "sum"),
+                                  n=("_mv", "size")).sort_values("mv", ascending=False)
+    _total_mv = float(_agg["mv"].sum()) or 1.0
+    _rows = []
+    for _cty, r in _agg.head(10).iterrows():
+        _pct = float(r["dg"]) / (float(r["mv"]) - float(r["dg"])) * 100 if (r["mv"] - r["dg"]) else 0.0
+        _rows.append(_ui.ledger_row(
+            str(_cty),
+            f"{int(r['n'])} holdings · {r['mv'] / _total_mv:.0%} of book",
+            fmt_compact(r["mv"], base_currency),
+            change=_ui.money(float(r["dg"]), _pct, base_currency),
+            change_value=float(r["dg"]),
+        ))
+    _ui.write("".join(_rows))
+else:
+    _h = enriched.copy()
+    _h["_rank"] = pd.to_numeric(_h.get(_col), errors="coerce")
+    _h["_mv"] = pd.to_numeric(_h.get("market_value"), errors="coerce")
+    _h["_dg"] = pd.to_numeric(_h.get("day_gain"), errors="coerce")
+    _h["_dp"] = pd.to_numeric(_h.get("day_change_pct"), errors="coerce")
+    _h["_up"] = pd.to_numeric(_h.get("unrealized_pnl"), errors="coerce")
+    _h["_upp"] = pd.to_numeric(_h.get("unrealized_pnl_pct"), errors="coerce")
+    _h = _h.dropna(subset=["_rank"])
+    if _view in ("Today", "Today %"):
+        # A day's news is what moved MOST, in either direction — so rank on the
+        # absolute move and keep the sign in the figure, rather than showing ten
+        # winners and no losers.
+        _h = _h[_h["_rank"] != 0]
+        _h = _h.assign(_abs=_h["_rank"].abs()).sort_values("_abs", ascending=False)
+    else:
+        _h = _h.sort_values("_rank", ascending=False)
+
+    if _h.empty:
+        st.caption("No price data available yet.")
+    else:
+        _rows = []
+        for _, row in _h.head(10).iterrows():
+            if _view == "Unrealized":
+                _amt, _pct = row.get("_up"), row.get("_upp")
+            else:
+                _amt, _pct = row.get("_dg"), row.get("_dp")
+            _amt = float(_amt) if pd.notna(_amt) else None
+            _pct = float(_pct) if pd.notna(_pct) else 0.0
+            _rows.append(_ui.ledger_row(
+                str(row["ticker"]),
+                str(row.get("name") or "")[:38],
+                fmt_compact(row.get("_mv"), base_currency),
+                change=_ui.money(_amt, _pct, base_currency) if _amt is not None
+                       else f'<span class="{"up" if _pct > 0 else "down"}">{_pct:+.1f}%</span>',
+                change_value=_amt if _amt is not None else _pct,
+            ))
+        _ui.write("".join(_rows))
+        # st.page_link resolves against the ENTRYPOINT. Under the app that is
+        # app.py and this path is right; under AppTest, which runs this file as
+        # the entrypoint, it resolves against views/ and raises. The link is
+        # not worth failing a page over.
+        try:
+            st.page_link("views/2_Portfolio_Dashboard.py",
+                         label=f"All {holdings_count} holdings",
+                         icon=":material/table_chart:")
+        except Exception:
+            pass
+
+
+# ── Performance Attribution ──
+st.divider()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3: WHAT NEEDS YOU, THEN WHAT MOVED
+# ══════════════════════════════════════════════════════════════════════════════
+# Order reversed and one block deleted, from a live measurement at 375px.
+#
+# Was: Top Movers (360px) + P&L Attribution (611px) + Attention Required,
+# in that order, inside st.columns(3) — which stacks on a phone. So the
+# decision queue, the whole point of this page, began 1,728px down, on
+# screen 3, behind 971px of "what moved today" split across two blocks.
+#
+# The two were not duplicates: movers ranked by PERCENT, attribution by
+# MONEY. But on a 2.3M book the money ranking is the one that matters —
+# +11% on a small line is not news, +1.5% on the largest holding is — so
+# there is now one list, ranked by money, showing both figures. Roughly
+# 700px saved and the queue moved to screen one.
+
+st.markdown("#### Attention Required")
+alerts = []
+
+# Concentration alerts
+if "market_value" in enriched.columns:
+    mv = pd.to_numeric(enriched["market_value"], errors="coerce").fillna(0)
+    total = mv.sum()
+    if total > 0:
+        weights = mv / total
+        for idx, w in weights.items():
+            if w > 0.15:
+                ticker = enriched.loc[idx, "ticker"]
+                alerts.append(("critical", "🎯", f"**{ticker}** is {w:.0%} of portfolio"))
+
+        if "sector" in enriched.columns:
+            sector_weights = enriched.copy()
+            sector_weights["mv"] = mv
+            sector_agg = sector_weights.groupby("sector")["mv"].sum() / total
+            for sec, sw in sector_agg.items():
+                if sw > 0.35 and sec not in ("", "Unknown", None):
+                    alerts.append(("warn", "🎯", f"**{sec}** sector {sw:.0%}"))
+
+# Big daily drops
+if "day_change_pct" in enriched.columns:
+    big_drops = enriched[pd.to_numeric(enriched["day_change_pct"], errors="coerce") < -3]
+    for _, row in big_drops.iterrows():
+        pct = float(row["day_change_pct"])
+        alerts.append(("warn", "📉", f"**{row['ticker']}** down {pct:.1f}%"))
+
+# Earnings within 5 days — use cached earnings data if available (avoid slow batch fetch)
+_earnings_cache = st.session_state.get("cmd_earnings_alerts", [])
+for tk, days in _earnings_cache:
+    tag = "TODAY" if days == 0 else f"in {days}d"
+    alerts.append(("neutral", "📅", f"**{tk}** earnings {tag}"))
+
+# AI analysis coverage
+try:
+    analyses = get_all_prosper_analyses()
+    if not analyses.empty:
+        cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent = analyses[analyses["analysis_date"] >= cutoff]
+        coverage = len(recent) / holdings_count * 100 if holdings_count > 0 else 0
+        if coverage < 50:
+            alerts.append(("neutral", "🤖", f"Only {coverage:.0f}% analysed (7d)"))
+except Exception:
+    pass
+
+# FORTRESS regime warnings
+try:
+    from core.fortress import check_circuit_breakers
+    if regime_name == "Slowing Down":
+        alerts.append(("warn", "🏰", "**Slowing Down** regime active — reduce risk"))
+    elif regime_name == "Heating Up":
+        alerts.append(("warn", "🏰", "**Heating Up** — tighten stops, trim winners"))
+
+    if total_cost > 0:
+        dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
+        if dd_pct <= -5:
+            cb = check_circuit_breakers(dd_pct)
+            level = cb["portfolio_level"]["level"]
+            if level != "NONE":
+                alerts.append(("critical", "🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
+except Exception:
+    pass
+
+if alerts:
+    # Phase 3: the same alerts, rendered as ruled rows instead of eight
+    # tinted pills of one visual class. Severity now reads from a dot and
+    # the row's own words; the emoji, the status chip and the
+    # rgba(255,255,255,0.03) fill (which only works on a dark ground) are
+    # gone. Alert text and ordering are unchanged.
+    #
+    # Sorted so critical outranks warn outranks neutral — previously the
+    # first eight in generation order won, which is concentration-then-
+    # drops-then-earnings, not severity.
+    import re as _re
+    from core.ledger_ui import attention as _attention
+
+    _rank = {"critical": 0, "warn": 1, "neutral": 2}
+    _lvl = {"critical": "critical", "warn": "warn", "neutral": "info"}
+    _ordered = sorted(alerts, key=lambda a: _rank.get(a[0], 3))
+
+    _items = []
+    for level, _icon, text in _ordered:
+        # Alert text is authored with Markdown emphasis ("**ADBE** down
+        # 6.7%") and goes into raw HTML, where Streamlit does not run the
+        # Markdown parser. attention() escapes its inputs, so strip the
+        # emphasis markers rather than converting them to tags.
+        _items.append({
+            "level": _lvl.get(level, "info"),
+            "title": _re.sub(r"\*\*(.+?)\*\*", r"\1", text),
+            "why": "",
+            "source": "",
+        })
+    st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
+else:
+    # The healthy state, designed. This is the modal condition — most days
+    # nothing has breached anything — so it should read as a finished
+    # answer, not as an absence of content.
+    st.markdown(_ui.empty(
+        "Nothing needs you today",
+        "No holding is outside its concentration limit, no position moved "
+        "more than 3%, and the market cycle has not changed. The next thing "
+        "that could need attention is an earnings date.",
+    ), unsafe_allow_html=True)
+
+
+st.divider()
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 6: PORTFOLIO VALUE HISTORY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -773,3 +805,76 @@ if not nav_history.empty and len(nav_history) > 1:
 else:
     st.caption("NAV snapshots accumulate daily when you visit the Dashboard. Check back soon.")
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4: PORTFOLIO HEAT MAP
+# ══════════════════════════════════════════════════════════════════════════════
+# The heat map uses the full width now: the allocation pie that shared
+# this row was removed as a duplicate of Holdings -> Allocation.
+#
+# It is behind a disclosure on purpose. Measured on the live app: 401px — an
+# eighth of this page — for a treemap of 193 tiles inside 260px of usable width
+# (a colour bar takes the rest), where exactly one tile was wide enough to
+# carry a readable label. "What moved the portfolio today", directly above it,
+# answers the same question in money and in words. Closed it costs 48px; open
+# it is still there for anyone on a wider screen.
+_hm_open = st.expander("Portfolio heat map — every holding by weight, coloured by today")
+with _hm_open:
+  if "day_change_pct" in enriched.columns and "market_value" in enriched.columns:
+      hm_df = enriched[["ticker", "name", "market_value", "day_change_pct"]].copy()
+      hm_df["market_value"] = pd.to_numeric(hm_df["market_value"], errors="coerce").fillna(0)
+      hm_df["day_change_pct"] = pd.to_numeric(hm_df["day_change_pct"], errors="coerce").fillna(0)
+      hm_df = hm_df[hm_df["market_value"] > 0]
+      hm_df["label"] = hm_df["ticker"] + "<br>" + hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%")
+
+      if not hm_df.empty:
+          try:
+              # Add sector if available for hierarchical treemap
+              if "sector" in enriched.columns:
+                  sector_map = dict(zip(enriched["ticker"], enriched.get("sector", "").fillna("Other")))
+                  hm_df["sector"] = hm_df["ticker"].map(sector_map).fillna("Other")
+                  hm_df["sector"] = hm_df["sector"].replace({"": "Other", "nan": "Other"})
+                  path_cols = ["sector", "label"]
+              else:
+                  path_cols = ["label"]
+
+              fig = px.treemap(
+                  hm_df,
+                  path=path_cols,
+                  values="market_value",
+                  color="day_change_pct",
+                  color_continuous_scale=_ui.DIVERGING,
+                  color_continuous_midpoint=0,
+              )
+              fig.update_layout(
+                  margin=dict(t=5, l=5, r=5, b=5),
+                  height=350,
+                  coloraxis_colorbar=dict(title="Day %", len=0.5),
+                  paper_bgcolor="rgba(0,0,0,0)",
+              )
+              fig.update_traces(textfont=dict(size=13), textposition="middle center")
+              show_chart(fig, key="cmd_heatmap")
+          except Exception:
+              # Fallback: simple bar chart if treemap fails
+              hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
+              colors = ["#047857" if v >= 0 else "#b91c1c" for v in hm_df["day_change_pct"]]
+              fig = go.Figure(go.Bar(
+                  x=hm_df["market_value"], y=hm_df["ticker"],
+                  orientation="h", marker_color=colors,
+                  text=hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%"),
+                  textposition="outside",
+              ))
+              fig.update_layout(
+                  height=350, margin=dict(t=5, l=5, r=40, b=5),
+                  paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                  xaxis_title="Market Value", yaxis_title="",
+              )
+              show_chart(fig, key="cmd_heatmap_fallback")
+
+# Allocation by Sector was REMOVED from the Command Center (Phase 3).
+#
+# This page answers "am I fine, and does anything need me today?". A sector
+# breakdown answers "how is the book composed?", which is a different question
+# asked at a different time — and it was the third place the same split
+# appeared, after Holdings -> Allocation and Portfolio Summary. Removing it
+# takes ~350px off the scroll and leaves one owner of the question.

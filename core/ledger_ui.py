@@ -197,6 +197,16 @@ CSS = f"""<style>
    Measured on every page: a 63px band of nothing between two sections, one
    per CSS-only injection. Collapse any container whose whole payload is a
    <style>. Containers that also carry a marker div keep their own rules. */
+/* Streamlit tags an st.html container "stHtml-empty" and hides it with its own
+   rule. It decides that once, and after a rerun that swaps the body — the
+   Command Center's Holdings list changing rank, for instance — the class stays
+   on a container that now holds 2kB of rows. Measured: eight ledger rows in the
+   DOM, correct in every particular, inside display:none.
+   Un-hide any container whose stHtml actually has element children. This does
+   NOT resurrect genuinely empty ones: they have none. */
+[data-testid="stElementContainer"].stHtml-empty:has(> [data-testid="stHtml"] > *){{
+  display:block !important;
+}}
 [data-testid="stElementContainer"]:has(> [data-testid="stHtml"] > style:only-child),
 [data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] > style:only-child){{
   display:none !important;
@@ -243,13 +253,32 @@ CSS = f"""<style>
 
 /* ── hero. No label above the number: an eyebrow is a hard ban, and the
    descriptive line reads better under the figure anyway. ────────────── */
-.p-hero{{padding:var(--p-s2) 0 var(--p-s4);}}
+/* The second figure sits BESIDE the first, not in a box below it. The stat
+   row underneath used to repeat the day change the hero already states, and
+   carry unrealized as a third cell — two of the three numbers a reader wants
+   were a scroll apart from each other and one was said twice. */
+.p-hero{{padding:var(--p-s2) 0 var(--p-s4);
+  display:flex;align-items:flex-start;justify-content:space-between;gap:var(--p-s4);}}
+.p-hero .main{{flex:1 1 auto;min-width:0;}}
+.p-hero .aside{{flex:0 0 auto;text-align:right;padding-top:6px;}}
+.p-hero .aside .k{{font-size:{TYPE['xs'][0]};font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--p-ink-3);}}
+.p-hero .aside .v2{{font-size:{TYPE['lg'][0]};font-weight:600;color:var(--p-ink);
+  font-variant-numeric:tabular-nums;margin-top:2px;}}
+.p-hero .aside .d2{{font-size:{TYPE['sm'][0]};font-weight:600;
+  font-variant-numeric:tabular-nums;}}
 .p-hero .v{{font-size:{TYPE['hero'][0]};line-height:{TYPE['hero'][1]};
   font-weight:600;letter-spacing:-.028em;color:var(--p-ink);
   font-variant-numeric:tabular-nums;}}
 .p-hero .d{{font-size:{TYPE['lg'][0]};font-weight:600;margin-top:var(--p-s1);
   font-variant-numeric:tabular-nums;}}
 .p-hero .s{{font-size:{TYPE['sm'][0]};color:var(--p-ink-3);margin-top:var(--p-s2);}}
+/* A single caption-weight line for the figures that are context, not
+   headline. Four of them used to be a six-cell carded grid ~100px tall. */
+.p-facts{{font-size:{TYPE['sm'][0]};color:var(--p-ink-2);
+  font-variant-numeric:tabular-nums;margin:0 0 var(--p-s3);
+  display:flex;flex-wrap:wrap;gap:0 var(--p-s2);}}
+.p-facts b{{color:var(--p-ink);font-weight:600;}}
 .up{{color:var(--p-up);}} .down{{color:var(--p-down);}}
 .watch{{color:var(--p-watch);}} .mark{{color:var(--p-mark);}}
 .dim{{color:var(--p-ink-3);}}
@@ -658,20 +687,52 @@ def page_head(title: str, sub: str = "", *, back_to: str = "", back_label: str =
 
 
 def hero(value: str, delta: str = "", delta_value=None, sub: str = "",
-         title: str = "") -> str:
+         title: str = "", *, aside_label: str = "", aside_value: str = "",
+         aside_delta: str = "", aside_value_num=None) -> str:
     """The one figure the page exists for. No label above it — a kicker over
-    a heading is a hard ban, and the descriptive line reads better below."""
-    out = (f'<div class="p-hero"><div class="v" title="{_e(title or value)}">'
-           f'{_e(value)}</div>')
+    a heading is a hard ban, and the descriptive line reads better below.
+
+    `aside_*` puts a SECOND figure on the same line, hard right. Use it for the
+    number a reader wants in the same glance as the total — unrealized P&L on
+    the Command Center — rather than repeating it in a stat cell further down.
+    """
+    out = ('<div class="p-hero"><div class="main">'
+           f'<div class="v" title="{_e(title or value)}">{_e(value)}</div>')
     if delta:
         out += f'<div class="d {_dir(delta_value)}">{_e(delta)}</div>'
     if sub:
         out += f'<div class="s">{_e(sub)}</div>'
+    out += "</div>"
+    if aside_value:
+        out += ('<div class="aside">'
+                f'<div class="k">{_e(aside_label)}</div>'
+                f'<div class="v2">{_e(aside_value)}</div>')
+        if aside_delta:
+            out += f'<div class="d2 {_dir(aside_value_num)}">{_e(aside_delta)}</div>'
+        out += "</div>"
     return out + "</div>"
 
 
 _PROV_LABEL = {"live": "live", "delayed": "delayed", "eod": "end of day",
                "broker_mark": "broker mark", "stale_cache": "stale", "none": "unpriced"}
+
+
+def facts(items: Sequence[str]) -> str:
+    """One caption-weight line of supporting figures, separated by middots.
+
+    For the numbers that give the headline context — cash, equity, realized,
+    income — which do not each deserve a card. Each item is "Label value";
+    the value is emphasised so the line still scans without a grid.
+    """
+    out = []
+    for it in items:
+        txt = _e(str(it))
+        if " " in txt:
+            lab, _, val = txt.partition(" ")
+            out.append(f"{lab} <b>{val}</b>")
+        else:
+            out.append(txt)
+    return f'<div class="p-facts">{" · ".join(out)}</div>'
 
 
 def provenance(counts: Mapping[str, int] | str, *, age: str = "") -> str:
@@ -1063,6 +1124,13 @@ def _chrome(mode: str) -> str:
 /* st.link_button is an <a data-testid="stBaseLinkButton-secondary">, not a
    <button>, so none of the button rules reached it: Activity drew 30 "Read →"
    links at 1.1:1. Link buttons and buttons are the same control to a reader. */
+/* st.popover's trigger is stPopoverButton, not stBaseButton-*, so it painted
+   itself pure white from the static config palette and its label — ink, i.e.
+   near-white in dark — measured 1.1:1 on it. The popover PANEL is Streamlit
+   chrome too and needs the sheet colour. */
+.stMain [data-testid="stPopoverButton"],
+.stMain [data-testid="stPopoverBody"],
+.stMain [data-testid="stPopover"] [data-baseweb="popover"] > div,
 .stMain [data-testid^="stBaseLinkButton-"],
 .stMain [data-testid^="stBaseButton-"]{{
   background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;
@@ -1079,7 +1147,13 @@ def _chrome(mode: str) -> str:
   color:{t['on-accent']}!important;}}
 .stMain [data-testid^="stBaseLinkButton-"],
 .stMain [data-testid^="stBaseLinkButton-"] p,
-.stMain [data-testid^="stBaseLinkButton-"] div{{color:{t['ink']}!important;}}
+.stMain [data-testid^="stBaseLinkButton-"] div,
+.stMain [data-testid="stPopoverButton"],
+.stMain [data-testid="stPopoverButton"] p,
+.stMain [data-testid="stPopoverButton"] div,
+.stMain [data-testid="stPopoverBody"],
+.stMain [data-testid="stPopoverBody"] p,
+.stMain [data-testid="stPopoverBody"] li{{color:{t['ink']}!important;}}
 /* The remaining widgets Streamlit paints from the static config palette. Each
    was found by walking the live DOM for a light surface or a dark glyph on the
    dark ground, not by reading the source. */

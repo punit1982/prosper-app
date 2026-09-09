@@ -223,6 +223,7 @@ _MOBILE_CSS = """
   .stMain [data-testid="stButton"] button,
   .stMain button[data-testid^="stBaseButton"],
   .stMain a[data-testid^="stBaseLinkButton"],
+  .stMain [data-testid="stPopoverButton"],
   [data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"],
   .stMain button[data-baseweb="tab"],
   /* In-page links out to another screen ("Open Performance") measured 32px,
