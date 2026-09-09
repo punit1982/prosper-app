@@ -272,7 +272,7 @@ pg = st.navigation({
         st.Page("pages/4_Portfolio_Summary.py", title="Summary", icon="🧩"),
         st.Page("pages/5_Performance.py", title="Performance", icon="📈"),
         st.Page("pages/18_Risk_Strategy.py", title="Risk & Strategy", icon="🏰"),
-        st.Page("pages/22_Dividend_Dashboard.py", title="Dividends", icon="💰"),
+        st.Page("pages/22_Dividend_Dashboard.py", title="Income", icon="💰"),
     ],
     # Split by what the page is FOR, not by what it is made of.
     #

@@ -249,14 +249,37 @@ st.divider()
 # ─────────────────────────────────────────
 # 4 TABS (merged from FORTRESS 5 + Optimizer 3)
 # ─────────────────────────────────────────
-tab_health, tab_sizing, tab_alloc, tab_advanced = st.tabs([
-    "Portfolio Health", "Position Guidance", "Allocation & Models", "Advanced",
-])
+# Streamlit tabs are eager: all four sections were built and shipped on every
+# render, including the allocation tab's own nested tab set and the optimizer
+# work behind "Advanced". A segmented control renders exactly one — the same
+# swap P2-4 made on the Dashboard, for the same reason.
+_RISK_SECTIONS = ["Portfolio Health", "Position Guidance", "Allocation & Models", "Advanced"]
+_risk_pick = st.segmented_control(
+    "Section", _RISK_SECTIONS, key="risk_section", default="Portfolio Health",
+    label_visibility="collapsed",
+) or "Portfolio Health"
+
+
+class _Section:
+    """Stands in for a `with tab_x:` context so the four bodies below need no
+    re-indentation. Entering is a no-op; the body runs only when this section
+    is the selected one, which is what makes the control lazy."""
+
+    def __init__(self, name): self.name = name
+    def __bool__(self): return self.name == _risk_pick
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
+
+
+tab_health    = _Section("Portfolio Health")
+tab_sizing    = _Section("Position Guidance")
+tab_alloc     = _Section("Allocation & Models")
+tab_advanced  = _Section("Advanced")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1: PORTFOLIO HEALTH (simplified scorecard + alerts + circuit breakers)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_health:
+if tab_health:
 
     # Health scorecard
     if prosper_map:
@@ -548,7 +571,7 @@ with tab_health:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2: POSITION GUIDANCE (sizing + per-stock actions)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_sizing:
+if tab_sizing:
     st.markdown("#### Position Guidance")
 
     # Build guidance data
@@ -708,7 +731,7 @@ with tab_sizing:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3: ALLOCATION & MODELS (from Optimizer)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_alloc:
+if tab_alloc:
     # Current allocation (single set of pie charts — no duplication)
     st.markdown("#### Your Current Allocation")
     # Four pies in st.columns(4) were ~85px wide each on desktop and stacked
@@ -716,9 +739,15 @@ with tab_alloc:
     # breakdowns. Tabs give each one the full width and cost one tap.
     _ac_dims = [("asset_class", "Asset Class"), ("sector", "Sector"),
                 ("geography", "Geography"), ("cap_size", "Market Cap")]
-    ac_cols = st.tabs([lbl for _, lbl in _ac_dims])
+    # Nested tabs inside an eager tab: four allocation breakdowns all built on
+    # every render of a section most visits never open. One picker, one render.
+    _ac_labels = [lbl for _, lbl in _ac_dims]
+    _ac_pick = st.segmented_control(
+        "Breakdown", _ac_labels, key="risk_alloc_dim", default=_ac_labels[0],
+        label_visibility="collapsed",
+    ) or _ac_labels[0]
     for i, (dim, label) in enumerate(_ac_dims):
-        with ac_cols[i]:
+        if label == _ac_pick:
             alloc = current_alloc.get(dim, {})
             # Filter out meaningless "Unknown" if it's the only entry
             if alloc:
@@ -817,7 +846,7 @@ with tab_alloc:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4: ADVANCED (efficient frontier, factor analysis, correlations, margin)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_advanced:
+if tab_advanced:
     adv_section = st.selectbox("Section", [
         "Efficient Frontier (MPT)",
         "Factor Exposure",

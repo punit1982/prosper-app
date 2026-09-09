@@ -19,7 +19,7 @@ from core.cio_engine import enrich_portfolio
 from core.data_engine import get_ticker_info_batch, fmt_large
 from core.ui_components import status_chip, render_responsive_table
 
-page_header('Dividends', 'Income, yield and projections')
+page_header('Income', 'Dividends, yield and what arrives when')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -153,30 +153,50 @@ portfolio_yield = (total_annual_income / total_mv * 100) if total_mv > 0 else 0
 
 # ── Hero Metrics ──
 payer_weight = payers["market_value"].sum() / total_mv * 100 if total_mv > 0 else 0
-hero_metric(
-    "Annual dividend income",
+import core.ledger_ui as _lu
+_lu.write(_lu.hero(
     fmt_compact(total_annual_income, base_currency) if total_annual_income > 0 else "—",
     delta=f"{portfolio_yield:.2f}% portfolio yield" if portfolio_yield > 0 else "",
     delta_value=portfolio_yield,
-    sub=f"{len(payers)} of {len(div_df)} holdings pay a dividend",
+    sub=f"Projected next 12 months · {len(payers)} of {len(div_df)} holdings pay",
     title=f"{base_currency} {total_annual_income:,.2f}" if total_annual_income > 0 else "",
-)
-stat_grid([
+))
+_lu.write(_lu.stat_row([
     ("Per month", fmt_compact(total_annual_income / 12, base_currency)
-     if total_annual_income > 0 else "—"),
-    ("Yield", f"{portfolio_yield:.2f}%" if portfolio_yield > 0 else "—"),
+     if total_annual_income > 0 else ""),
+    ("Yield", f"{portfolio_yield:.2f}%" if portfolio_yield > 0 else ""),
     ("Payer weight", f"{payer_weight:.1f}%"),
-], columns=3)
+], columns=3))
 
 st.divider()
 
 # ── Tabs ──
-tab_income, tab_yield, tab_calendar, tab_growth = st.tabs([
-    "💵 Income Breakdown", "📊 Yield Analysis", "📅 Ex-Date Calendar", "📈 Growth Potential",
-])
+# Four eager tabs, each fanning out over the payers, all built on every render.
+# One picker, one render — and the emoji come off the labels: they are
+# decoration on a control, not an icon system.
+_INC_SECTIONS = ["Income breakdown", "Yield analysis", "Ex-date calendar", "Growth potential"]
+_inc_pick = st.segmented_control(
+    "Section", _INC_SECTIONS, key="income_section", default=_INC_SECTIONS[0],
+    label_visibility="collapsed",
+) or _INC_SECTIONS[0]
+
+
+class _Section:
+    """Lazy stand-in for `with tab_x:` — see the same pattern on Risk."""
+
+    def __init__(self, name): self.name = name
+    def __bool__(self): return self.name == _inc_pick
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
+
+
+tab_income   = _Section("Income breakdown")
+tab_yield    = _Section("Yield analysis")
+tab_calendar = _Section("Ex-date calendar")
+tab_growth   = _Section("Growth potential")
 
 # ── TAB 1: Income Breakdown ──
-with tab_income:
+if tab_income:
     if not payers.empty:
         income_df = payers[["ticker", "name", "quantity", "dividend_rate", "annual_income",
                             "dividend_yield", "yield_on_cost", "sector"]].copy()
@@ -231,7 +251,7 @@ with tab_income:
         st.info("None of your holdings currently pay dividends.")
 
 # ── TAB 2: Yield Analysis ──
-with tab_yield:
+if tab_yield:
     if not payers.empty:
         st.markdown("### Yield Comparison")
         yield_df = payers[["ticker", "name", "dividend_yield", "yield_on_cost",
@@ -285,7 +305,7 @@ with tab_yield:
         st.info("No dividend-paying holdings found.")
 
 # ── TAB 3: Ex-Date Calendar ──
-with tab_calendar:
+if tab_calendar:
     ex_dates = div_df[div_df["ex_date"].notna()].copy()
     if not ex_dates.empty:
         ex_dates["ex_dt"] = pd.to_datetime(ex_dates["ex_date"])
@@ -328,7 +348,7 @@ with tab_calendar:
         st.info("No ex-dividend date data available for your holdings.")
 
 # ── TAB 4: Growth Potential ──
-with tab_growth:
+if tab_growth:
     st.markdown("### 📈 Income Growth Projection")
     st.caption("Estimates future dividend income assuming consistent dividend growth rates.")
 
