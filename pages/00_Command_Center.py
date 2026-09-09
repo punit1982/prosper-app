@@ -628,27 +628,79 @@ investor's actual holdings listed above."""
         return safe_message("the briefing", e)
 
 
+# ── Briefing presentation ────────────────────────────────────────────────────
+# The model returns four bold-headed sections — Portfolio Pulse, Key Moves,
+# Risk Watch, Action Items — and the page rendered all four as one block of
+# editorial. Good content, wrong packaging for a phone: the answer ("am I
+# fine?") and the ask ("what do I do?") were separated by two paragraphs of
+# explanation.
+#
+# This shows the pulse and the actions, and puts the explanation one tap away.
+# It PARSES rather than re-prompts, so briefings already saved in the database
+# render the new way without regenerating — and if the model ever returns a
+# shape this cannot read, the whole text falls through unchanged.
+def _split_briefing(text: str) -> dict:
+    import re as _re
+    if not text:
+        return {}
+    parts, current = {}, None
+    for line in text.splitlines():
+        m = _re.match(r"\s*\*\*(.+?):?\*\*\s*(.*)$", line)
+        if m:
+            current = m.group(1).strip().lower()
+            parts[current] = [m.group(2).strip()] if m.group(2).strip() else []
+        elif current is not None:
+            parts[current].append(line)
+    return {k: "\n".join(v).strip() for k, v in parts.items() if "\n".join(v).strip()}
+
+
+def _render_briefing(text: str, meta: str = "") -> None:
+    """Pulse and actions up front, explanation behind a tap."""
+    _p = _split_briefing(text)
+    _pulse = _p.get("portfolio pulse")
+    _actions = _p.get("action items")
+    _rest = [(k.title(), v) for k, v in _p.items()
+             if k not in ("portfolio pulse", "action items")]
+
+    if not _pulse and not _actions:
+        st.markdown(text)                      # unrecognised shape — show it all
+        if meta:
+            st.caption(meta)
+        return
+
+    if _pulse:
+        st.markdown(_ui.read(f"<b>What changed.</b> {_pulse}"), unsafe_allow_html=True)
+    if _actions:
+        st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
+        st.markdown(_actions)
+    if _rest:
+        with st.expander("Why it matters — key moves and risk watch", expanded=False):
+            for _title, _body in _rest:
+                st.markdown(f"**{_title}**")
+                st.markdown(_body)
+    if meta:
+        st.caption(meta)
+
+
 # Auto-show: check session → DB → offer generate button
 _today_str = datetime.now().strftime("%Y-%m-%d")
 _briefing_shown = False
 
 if briefing_cache_key in st.session_state:
     # Show today's session-cached briefing
-    st.markdown(st.session_state[briefing_cache_key])
-    st.caption(f"Generated today · {_today_str}")
+    _render_briefing(st.session_state[briefing_cache_key],
+                     f"Generated today · {_today_str}")
     _briefing_shown = True
 elif get_latest_briefing:
     # Try to load from database (persists across sessions)
     _saved = get_latest_briefing(base_currency)
     if _saved and _saved.get("content"):
         st.session_state[briefing_cache_key] = _saved["content"]
-        st.markdown(_saved["content"])
         _bdate = _saved.get("date", "")
         _btimestamp = _saved.get("created_at", "")
-        if _bdate == _today_str:
-            st.caption(f"Generated today · {_btimestamp}")
-        else:
-            st.caption(f"Last briefing from **{_bdate}** · {_btimestamp} — click Refresh to update for today")
+        _meta = (f"Generated today · {_btimestamp}" if _bdate == _today_str
+                 else f"From {_bdate} · {_btimestamp} — Refresh to update for today")
+        _render_briefing(_saved["content"], _meta)
         _briefing_shown = True
 
 if _briefing_shown:

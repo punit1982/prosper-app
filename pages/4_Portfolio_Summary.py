@@ -216,83 +216,84 @@ try:
         title=f"{base_currency} {total_val:,.2f}" if total_val else "",
     )
 
-    # ── Charts with drill-down ──
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["By Sector", "By Industry", "By Currency", "By Country", "By Market Cap"])
+    # ── Allocation, one dimension at a time ─────────────────────────────────
+    # Was five st.tabs, each drawing a Plotly donut — and Streamlit tabs are
+    # eager, so all five rendered on every visit whether or not they were
+    # opened. Five donuts at ~330px each, for a question ("how is the book
+    # split?") that a ranked list answers better: a donut cannot be sorted,
+    # spends its area on a hole, and at 375px hides any slice whose label
+    # would render below 10px — which for a 14-sector allocation is most of
+    # them.
+    #
+    # The pie's click-to-drill is preserved as a selectbox. Tapping a slice at
+    # 375px was fiddly at best, and a list of segment names is both reachable
+    # and readable.
+    import core.ledger_ui as _lu
 
-    def make_pie(df, group_col, value_col, title, tab_key):
-        grouped = df.groupby(group_col)[value_col].sum().reset_index()
+    _DIMS = {
+        "Sector":     "sector",
+        "Industry":   "industry",
+        "Currency":   "currency",
+        "Country":    "country",
+        "Market cap": "cap_size",
+    }
+    _dim_label = st.segmented_control(
+        "Break down by", list(_DIMS), key="sum_dim", default="Sector",
+    ) or "Sector"
+    group_col = _DIMS[_dim_label]
+
+    if weight_col in enriched.columns and group_col in enriched.columns:
+        grouped = enriched.groupby(group_col)[weight_col].sum().reset_index()
         grouped.columns = [group_col, "Value"]
         grouped = grouped[grouped["Value"] > 0].sort_values("Value", ascending=False)
+
         if grouped.empty:
             st.info("No data available for this breakdown.")
-            return
-        fig = px.pie(grouped, names=group_col, values="Value", title=title,
-                     hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
-        fig.update_traces(textposition="inside", textinfo="percent+label",
-                          insidetextorientation="horizontal")
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        # Kept as st.plotly_chart because it returns a selection event, but run
-        # through the same mobile treatment: uniformtext hides slice labels that
-        # would render below 10px instead of stacking them on top of each other,
-        # which is what a 14-sector allocation did at 375px.
-        from core.ui_components import mobile_chart, _CHART_CONFIG
-        fig = mobile_chart(fig, height=330, legend=False, min_text=10)
-        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun",
-                                key=f"pie_{tab_key}", config=_CHART_CONFIG)
+        else:
+            _total = grouped["Value"].sum()
+            grouped["pct"] = (grouped["Value"] / _total * 100).round(1)
+            _lead = grouped.iloc[0]
+            st.markdown(_lu.read(
+                f'Largest {_dim_label.lower()} exposure is <b>{_lead[group_col] or "Unclassified"}</b> '
+                f'at {_lead["pct"]:.1f}%. Top three are {grouped.head(3)["pct"].sum():.1f}% '
+                f'of {len(grouped)} groups.'
+            ), unsafe_allow_html=True)
+            st.markdown(_lu.ranked_bars([
+                {"name": str(r[group_col]) or "Unclassified",
+                 "pct": float(r["pct"]),
+                 "meta": f'{base_currency} {r["Value"]:,.0f}',
+                 "state": "over" if float(r["pct"]) > 25 else ""}
+                for _, r in grouped.iterrows()
+            ], limit=14), unsafe_allow_html=True)
 
-        # Summary table
-        grouped["% of Portfolio"] = (grouped["Value"] / grouped["Value"].sum() * 100).round(1)
-        grouped["Value"] = grouped["Value"].apply(lambda x: f"{base_currency} {x:,.0f}")
-        from core.data_engine import clean_nan
-        render_responsive_table(clean_nan(grouped), title_col=group_col)
-
-        # Drill-down: show holdings in selected segment
-        selected_segment = None
-        if event and event.get("selection", {}).get("points"):
-            selected_segment = event["selection"]["points"][0].get("label")
-
-        if selected_segment:
-            st.divider()
-            st.subheader(f"Holdings in: {selected_segment}")
-            segment_df = df[df[group_col] == selected_segment].copy()
-            t_col_d = "ticker_resolved" if "ticker_resolved" in segment_df.columns else "ticker"
-            drill = pd.DataFrame()
-            drill["Ticker"] = segment_df[t_col_d].values
-            drill["Name"] = segment_df.get("name", pd.Series(dtype=str)).fillna("").values
-            if "current_price" in segment_df.columns:
-                drill["Price"] = segment_df["current_price"].apply(
-                    lambda v: f"{float(v):,.2f}" if pd.notna(v) and float(v) >= 1 else (f"{float(v):,.4f}" if pd.notna(v) else "")).values
-            if value_col in segment_df.columns:
-                drill[f"Value ({base_currency})"] = segment_df[value_col].apply(
-                    lambda v: f"{float(v):,.0f}" if pd.notna(v) else "").values
-            if "unrealized_pnl" in segment_df.columns:
-                drill["P&L"] = segment_df["unrealized_pnl"].apply(
-                    lambda v: f"{float(v):+,.0f}" if pd.notna(v) else "").values
-            if "unrealized_pnl_pct" in segment_df.columns:
-                drill["Return %"] = segment_df["unrealized_pnl_pct"].apply(
-                    lambda v: f"{float(v):+.1f}%" if pd.notna(v) else "").values
-            from core.data_engine import clean_nan
-            st.dataframe(clean_nan(drill), hide_index=True, use_container_width=True)
-
-    with tab1:
-        if weight_col in enriched.columns:
-            make_pie(enriched, "sector", weight_col, "Sector Allocation", "sector")
-
-    with tab2:
-        if weight_col in enriched.columns:
-            make_pie(enriched, "industry", weight_col, "Industry Allocation", "industry")
-
-    with tab3:
-        if weight_col in enriched.columns:
-            make_pie(enriched, "currency", weight_col, "Currency Exposure", "currency")
-
-    with tab4:
-        if weight_col in enriched.columns:
-            make_pie(enriched, "country", weight_col, "Country Exposure", "country")
-
-    with tab5:
-        if weight_col in enriched.columns:
-            make_pie(enriched, "cap_size", weight_col, "Market Cap Distribution", "cap_size")
+            # ── Drill-down ──
+            _segments = grouped[group_col].astype(str).tolist()
+            _pick = st.selectbox(
+                f"Show holdings in a {_dim_label.lower()}",
+                ["—"] + _segments, key=f"sum_drill_{group_col}",
+            )
+            if _pick and _pick != "—":
+                segment_df = enriched[enriched[group_col].astype(str) == _pick].copy()
+                t_col_d = "ticker_resolved" if "ticker_resolved" in segment_df.columns else "ticker"
+                drill = pd.DataFrame()
+                drill["Ticker"] = segment_df[t_col_d].values
+                drill["Name"] = segment_df.get("name", pd.Series(dtype=str)).fillna("").values
+                if "current_price" in segment_df.columns:
+                    drill["Price"] = segment_df["current_price"].apply(
+                        lambda v: f"{float(v):,.2f}" if pd.notna(v) and float(v) >= 1
+                        else (f"{float(v):,.4f}" if pd.notna(v) else "")).values
+                if weight_col in segment_df.columns:
+                    drill[f"Value ({base_currency})"] = segment_df[weight_col].apply(
+                        lambda v: f"{float(v):,.0f}" if pd.notna(v) else "").values
+                if "unrealized_pnl" in segment_df.columns:
+                    drill["P&L"] = segment_df["unrealized_pnl"].apply(
+                        lambda v: f"{float(v):+,.0f}" if pd.notna(v) else "").values
+                if "unrealized_pnl_pct" in segment_df.columns:
+                    drill["Return %"] = segment_df["unrealized_pnl_pct"].apply(
+                        lambda v: f"{float(v):+.1f}%" if pd.notna(v) else "").values
+                from core.data_engine import clean_nan
+                st.caption(f"**{len(drill)} holdings in {_pick}**")
+                render_responsive_table(clean_nan(drill), title_col="Ticker")
 
     # ── Portfolio Returns: REMOVED (Phase 3) ────────────────────────────────
     # This fetched a price history for every holding across nine periods —

@@ -204,11 +204,19 @@ with tab_income:
         sector_income = income_df.groupby("sector")["annual_income"].sum().reset_index()
         sector_income = sector_income[sector_income["annual_income"] > 0]
         if not sector_income.empty:
-            fig = px.pie(sector_income, values="annual_income", names="sector",
-                         title="Dividend Income by Sector", hole=0.4)
-            fig.update_layout(height=300, margin=dict(t=40, l=10, r=10, b=10),
-                              paper_bgcolor="rgba(0,0,0,0)")
-            show_chart(fig)
+            # Ranked bars, not a donut: income concentration is an ordering
+            # question ("which sectors pay me, most first") and a donut cannot
+            # be sorted. Same three facts per row in a third of the height.
+            import core.ledger_ui as _lu
+            _si = sector_income.sort_values("annual_income", ascending=False)
+            _tot = float(_si["annual_income"].sum()) or 1.0
+            st.markdown(_lu.section("Income by sector"), unsafe_allow_html=True)
+            st.markdown(_lu.ranked_bars([
+                {"name": str(r["sector"]) or "Unclassified",
+                 "pct": float(r["annual_income"]) / _tot * 100,
+                 "meta": f'{base_currency} {float(r["annual_income"]):,.0f} / yr'}
+                for _, r in _si.iterrows()
+            ], limit=12), unsafe_allow_html=True)
 
         # Top contributors bar chart
         top10 = income_df.head(10)

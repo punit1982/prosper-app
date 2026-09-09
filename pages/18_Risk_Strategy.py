@@ -724,15 +724,17 @@ with tab_alloc:
             if alloc:
                 alloc = {k: v for k, v in alloc.items() if k not in ("Unknown", "", "None") or len(alloc) == 1}
             if alloc and len(alloc) > 1:
-                fig = px.pie(values=list(alloc.values()), names=list(alloc.keys()),
-                             title=label, hole=0.4,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
-                fig.update_layout(height=250, margin=dict(t=35, l=5, r=5, b=5),
-                                  showlegend=True, legend=dict(font=dict(size=9)),
-                                  paper_bgcolor="rgba(0,0,0,0)")
-                fig.update_traces(textposition="inside", textinfo="percent+label",
-                                  textfont_size=10)
-                show_chart(fig)
+                # Ranked bars: allocation is an ordering question, and a
+                # donut at 250px with a 9pt legend was unreadable on a phone.
+                import core.ledger_ui as _lu
+                _tot = float(sum(alloc.values())) or 1.0
+                _rows = sorted(alloc.items(), key=lambda kv: -float(kv[1]))
+                st.markdown(_lu.ranked_bars([
+                    {"name": str(k) or "Unclassified",
+                     "pct": float(v) / _tot * 100,
+                     "meta": f"{float(v) / _tot * 100:.1f}% of book"}
+                    for k, v in _rows
+                ], limit=12), unsafe_allow_html=True)
             elif alloc:
                 # Single category — show as metric instead of pie
                 k, v = list(alloc.items())[0]

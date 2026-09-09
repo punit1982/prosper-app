@@ -827,41 +827,38 @@ with tab_ownership:
             inst_v = (inst_pct or 0) * 100 if inst_pct and inst_pct < 1 else (inst_pct or 0)
             retail_v = max(0, 100 - ins_v - inst_v)
 
-            pie_col, insight_col = st.columns([2, 3])
-            with pie_col:
-                fig_pie = go.Figure(go.Pie(
-                    labels=["Insiders", "Institutions", "Retail/Other"],
-                    values=[ins_v, inst_v, retail_v],
-                    marker_colors=["#f39c12", "#1a9e5c", "#888"],
-                    hole=0.5,
-                    textinfo="label+percent",
-                ))
-                fig_pie.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
-                                       template="plotly_dark", showlegend=False)
-                show_chart(fig_pie)
+            # The last donut in the app. Three ranked bars carry the same
+            # split without a chart bundle, and st.columns([2,3]) stacked into
+            # two full-width rows below ~640px anyway, so the side-by-side the
+            # pie was placed in never existed on a phone.
+            import core.ledger_ui as _lu
+            st.markdown(_lu.ranked_bars([
+                {"name": "Institutions", "pct": float(inst_v), "meta": "funds and mandates"},
+                {"name": "Insiders", "pct": float(ins_v), "meta": "management and board"},
+                {"name": "Retail and other", "pct": float(retail_v), "meta": "everyone else"},
+            ], limit=3), unsafe_allow_html=True)
 
-            with insight_col:
-                st.markdown("**Ownership Insights**")
-                insights = []
-                if inst_v > 70:
-                    insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
-                elif inst_v > 40:
-                    insights.append("Moderate institutional ownership — balanced between smart money and retail")
-                elif inst_v < 15:
-                    insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
+            st.markdown("**Ownership Insights**")
+            insights = []
+            if inst_v > 70:
+                insights.append("Heavily institutional — price moves driven by fund flows, sensitive to earnings misses")
+            elif inst_v > 40:
+                insights.append("Moderate institutional ownership — balanced between smart money and retail")
+            elif inst_v < 15:
+                insights.append("Low institutional ownership — may indicate undiscovered name or higher risk profile")
 
-                if ins_v > 20:
-                    insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
-                elif ins_v > 5:
-                    insights.append("Moderate insider ownership — management maintains meaningful stake")
-                elif ins_v < 1 and ins_v > 0:
-                    insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
+            if ins_v > 20:
+                insights.append("High insider ownership — management has strong skin in the game (aligned interests)")
+            elif ins_v > 5:
+                insights.append("Moderate insider ownership — management maintains meaningful stake")
+            elif ins_v < 1 and ins_v > 0:
+                insights.append("Very low insider ownership — management may not have strong alignment with shareholders")
 
-                if retail_v > 50:
-                    insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
+            if retail_v > 50:
+                insights.append("Majority retail-held — can lead to higher volatility and momentum-driven moves")
 
-                for insight in insights:
-                    st.markdown(f"- {insight}")
+            for insight in insights:
+                st.markdown(f"- {insight}")
 
         ownership_section()
 
