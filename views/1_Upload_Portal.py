@@ -152,7 +152,7 @@ if st.session_state.save_done:
     st.success("Portfolio saved successfully!")
     col_a, col_b = st.columns(2)
     with col_a:
-        st.page_link("pages/2_Portfolio_Dashboard.py", label="View Portfolio Dashboard", icon="📊")
+        st.page_link("views/2_Portfolio_Dashboard.py", label="View Portfolio Dashboard", icon="📊")
     with col_b:
         if st.button("Upload More Files", use_container_width=True):
             st.session_state.parsed_holdings = []

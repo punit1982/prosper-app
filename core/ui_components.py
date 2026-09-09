@@ -831,11 +831,11 @@ _NAV_ITEMS = [
     # Activity replaces Risk in slot 4: Risk is a sit-down tool reached from
     # More, whereas "what happened, and what is coming?" is a daily question —
     # and Activity is now one page instead of the four it merged.
-    ("pages/00_Command_Center.py",     "Today",     ":material/today:"),
-    ("pages/2_Portfolio_Dashboard.py", "Holdings",  ":material/table_chart:"),
-    ("pages/18_Equity_Deep_Dive.py",   "Research",  ":material/search:"),
-    ("pages/9_Activity.py",            "Activity",  ":material/history:"),
-    ("pages/24_AI_Chat.py",            "Ask",       ":material/forum:"),
+    ("views/00_Command_Center.py",     "Today",     ":material/today:"),
+    ("views/2_Portfolio_Dashboard.py", "Holdings",  ":material/table_chart:"),
+    ("views/18_Equity_Deep_Dive.py",   "Research",  ":material/search:"),
+    ("views/9_Activity.py",            "Activity",  ":material/history:"),
+    ("views/24_AI_Chat.py",            "Ask",       ":material/forum:"),
 ]
 
 _BOTTOM_NAV_CSS = """
@@ -1079,7 +1079,7 @@ def open_deep_dive(ticker: str) -> None:
     st.session_state["dd_source"] = "Portfolio"
     st.session_state["dd_ticker_select"] = ticker
     st.session_state["research_ticker"] = ticker
-    st.switch_page("pages/18_Equity_Deep_Dive.py")
+    st.switch_page("views/18_Equity_Deep_Dive.py")
 
 
 _MOBILE_ONLY_CSS = """

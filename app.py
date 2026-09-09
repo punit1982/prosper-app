@@ -104,9 +104,9 @@ _is_authed = st.session_state.get("authentication_status") is True
 if not _is_authed:
     # v7.0.3 FIX: the Google popup lands on /OAuth_Callback, which was never registered
     # with st.navigation → "Page not found" and the sign-in could never complete.
-    _oauth_page = st.Page("pages/99_OAuth_Callback.py", title="Signing in…", url_path="OAuth_Callback")
+    _oauth_page = st.Page("views/99_OAuth_Callback.py", title="Signing in…", url_path="OAuth_Callback")
     pg = st.navigation(
-        [st.Page("pages/00_Command_Center.py", default=True), _oauth_page],
+        [st.Page("views/00_Command_Center.py", default=True), _oauth_page],
         position="hidden",
     )
     if getattr(pg, "url_path", "") == "OAuth_Callback":
@@ -169,7 +169,7 @@ if not st.session_state.get("onboarding_complete", False):
 
 if not st.session_state.get("onboarding_complete", False):
     pg = st.navigation(
-        [st.Page("pages/26_Onboarding.py", title="Setup Wizard", icon="🚀", default=True)],
+        [st.Page("views/26_Onboarding.py", title="Setup Wizard", icon="🚀", default=True)],
         position="hidden",
     )
     pg.run()
@@ -253,16 +253,29 @@ if not get_nav_snapshot_exists_today(_base):
             logging.getLogger("prosper").warning(f"NAV snapshot failed: {nav_err}")
 
 # ── Full Navigation ──────────────────────────────────────────────────────────
+# The page files live in views/, NOT pages/.
+#
+# Streamlit has TWO navigation systems, and a directory literally named
+# `pages/` activates the older one. Measured: with the app cold, a deep link
+# to /Portfolio_Dashboard ran views/2_Portfolio_Dashboard.py as a standalone
+# script — app.py never executed, so there was no st.navigation, no
+# design_shell(), no bottom_nav(), no ensure_settings_loaded() and no
+# authentication check; the page rendered unthemed, with Streamlit's raw
+# file-name sidebar, and reported the portfolio as empty. On Render's free
+# tier the instance sleeps after 15 minutes, so every bookmark, refresh and
+# socket-drop reload landed on exactly that. Renaming the directory is what
+# turns the old system off; url_path is derived from the FILE name, so every
+# URL is unchanged.
 pg = st.navigation({
     "Today": [
-        st.Page("pages/00_Command_Center.py", title="Today", icon="🏠", default=True),
+        st.Page("views/00_Command_Center.py", title="Today", icon="🏠", default=True),
     ],
     "Portfolio": [
-        st.Page("pages/2_Portfolio_Dashboard.py", title="Holdings", icon="📊"),
-        st.Page("pages/4_Portfolio_Summary.py", title="Allocation", icon="🧩"),
-        st.Page("pages/5_Performance.py", title="Performance", icon="📈"),
-        st.Page("pages/18_Risk_Strategy.py", title="Risk", icon="🏰"),
-        st.Page("pages/22_Dividend_Dashboard.py", title="Income", icon="💰"),
+        st.Page("views/2_Portfolio_Dashboard.py", title="Holdings", icon="📊"),
+        st.Page("views/4_Portfolio_Summary.py", title="Allocation", icon="🧩"),
+        st.Page("views/5_Performance.py", title="Performance", icon="📈"),
+        st.Page("views/18_Risk_Strategy.py", title="Risk", icon="🏰"),
+        st.Page("views/22_Dividend_Dashboard.py", title="Income", icon="💰"),
     ],
     # Split by what the page is FOR, not by what it is made of.
     #
@@ -276,10 +289,10 @@ pg = st.navigation({
     # target as if it carried the same weight as the framework's own arithmetic. The
     # group name now says what they are.
     "Decide": [
-        st.Page("pages/15_GROW_Analysis.py", title="Evaluate", icon="🌱"),
-        st.Page("pages/19_Options_Desk.py", title="Options", icon="🌾"),
-        st.Page("pages/18_Equity_Deep_Dive.py", title="Security", icon="🔬"),
-        st.Page("pages/24_AI_Chat.py", title="Ask", icon="💬"),
+        st.Page("views/15_GROW_Analysis.py", title="Evaluate", icon="🌱"),
+        st.Page("views/19_Options_Desk.py", title="Options", icon="🌾"),
+        st.Page("views/18_Equity_Deep_Dive.py", title="Security", icon="🔬"),
+        st.Page("views/24_AI_Chat.py", title="Ask", icon="💬"),
     ],
     # These four were siblings of Security in a flat list of nine, which is
     # what made "which do I open first?" a real question and spawned Research
@@ -296,10 +309,10 @@ pg = st.navigation({
     # each of its thin tabs links here for the full version, arriving on the
     # same stock. The group name says the relationship.
     "Security — full analysis": [
-        st.Page("pages/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
-        st.Page("pages/8_Sentiment.py", title="Sentiment", icon="💬"),
-        st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
-        st.Page("pages/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
+        st.Page("views/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
+        st.Page("views/8_Sentiment.py", title="Sentiment", icon="💬"),
+        st.Page("views/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
+        st.Page("views/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
     ],
     # Portfolio News, Market News, Earnings and Transactions were four
     # destinations answering one question — what happened, and does it touch
@@ -307,14 +320,14 @@ pg = st.navigation({
     # used to carry a caption pointing at Market News for fund coverage, which
     # was the product admitting the split was arbitrary.
     "Activity": [
-        st.Page("pages/9_Activity.py", title="Activity", icon="📰"),
+        st.Page("views/9_Activity.py", title="Activity", icon="📰"),
     ],
     "Settings": [
-        st.Page("pages/0_Settings.py", title="Settings", icon="⚙️"),
-        st.Page("pages/1_Upload_Portal.py", title="Add holdings", icon="📤"),
-        st.Page("pages/25_IBKR_Sync.py", title="Connections", icon="🔗"),
-        st.Page("pages/17_User_Management.py", title="Account & access", icon="👥"),
-        st.Page("pages/26_Onboarding.py", title="Setup", icon="🚀"),
+        st.Page("views/0_Settings.py", title="Settings", icon="⚙️"),
+        st.Page("views/1_Upload_Portal.py", title="Add holdings", icon="📤"),
+        st.Page("views/25_IBKR_Sync.py", title="Connections", icon="🔗"),
+        st.Page("views/17_User_Management.py", title="Account & access", icon="👥"),
+        st.Page("views/26_Onboarding.py", title="Setup", icon="🚀"),
     ],
 })
 
@@ -360,5 +373,5 @@ pg.run()
 # The floating "Ask Prosper" popover was removed here (Phase 3, P3-1).
 # It rendered AFTER pg.run() with position:fixed bottom/right, so it (a)
 # overlapped the bottom nav bar, (b) duplicated that bar's 5th slot, which
-# already opens pages/24_AI_Chat.py, and (c) silently vanished on the 21
+# already opens views/24_AI_Chat.py, and (c) silently vanished on the 21
 # pages that call st.stop(). One route to the assistant, not two.

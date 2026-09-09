@@ -904,11 +904,11 @@ def segment(options: Sequence[str], active: str) -> str:
         f'{_e(o)}</span>' for o in options) + "</div>")
 
 
-NAV = (("today", "Today", "pages/00_Command_Center.py"),
-       ("holdings", "Holdings", "pages/2_Portfolio_Dashboard.py"),
-       ("ask", "Ask", "pages/24_AI_Chat.py"),
-       ("activity", "Activity", "pages/9_Activity.py"),
-       ("more", "More", "pages/0_Settings.py"))
+NAV = (("today", "Today", "views/00_Command_Center.py"),
+       ("holdings", "Holdings", "views/2_Portfolio_Dashboard.py"),
+       ("ask", "Ask", "views/24_AI_Chat.py"),
+       ("activity", "Activity", "views/9_Activity.py"),
+       ("more", "More", "views/0_Settings.py"))
 
 
 def nav(active: str = "today") -> str:

@@ -10,7 +10,7 @@ Supports:
 
 OAuth flow (v6.5+):
   - Main app opens Google consent in a POPUP window (not same tab)
-  - Popup lands on pages/99_OAuth_Callback.py with ?code=&state=
+  - Popup lands on views/99_OAuth_Callback.py with ?code=&state=
   - Callback page exchanges code, writes {email, name, token, verified} to localStorage
   - token = HMAC-signed email (email.sig format, matches _make_signed_token in callback)
   - Main app polls localStorage every 500ms and verifies token via _verify_signed_token()

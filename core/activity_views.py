@@ -6,7 +6,7 @@ destinations answering one question: what happened, and does it touch me?
 Portfolio News even told the user to go to Market News for fund coverage —
 the product admitting its own split was arbitrary.
 
-They are one page now (pages/9_Activity.py), selected with a segmented
+They are one page now (views/9_Activity.py), selected with a segmented
 control rather than st.tabs, because tabs are eager: every hidden tab is
 built and shipped on every render, and one of these fans out to a news API.
 A segmented control renders exactly the slice asked for.

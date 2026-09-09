@@ -336,7 +336,7 @@ tab_ai           = _Section("GROW")
 
 if tab_peers:
     st.caption("A snapshot of sector peers. The full side-by-side is one tap away.")
-    st.page_link("pages/23_Peer_Comparison.py", label="Full peer comparison — valuation, quality, growth, risk", icon="↗️")
+    st.page_link("views/23_Peer_Comparison.py", label="Full peer comparison — valuation, quality, growth, risk", icon="↗️")
     try:
         from core.data_engine import get_ticker_info_batch as _peer_info_batch
         st.markdown("#### Sector peers")
@@ -670,7 +670,7 @@ if tab_fundamentals:
 
 if tab_analyst:
     st.caption("Consensus and tone. Rating history and upgrade/downgrade flow are one tap away.")
-    st.page_link("pages/7_Analyst_Consensus.py", label="Full analyst detail — targets, rating history, upgrades", icon="↗️")
+    st.page_link("views/7_Analyst_Consensus.py", label="Full analyst detail — targets, rating history, upgrades", icon="↗️")
     try:
         st.subheader("Analyst Consensus")
 
@@ -896,7 +896,7 @@ if tab_ownership:
 
 if tab_technical:
     st.caption("The signals that matter at a glance. Full indicator charts are one tap away.")
-    st.page_link("pages/21_Technical_Analysis.py", label="Full technical analysis — MACD, RSI, Bollinger, volume", icon="↗️")
+    st.page_link("views/21_Technical_Analysis.py", label="Full technical analysis — MACD, RSI, Bollinger, volume", icon="↗️")
     try:
         st.subheader("Technical Signals")
         _tech_hist = get_history(ticker, "1y")

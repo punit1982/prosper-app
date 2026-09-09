@@ -310,7 +310,7 @@ try:
     st.divider()
     st.caption("Returns over time live on the **Performance** page, which draws "
                "the portfolio line from daily NAV snapshots.")
-    st.page_link("pages/5_Performance.py", label="Open Performance", icon="📈")
+    st.page_link("views/5_Performance.py", label="Open Performance", icon="📈")
 
     # ── Risk Metrics ──────────────────────────────────────────────────────────
     st.divider()

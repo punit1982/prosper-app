@@ -41,7 +41,7 @@ holdings = get_all_holdings()
 
 if holdings.empty:
     st.info("Welcome to Prosper! Upload your first brokerage screenshot or CSV to get started.")
-    st.page_link("pages/1_Upload_Portal.py", label="Go to Add holdings", icon="📤")
+    st.page_link("views/1_Upload_Portal.py", label="Go to Add holdings", icon="📤")
     st.stop()
 
 # ── Enrich Portfolio (use cache if available) ────────────────────────────────
@@ -108,7 +108,7 @@ if enriched.empty:
             st.session_state.pop(cache_key, None)
             st.rerun()
     with _c2:
-        st.page_link("pages/0_Settings.py", label="Check data sources", icon="📡",
+        st.page_link("views/0_Settings.py", label="Check data sources", icon="📡",
                      use_container_width=True)
     st.stop()
 
