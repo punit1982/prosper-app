@@ -278,7 +278,9 @@ with col_attrib:
     st.markdown("#### P&L Attribution")
 
     if "day_gain" in enriched.columns:
-        attrib_df = enriched[["ticker", "day_gain", "market_value"]].copy()
+        _acols = [c for c in ("ticker", "name", "day_gain", "market_value")
+                  if c in enriched.columns]
+        attrib_df = enriched[_acols].copy()
         attrib_df["day_gain"] = pd.to_numeric(attrib_df["day_gain"], errors="coerce").fillna(0)
         attrib_df["market_value"] = pd.to_numeric(attrib_df["market_value"], errors="coerce").fillna(0)
         attrib_df = attrib_df[attrib_df["day_gain"] != 0].sort_values("day_gain")
@@ -293,26 +295,26 @@ with col_attrib:
             show_df = pd.concat([bot_contrib, top_contrib]).drop_duplicates()
             show_df = show_df.sort_values("day_gain")
 
-            colors = ["#ef5350" if v < 0 else "#26a69a" for v in show_df["day_gain"]]
-            fig_attr = go.Figure(go.Bar(
-                x=show_df["day_gain"],
-                y=show_df["ticker"],
-                orientation="h",
-                marker_color=colors,
-                text=show_df.apply(
-                    lambda r: f"{r['day_gain']:+,.0f} ({r['pct_contrib']:+.1f}%)", axis=1
-                ),
-                textposition="outside",
-            ))
-            fig_attr.update_layout(
-                height=280, margin=dict(t=5, l=5, r=80, b=5),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                xaxis_title="", yaxis_title="",
-                xaxis=dict(showgrid=False, zeroline=True, zerolinecolor="rgba(255,255,255,0.2)"),
-                yaxis=dict(showgrid=False, tickfont=dict(size=12)),
-                font=dict(size=11),
-            )
-            show_chart(fig_attr, key="cmd_attrib")
+            # Phase 3: this was a horizontal Plotly bar chart with
+            # textposition="outside" and a 5px left margin, so every NEGATIVE
+            # bar wrote its label off the canvas — "0 (-5.2%)" and "+2," were
+            # clipped at both ends on a real phone. A ranked list carries the
+            # same three facts (who, how much money, what percent of that
+            # position) with no clipping, no axis to read, and no chart
+            # bundle on a 512MiB instance.
+            show_df = show_df.sort_values("day_gain", ascending=False)
+            _attr = []
+            for _, r in show_df.iterrows():
+                _amt = float(r["day_gain"])
+                _attr.append(_ui.ledger_row(
+                    str(r["ticker"]),
+                    str(r.get("name") or "")[:34],
+                    _ui.money(_amt, None, base_currency),
+                    change=f'<span class="{"up" if _amt > 0 else "down"}">'
+                           f'{float(r["pct_contrib"]):+.1f}% of position</span>',
+                    change_value=_amt,
+                ))
+            st.markdown("".join(_attr), unsafe_allow_html=True)
         else:
             st.caption("No P&L changes today.")
     else:
@@ -491,25 +493,26 @@ with col_alloc:
         alloc_df["pct"] = (alloc_df["market_value"] / total_alloc * 100).round(1)
 
         if not alloc_df.empty:
-            fig_alloc = go.Figure(go.Bar(
-                x=alloc_df["pct"],
-                y=alloc_df["sector"],
-                orientation="h",
-                marker_color=px.colors.qualitative.Set2[:len(alloc_df)],
-                text=alloc_df.apply(
-                    lambda r: f"{r['pct']:.0f}% · {base_currency} {r['market_value']:,.0f}", axis=1
-                ),
-                textposition="auto",
-                textfont=dict(size=11),
-            ))
-            fig_alloc.update_layout(
-                height=350, margin=dict(t=5, l=5, r=5, b=5),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(showgrid=False, showticklabels=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=11)),
-                font=dict(size=11),
-            )
-            show_chart(fig_alloc, key="cmd_alloc")
+            # Phase 3: ranked bars instead of a Plotly bar chart. Same three
+            # facts per row, a third of the height, no chart bundle, and the
+            # ordering is guaranteed by the component rather than by whichever
+            # sort the caller happened to apply. Chart guidance is explicit
+            # that category must never be encoded by colour alone — every bar
+            # carries its own name, percent and money.
+            _top = alloc_df.sort_values("market_value", ascending=False)
+            _lead = _top.iloc[0]
+            st.markdown(_ui.read(
+                f'Largest exposure is <b>{_lead["sector"]}</b> at '
+                f'{_lead["pct"]:.1f}% of the book. Top three are '
+                f'{_top.head(3)["pct"].sum():.1f}%.'
+            ), unsafe_allow_html=True)
+            st.markdown(_ui.ranked_bars([
+                {"name": str(r["sector"]) or "Unclassified",
+                 "pct": float(r["pct"]),
+                 "meta": f'{base_currency} {r["market_value"]:,.0f}',
+                 "state": "over" if float(r["pct"]) > 25 else ""}
+                for _, r in _top.iterrows()
+            ], limit=12), unsafe_allow_html=True)
     elif "market_value" in enriched.columns:
         # Simple top-10 bar chart if no sector data
         top10 = enriched.nlargest(10, "market_value")[["ticker", "market_value"]]
