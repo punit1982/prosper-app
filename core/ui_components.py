@@ -14,11 +14,15 @@ rather than a one-shot rewrite of every status indicator in the app.
 # text color, background — one row per severity level. Deliberately distinct
 # from the app's own accent color (used for the floating chat button etc.);
 # semantic color is not the same thing as brand color.
+# Chips are drawn with CSS variables, not literals. The old pairs were baked
+# light-mode values: #047857 on #e6f4ec measured 3.43:1 — a WCAG failure on the
+# light ground it was designed for, and a light box on a dark page in dark mode.
+# The token pairs are measured on both grounds (see core/ledger_ui TOKENS).
 _CHIP_COLORS = {
-    "critical": ("#b91c1c", "#fbe4e3"),  # matches core/fortress.py REGIME_COLORS red
-    "warn":     ("#96590a", "#f7eedb"),
-    "good":     ("#047857", "#e6f4ec"),  # matches core/fortress.py REGIME_COLORS green
-    "neutral":  ("#666666", "#ececec"),
+    "critical": ("var(--p-down)",  "var(--p-down-wash)"),
+    "warn":     ("var(--p-watch)", "var(--p-watch-wash)"),
+    "good":     ("var(--p-up)",    "var(--p-up-wash)"),
+    "neutral":  ("var(--p-ink-3)", "var(--p-sunk)"),
 }
 
 
@@ -192,44 +196,63 @@ _MOBILE_CSS = """
    content. On an 812px phone that is an eighth of the viewport spent on
    nothing, every page, every load. */
 @media (max-width:767px){
-  [data-testid="stMain"] .block-container{
+  .stMain .block-container{
     padding-top:0.75rem !important; padding-bottom:4.5rem !important;
     padding-left:0.85rem !important; padding-right:0.85rem !important;
   }
-  [data-testid="stMain"] h1{font-size:1.35rem !important;margin-bottom:0.1rem !important;}
-  [data-testid="stMain"] h2{font-size:1.15rem !important;}
-  [data-testid="stMain"] h3,[data-testid="stMain"] h4{
+  /* Streamlit puts a 1rem flex gap between EVERY stacked element. On a page
+     built from 20-odd small blocks that is 320px of nothing — most of a
+     phone screen — and it is the single largest source of the "so much
+     wasted space" this rebuild was asked to fix. 8px still separates; it
+     does not narrate. */
+  .stMain [data-testid="stVerticalBlock"]{gap:0.5rem !important;}
+  .stMain [data-testid="stHorizontalBlock"]{gap:0.5rem !important;}
+  .stMain h1{font-size:1.35rem !important;margin-bottom:0.1rem !important;}
+  .stMain h2{font-size:1.15rem !important;}
+  .stMain h3,.stMain h4{
     font-size:0.95rem !important;margin:0.9rem 0 0.35rem !important;}
   /* st.divider() costs 49px each and there are five on Command Center */
-  [data-testid="stMain"] hr{margin:0.7rem 0 !important;}
+  .stMain hr{margin:0.7rem 0 !important;}
 
   /* Tap targets. Nav links, buttons and tabs all render at 32px by default. */
   /* Match on data-testid as well as the class: Streamlit marks the wrapper
      with data-testid="stButton" and the class is not guaranteed, so
      `.stButton button` alone missed primary buttons — measured at 40px in the
      harness, under the 44px floor this rule exists to enforce. */
-  [data-testid="stMain"] .stButton button,
-  [data-testid="stMain"] [data-testid="stButton"] button,
-  [data-testid="stMain"] button[data-testid^="stBaseButton"],
+  .stMain .stButton button,
+  .stMain [data-testid="stButton"] button,
+  .stMain button[data-testid^="stBaseButton"],
+  .stMain a[data-testid^="stBaseLinkButton"],
   [data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"],
-  [data-testid="stMain"] button[data-baseweb="tab"]{
+  .stMain button[data-baseweb="tab"],
+  /* In-page links out to another screen ("Open Performance") measured 32px,
+     and every text/search box 38px. Both are things a thumb has to hit. The
+     bottom bar sets its own height and is excluded by the stMain scope. */
+  .stMain a[data-testid="stPageLink-NavLink"],
+  .stMain [data-testid="stTextInputRootElement"],
+  .stMain .stTextInput input,
+  .stMain .stNumberInput input,
+  .stMain [data-baseweb="select"] > div{
     min-height:44px !important;
   }
+  .stMain a[data-testid="stPageLink-NavLink"]{
+    display:flex;align-items:center;
+  }
   /* Tab strips scroll sideways with no sign that more exist — fade the edge. */
-  [data-testid="stMain"] [data-baseweb="tab-list"]{
+  .stMain [data-baseweb="tab-list"]{
     -webkit-overflow-scrolling:touch;
     mask-image:linear-gradient(to right,#000 88%,transparent 100%);
   }
 
   /* Plotly's modebar is 8 controls the user never wants, drawn ON TOP of the
      data on a 375px canvas. */
-  [data-testid="stMain"] .modebar{display:none !important;}
+  .stMain .modebar{display:none !important;}
 
   /* The floating chat button sits over the bottom-right of every table and
      chart; give the page enough tail to scroll clear of it, and lift it above
      the bottom navigation bar. */
-  [data-testid="stMain"] .block-container > div:last-child{margin-bottom:2rem;}
-  [data-testid="stMain"] [data-testid="stPopover"],
+  .stMain .block-container > div:last-child{margin-bottom:2rem;}
+  .stMain [data-testid="stPopover"],
   div[class*="chat-fab"], div[class*="floating"]{
     bottom:calc(60px + env(safe-area-inset-bottom,0px)) !important;
   }

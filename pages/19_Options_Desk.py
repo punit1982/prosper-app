@@ -38,19 +38,19 @@ from core.database import (
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.hv-card{border:1px solid rgba(128,128,128,0.22);border-left:3px solid #0f7a52;
+.hv-card{border:1px solid rgba(128,128,128,0.22);border-left:3px solid var(--p-up);
          padding:11px 12px;margin-bottom:9px;border-radius:3px;}
-.hv-card.debit{border-left-color:#b3261e;}
-.hv-card.hedge{border-left-color:#1e3a8a;}
-.hv-card.blocked{border-left-color:#9a5b06;opacity:0.72;}
+.hv-card.debit{border-left-color:var(--p-down);}
+.hv-card.hedge{border-left-color:var(--p-focus);}
+.hv-card.blocked{border-left-color:var(--p-watch);opacity:0.72;}
 .hv-r1{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
 .hv-sym{font-weight:700;font-size:1.02rem;letter-spacing:-0.01em;}
 .hv-amt{font-weight:700;font-size:1.02rem;font-variant-numeric:tabular-nums;white-space:nowrap;}
-.hv-amt.pos{color:#0f7a52;} .hv-amt.neg{color:#b3261e;}
+.hv-amt.pos{color:var(--p-up);} .hv-amt.neg{color:var(--p-down);}
 .hv-r2{display:flex;justify-content:space-between;gap:10px;font-size:0.72rem;
        opacity:0.62;margin-top:2px;font-variant-numeric:tabular-nums;}
 .hv-why{font-size:0.8rem;line-height:1.45;margin-top:7px;color:inherit;opacity:0.92;}
-.hv-warn{font-size:0.72rem;color:#9a5b06;margin-top:5px;line-height:1.4;}
+.hv-warn{font-size:0.72rem;color:var(--p-watch);margin-top:5px;line-height:1.4;}
 .hv-order{font-family:ui-monospace,'IBM Plex Mono',Menlo,monospace;font-size:0.76rem;
           background:rgba(128,128,128,0.10);padding:7px 9px;border-radius:3px;margin-top:7px;
           overflow-x:auto;white-space:nowrap;}

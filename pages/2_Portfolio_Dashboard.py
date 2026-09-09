@@ -703,6 +703,11 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
 # ─────────────────────────────────────────
 @st.fragment(run_every=ttl)
 def portfolio_section():
+    # Imported at the TOP of the fragment, not halfway down it. `_ui` was first
+    # bound ~90 lines below its first use, which makes it a local for the whole
+    # function and raises UnboundLocalError on the earlier line. AppTest never
+    # saw it because a fragment body only runs on the client's rerun.
+    import core.ledger_ui as _ui
     sym       = base_currency
     now       = time.time()
     last      = st.session_state.get("last_refresh_time", 0)
@@ -714,10 +719,15 @@ def portfolio_section():
     # SQLite cache age — survives server restarts, shows on fresh sessions
     sqlite_age = get_price_cache_age()
 
-    # Without keep_row() these two stack on a phone and the refresh button —
-    # an icon — takes a full-width 44px row of its own under a one-line caption.
+    # Without keep_row() these two stack on a phone and the refresh button
+    # takes a full-width 44px row of its own under a one-line caption.
+    #
+    # The word "Refresh" does not fit a 1/8 column at 375px: Streamlit wrapped
+    # it to one letter per line and the button became a 190px vertical tower of
+    # R-e-f-r-e-s-h. The label is an icon now, and the column is wide enough to
+    # hold a 44px tap target on its own.
     _ui.keep_row()
-    hdr1, hdr2 = st.columns([7, 1])
+    hdr1, hdr2 = st.columns([5, 1])
     with hdr1:
         _fmt_age = fmt_age
         _best_age = None
@@ -731,8 +741,8 @@ def portfolio_section():
         else:
             st.caption(f"📡 Prices: **live** · Base: **{sym}**")
     with hdr2:
-        manual_refresh = st.button("Refresh", key="frag_refresh",
-                                    help="Fetch fresh prices for every holding")
+        manual_refresh = st.button("⟳", key="frag_refresh",
+                                   help="Fetch fresh prices for every holding")
 
     needs_fetch = not has_cache or cache_is_stale or manual_refresh
 
@@ -807,7 +817,6 @@ def portfolio_section():
     # became six full-width rows ~70px tall, so the Performance cluster began
     # below the fold on a phone. stat_grid stays a grid at 375px.
     from core.ui_components import mobile_shell, fmt_compact
-    import core.ledger_ui as _ui
     mobile_shell()
 
     _df_all = df

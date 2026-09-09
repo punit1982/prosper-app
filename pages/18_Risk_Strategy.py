@@ -197,14 +197,14 @@ r_color = _rd.get("color", REGIME_COLORS.get(current_regime, "#888"))
 st.markdown(
     f"<div style='display:flex;gap:20px;padding:12px 18px;background:rgba(128,128,128,0.03);"
     f"border-radius:10px;border:1px solid rgba(128,128,128,0.08);margin-bottom:12px;flex-wrap:wrap;align-items:center'>"
-    f"<div><span style='color:#475569;font-size:0.8rem'>Market Regime</span><br>"
+    f"<div><span style='color:var(--p-ink-3);font-size:0.8rem'>Market Regime</span><br>"
     f"<span style='background:{r_color};color:white;padding:3px 12px;border-radius:12px;"
     f"font-weight:700;font-size:0.95rem'>{simple_name}</span></div>"
-    f"<div><span style='color:#475569;font-size:0.8rem'>World Risk</span><br>"
+    f"<div><span style='color:var(--p-ink-3);font-size:0.8rem'>World Risk</span><br>"
     f"<b style='font-size:0.95rem'>{geo_simple}</b></div>"
-    f"<div><span style='color:#475569;font-size:0.8rem'>Holdings</span><br>"
+    f"<div><span style='color:var(--p-ink-3);font-size:0.8rem'>Holdings</span><br>"
     f"<b style='font-size:0.95rem'>{len(enriched)}</b></div>"
-    f"<div><span style='color:#475569;font-size:0.8rem'>Cash</span><br>"
+    f"<div><span style='color:var(--p-ink-3);font-size:0.8rem'>Cash</span><br>"
     f"<b style='font-size:0.95rem'>{base_currency} {total_cash:,.0f} ({cash_pct:.0f}%)</b></div>"
     f"</div>",
     unsafe_allow_html=True,
@@ -229,11 +229,11 @@ _summary_text = _combined_summary.get((simple_name, geo_simple), simple_desc)
 st.markdown(
     f"<div style='margin:4px 0 12px 0;padding:12px 16px;border-radius:8px;"
     f"background:rgba(128,128,128,0.03);border-left:4px solid {r_color}'>"
-    f"<div style='font-size:0.9rem;color:#94a3b8;margin-bottom:6px'>"
+    f"<div style='font-size:0.9rem;color:var(--p-mark);margin-bottom:6px'>"
     f"{_regime_icon} <b>{simple_name}</b> — {simple_desc}</div>"
-    f"<div style='font-size:0.85rem;color:#475569;margin-bottom:6px'>"
+    f"<div style='font-size:0.85rem;color:var(--p-ink-3);margin-bottom:6px'>"
     f"<b>What to do:</b> {_regime_action}</div>"
-    f"<div style='font-size:0.85rem;color:#475569'>"
+    f"<div style='font-size:0.85rem;color:var(--p-ink-3)'>"
     f"<b>With current world risk ({geo_simple}):</b> {_summary_text}</div>"
     f"</div>",
     unsafe_allow_html=True,
@@ -379,7 +379,7 @@ if tab_health:
         st.markdown(
             f"<div style='text-align:center;padding:15px'>"
             f"<div style='font-size:56px;font-weight:700;color:{score_color}'>{score}/{total}{score_change_text}</div>"
-            f"<div style='font-size:1.1rem;color:#94a3b8'>{health_label}</div>"
+            f"<div style='font-size:1.1rem;color:var(--p-mark)'>{health_label}</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -622,7 +622,7 @@ if tab_sizing:
     st.markdown(
         f"<div style='padding:12px 16px;border-radius:10px;background:rgba(128,128,128,0.03);"
         f"border:1px solid rgba(128,128,128,0.08);margin-bottom:12px'>"
-        f"<p style='margin:0 0 8px 0;color:#475569;font-size:0.85rem'>"
+        f"<p style='margin:0 0 8px 0;color:var(--p-ink-3);font-size:0.85rem'>"
         f"Regime: <b>{simple_name}</b> — positions scaled to <b>{regime_scalar:.0%}</b> of normal. "
         f"Guidance is based on your Prosper AI score for each stock.</p>"
         f"</div>",
@@ -691,8 +691,8 @@ if tab_sizing:
     display_sizing["Target %"] = display_sizing["Target %"].apply(lambda x: f"{x:.1f}%" if x > 0 else "Exit")
 
     def _color_action(val):
-        colors = {"Trim": "color:#96590a;font-weight:600", "Add": "color:#1e3a8a;font-weight:600",
-                  "Sell": "color:#b91c1c;font-weight:700", "Hold": "color:#047857"}
+        colors = {"Trim": "color:var(--p-watch);font-weight:600", "Add": "color:var(--p-focus);font-weight:600",
+                  "Sell": "color:var(--p-down);font-weight:700", "Hold": "color:var(--p-up)"}
         return colors.get(val, "")
 
     styled = display_sizing[["Ticker", "Name", "Score", "Confidence", "Current %", "Target %", "Action"]].style.map(
@@ -834,10 +834,10 @@ if tab_alloc:
             f"background:rgba(128,128,128,0.03);border-radius:10px;border:1px solid rgba(128,128,128,0.08)'>"
             f"<span style='font-size:2rem;font-weight:700;color:{hhi_color}'>{hhi:.0f}</span>"
             f"<div><b>{hhi_icon} {hhi_label}</b><br>"
-            f"<span style='font-size:0.8rem;color:#475569'>HHI Scale: "
-            f"<span style='color:#047857'>0-1500 Diversified</span> · "
-            f"<span style='color:#96590A'>1500-2500 Moderate</span> · "
-            f"<span style='color:#b91c1c'>2500+ Concentrated</span></span></div>"
+            f"<span style='font-size:0.8rem;color:var(--p-ink-3)'>HHI Scale: "
+            f"<span style='color:var(--p-up)'>0-1500 Diversified</span> · "
+            f"<span style='color:var(--p-watch)'>1500-2500 Moderate</span> · "
+            f"<span style='color:var(--p-down)'>2500+ Concentrated</span></span></div>"
             f"</div>",
             unsafe_allow_html=True,
         )

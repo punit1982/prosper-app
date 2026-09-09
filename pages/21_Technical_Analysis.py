@@ -404,9 +404,9 @@ st.markdown(
     f"<div style='display:flex;align-items:center;gap:12px;margin-bottom:8px'>"
     f"<span style='font-size:1.8rem'>{action_icon}</span>"
     f"<span style='font-size:1.4rem;font-weight:700;color:{action_color}'>{action}</span>"
-    f"<span style='font-size:0.9rem;color:#475569;margin-left:auto'>"
+    f"<span style='font-size:0.9rem;color:var(--p-ink-3);margin-left:auto'>"
     f"Signal Score: {score:.0f}/100 ({bullish}B / {bearish}S)</span></div>"
-    f"<p style='margin:0;color:#94a3b8;font-size:0.95rem'>{action_desc}</p>"
+    f"<p style='margin:0;color:var(--p-mark);font-size:0.95rem'>{action_desc}</p>"
     f"</div>",
     unsafe_allow_html=True,
 )

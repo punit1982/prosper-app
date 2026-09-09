@@ -1066,7 +1066,7 @@ if tab_ai:
                     f'<div style="text-align:center; padding:30px; background:rgba(26,158,92,0.05); '
                     f'border:1px dashed rgba(26,158,92,0.3); border-radius:12px; margin:16px 0;">'
                     f'<div style="font-size:1.2em; font-weight:600; margin-bottom:8px;">No GROW analysis yet</div>'
-                    f'<div style="color:#475569;">Run GROW on <strong>{ticker}</strong> for the two verdicts: Durability (is it worth owning) '
+                    f'<div style="color:var(--p-ink-3);">Run GROW on <strong>{ticker}</strong> for the two verdicts: Durability (is it worth owning) '
                     f'and Entry (is it worth buying at today\'s price) with the full price ladder.</div></div>',
                     unsafe_allow_html=True,
                 )

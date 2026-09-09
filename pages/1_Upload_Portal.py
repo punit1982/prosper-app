@@ -172,7 +172,7 @@ if not st.session_state.parsed_holdings:
     # Step indicator
     st.markdown(
         "<div style='display:flex;gap:12px;margin:1rem 0'>"
-        "<span style='background:#1E3A8A;color:white;border-radius:50%;width:28px;height:28px;"
+        "<span style='background:var(--p-accent);color:var(--p-on-accent);border-radius:50%;width:28px;height:28px;"
         "display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px'>1</span>"
         "<span style='font-size:1.1rem;font-weight:600;padding-top:2px'>Upload Files</span>"
         "</div>",
@@ -217,7 +217,7 @@ if not st.session_state.parsed_holdings:
                 "<div style='padding:16px;border-radius:12px;border:1px solid #333;text-align:center'>"
                 "<div style='font-size:2rem'>📷</div>"
                 "<div style='font-weight:600;margin:8px 0'>Screenshots</div>"
-                "<div style='color:#475569;font-size:0.85rem'>PNG or JPG from any broker app</div>"
+                "<div style='color:var(--p-ink-3);font-size:0.85rem'>PNG or JPG from any broker app</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -226,7 +226,7 @@ if not st.session_state.parsed_holdings:
                 "<div style='padding:16px;border-radius:12px;border:1px solid #333;text-align:center'>"
                 "<div style='font-size:2rem'>📊</div>"
                 "<div style='font-weight:600;margin:8px 0'>CSV / Excel</div>"
-                "<div style='color:#475569;font-size:0.85rem'>Auto-maps Ticker, Qty, Cost columns</div>"
+                "<div style='color:var(--p-ink-3);font-size:0.85rem'>Auto-maps Ticker, Qty, Cost columns</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -235,7 +235,7 @@ if not st.session_state.parsed_holdings:
                 "<div style='padding:16px;border-radius:12px;border:1px solid #333;text-align:center'>"
                 "<div style='font-size:2rem'>📄</div>"
                 "<div style='font-weight:600;margin:8px 0'>PDF Statements</div>"
-                "<div style='color:#475569;font-size:0.85rem'>AI reads brokerage statements</div>"
+                "<div style='color:var(--p-ink-3);font-size:0.85rem'>AI reads brokerage statements</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -349,7 +349,7 @@ if not st.session_state.parsed_holdings:
 # Step indicator
 st.markdown(
     "<div style='display:flex;gap:12px;margin:1rem 0'>"
-    "<span style='background:#1E3A8A;color:white;border-radius:50%;width:28px;height:28px;"
+    "<span style='background:var(--p-accent);color:var(--p-on-accent);border-radius:50%;width:28px;height:28px;"
     "display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px'>2</span>"
     "<span style='font-size:1.1rem;font-weight:600;padding-top:2px'>Review & Save</span>"
     "</div>",

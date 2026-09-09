@@ -121,15 +121,15 @@ def verdict_block_html(analysis: dict, ccy: str = "") -> str:
         f'<div style="border:1px solid rgba(128,128,128,0.1);border-radius:12px;padding:18px 22px;margin:8px 0 14px 0;'
         f'background:linear-gradient(135deg, rgba(26,158,92,0.07), rgba(0,0,0,0))">'
         f'<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center">'
-        f'<div><div style="font-size:0.75rem;color:#475569;letter-spacing:0.5px">DURABILITY · is this worth owning</div>'
-        f'<div style="font-size:2.4rem;font-weight:800;color:{dc};line-height:1">{dur_txt}<span style="font-size:1rem;color:#475569"> / 100</span> '
+        f'<div><div style="font-size:0.75rem;color:var(--p-ink-3);letter-spacing:0.5px">DURABILITY · is this worth owning</div>'
+        f'<div style="font-size:2.4rem;font-weight:800;color:{dc};line-height:1">{dur_txt}<span style="font-size:1rem;color:var(--p-ink-3)"> / 100</span> '
         f'<span style="font-size:1rem;font-weight:600;color:{dc}">{band}</span></div></div>'
-        f'<div><div style="font-size:0.75rem;color:#475569;letter-spacing:0.5px">ENTRY · is it worth buying today</div>'
+        f'<div><div style="font-size:0.75rem;color:var(--p-ink-3);letter-spacing:0.5px">ENTRY · is it worth buying today</div>'
         f'<div style="display:inline-block;background:{vc};color:white;padding:8px 20px;border-radius:8px;font-weight:800;font-size:1.4rem;margin-top:4px">{verdict}</div></div>'
         f'</div>'
         f'<div style="margin-top:12px;font-size:0.95rem">{ladder}</div>'
-        f'<div style="margin-top:6px;font-size:0.95rem;color:#94a3b8">{ret_line}</div>'
-        + (f'<div style="margin-top:6px;font-size:0.9rem;color:#475569">Confidence: <i>{conf}</i></div>' if conf else "")
+        f'<div style="margin-top:6px;font-size:0.95rem;color:var(--p-mark)">{ret_line}</div>'
+        + (f'<div style="margin-top:6px;font-size:0.9rem;color:var(--p-ink-3)">Confidence: <i>{conf}</i></div>' if conf else "")
         + f'</div>'
     )
 

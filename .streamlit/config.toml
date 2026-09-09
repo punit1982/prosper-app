@@ -25,6 +25,13 @@ enableXsrfProtection = true
 magicEnabled = false
 fastReruns = true
 
+[client]
+# "minimal" removes Streamlit's own Deploy button and its dev-only toolbar
+# items, which on a 375px phone was a 110px band of chrome above the first
+# pixel of the app — the top 13% of every screen, spent on a button the owner
+# of this app can never use.
+toolbarMode = "minimal"
+
 [browser]
 gatherUsageStats = false
 

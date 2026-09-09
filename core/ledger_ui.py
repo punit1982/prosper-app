@@ -169,6 +169,12 @@ def icon(name: str, size: int = 20, cls: str = "") -> str:
 # ══════════════════════════════════════════════════════════════════════════
 # STYLE
 # ══════════════════════════════════════════════════════════════════════════
+# Every rule below is scoped to `.stMain`, the CLASS, not
+# `[data-testid="stMain"]`. Streamlit renames that testid to
+# stAppScrollToBottomContainer on any page carrying a chat input — so on Ask,
+# and only on Ask, the entire theme silently did not apply: dark text on a dark
+# ground, light widget surfaces, no tap-target floor. The class is stable on
+# both. Same specificity (0,1,0), so nothing else shifts.
 CSS = f"""<style>
 :root{{{_vars("light")}
   --p-ease:{_EASE};
@@ -186,6 +192,15 @@ CSS = f"""<style>
    The app now declares its own ground, the user chooses it, and design_shell()
    emits exactly one palette. */
 
+/* A stylesheet is not content, but Streamlit still gives it an element
+   container, and the vertical block puts its 1rem gap on both sides of it.
+   Measured on every page: a 63px band of nothing between two sections, one
+   per CSS-only injection. Collapse any container whose whole payload is a
+   <style>. Containers that also carry a marker div keep their own rules. */
+[data-testid="stElementContainer"]:has(> [data-testid="stHtml"] > style:only-child),
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] > style:only-child){{
+  display:none !important;
+}}
 /* Streamlit's own chrome. Reclaim the block padding and hide the 32-link
    collapsed sidebar, which otherwise counts against every tap-target audit. */
 /* Deliberately NOT setting .stApp background or a global font here. While the
@@ -203,16 +218,16 @@ CSS = f"""<style>
 @media (max-width:767px){{
   [data-testid="stHeader"]{{height:2.6rem!important;min-height:2.6rem!important;
     background:transparent!important;}}
-  [data-testid="stMain"] .block-container{{padding-top:0!important;}}
+  .stMain .block-container{{padding-top:0!important;}}
   [data-testid="stAppViewBlockContainer"]{{padding-top:0!important;}}
 }}
 
 /* Browser surfaces. These ship with defaults belonging to no design system,
    and theming them is the cheapest signal a page was built, not assembled. */
 ::selection{{background:var(--p-focus);color:#fff;}}
-[data-testid="stMain"]{{caret-color:var(--p-focus);
+.stMain{{caret-color:var(--p-focus);
   scrollbar-color:var(--p-rule-strong) transparent;scrollbar-width:thin;}}
-[data-testid="stMain"] :focus-visible{{outline:2px solid var(--p-focus);
+.stMain :focus-visible{{outline:2px solid var(--p-focus);
   outline-offset:2px;border-radius:3px;}}
 
 .p-ic{{flex:none;vertical-align:-.15em;}}
@@ -467,25 +482,49 @@ def c(name: str) -> str:
 # stay distinguishable. Semantic tokens deliberately excluded: green and red
 # mean gain and loss everywhere else in the app, and a category that happens
 # to land on one would read as a verdict.
-CHART_SEQUENCE = ["#1E7A66", "#5D6B80", "#96590A", "#2F6F8F", "#7A5C99",
-                  "#0F766E", "#8A6D3B", "#4B5563", "#1E3A8A", "#6B7280"]
+# Plotly takes literals, not CSS variables, so these have to be swapped in
+# Python when the theme changes — design_shell() rebinds them, the same way it
+# rebinds ACTIVE_THEME. The light values were the only set that existed, and on
+# the dark ground a #1E7A66 line measured 2.1:1 against #0B1120: a chart drawn
+# in ink the same weight as the paper.
+CHART_SEQUENCES = {
+    "light": ["#1E7A66", "#5D6B80", "#96590A", "#2F6F8F", "#7A5C99",
+              "#0F766E", "#8A6D3B", "#4B5563", "#1E3A8A", "#6B7280"],
+    "dark":  ["#5EEAD4", "#94A3B8", "#FBBF24", "#7DD3FC", "#C4B5FD",
+              "#2DD4BF", "#D6BC8A", "#CBD5E1", "#93C5FD", "#A1A1AA"],
+}
+CHART_SEQUENCE = CHART_SEQUENCES["light"]
 
 
 # A five-step semantic ramp for verdicts and actions — strong-positive through
 # strong-negative. Every step clears 4.5:1 on the light ground, which the old
 # material-palette values did not: #00C853 measured 1.9:1 and #4CAF50 2.7:1,
 # i.e. effectively invisible as text on white.
-VERDICT_RAMP = {
-    "strong_positive": "#065F46",
-    "positive":        "#047857",
-    "neutral":         "#475569",
-    "negative":        "#B45309",
-    "strong_negative": "#B91C1C",
+VERDICT_RAMPS = {
+    "light": {
+        "strong_positive": "#065F46",
+        "positive":        "#047857",
+        "neutral":         "#475569",
+        "negative":        "#B45309",
+        "strong_negative": "#B91C1C",
+    },
+    "dark": {
+        "strong_positive": "#6EE7B7",
+        "positive":        "#34D399",
+        "neutral":         "#94A3B8",
+        "negative":        "#FBBF24",
+        "strong_negative": "#F87171",
+    },
 }
+VERDICT_RAMP = VERDICT_RAMPS["light"]
 
 # Diverging scale for heat maps and treemaps: loss through neutral to gain.
 # Ends are darker than the material originals so a tile label stays legible.
-DIVERGING = ["#B91C1C", "#D97706", "#94A3B8", "#059669", "#065F46"]
+DIVERGINGS = {
+    "light": ["#B91C1C", "#D97706", "#94A3B8", "#059669", "#065F46"],
+    "dark":  ["#F87171", "#FBBF24", "#64748B", "#34D399", "#6EE7B7"],
+}
+DIVERGING = DIVERGINGS["light"]
 
 
 def verdict(word: str) -> str:
@@ -966,23 +1005,23 @@ def _chrome(mode: str) -> str:
   color:{t['ink']}!important;}}
 [data-testid="stSidebar"] input::placeholder,
 [data-testid="stSidebar"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
-[data-testid="stMain"] [data-testid="stTextInputRootElement"],
-[data-testid="stMain"] [data-baseweb="base-input"]{{
+.stMain [data-testid="stTextInputRootElement"],
+.stMain [data-baseweb="base-input"]{{
   background:{t['sheet']}!important;border-color:{t['rule-strong']}!important;}}
-[data-testid="stMain"],[data-testid="stMain"] p,[data-testid="stMain"] li,
-[data-testid="stMain"] h1,[data-testid="stMain"] h2,[data-testid="stMain"] h3,
-[data-testid="stMain"] h4,[data-testid="stMain"] label,
-[data-testid="stMain"] [data-testid="stMarkdownContainer"]{{color:{t['ink']};}}
-[data-testid="stMain"] .stTextInput input,[data-testid="stMain"] .stNumberInput input,
-[data-testid="stMain"] .stTextArea textarea,[data-testid="stMain"] [data-baseweb="select"]>div{{
+.stMain,.stMain p,.stMain li,
+.stMain h1,.stMain h2,.stMain h3,
+.stMain h4,.stMain label,
+.stMain [data-testid="stMarkdownContainer"]{{color:{t['ink']};}}
+.stMain .stTextInput input,.stMain .stNumberInput input,
+.stMain .stTextArea textarea,.stMain [data-baseweb="select"]>div{{
   background:{t['sheet']}!important;color:{t['ink']}!important;
   border-color:{t['rule-strong']}!important;}}
-[data-testid="stMain"] [data-testid="stExpander"],
-[data-testid="stMain"] [data-testid="stExpander"] details{{
+.stMain [data-testid="stExpander"],
+.stMain [data-testid="stExpander"] details{{
   background:{t['sheet']}!important;border-color:{t['rule']}!important;}}
-[data-testid="stMain"] [data-testid="stDataFrame"]{{background:{t['sheet']}!important;}}
-[data-testid="stMain"] hr{{border-color:{t['rule']}!important;}}
-[data-testid="stMain"] code{{background:{t['sunk']}!important;color:{t['ink']}!important;}}
+.stMain [data-testid="stDataFrame"]{{background:{t['sheet']}!important;}}
+.stMain hr{{border-color:{t['rule']}!important;}}
+.stMain code{{background:{t['sunk']}!important;color:{t['ink']}!important;}}
 
 /* ── Streamlit's own controls ────────────────────────────────────────────
    These carry their own backgrounds from the static config.toml palette, so
@@ -990,43 +1029,109 @@ def _chrome(mode: str) -> str:
    used across Holdings, Risk, Income, Security and Activity rendered as WHITE
    pills with white labels in dark mode — the control was unreadable, not just
    off-brand. Placeholders were invisible for the same reason. */
-[data-testid="stMain"] [data-baseweb="segmented-control"],
-[data-testid="stMain"] [data-testid="stButtonGroup"]{{background:transparent!important;}}
-[data-testid="stMain"] [data-testid="stButtonGroup"] button,
-[data-testid="stMain"] [data-baseweb="segmented-control"] button{{
+.stMain [data-baseweb="segmented-control"],
+.stMain [data-testid="stButtonGroup"]{{background:transparent!important;}}
+.stMain [data-testid="stButtonGroup"] button,
+.stMain [data-baseweb="segmented-control"] button{{
   background:{t['sheet']}!important;color:{t['ink-2']}!important;
   border:1px solid {t['rule-strong']}!important;}}
-[data-testid="stMain"] [data-testid="stButtonGroup"] button[aria-checked="true"],
-[data-testid="stMain"] [data-testid="stButtonGroup"] button[aria-selected="true"],
-[data-testid="stMain"] [data-testid="stButtonGroup"] button[kind="segmented_controlActive"]{{
+.stMain [data-testid="stButtonGroup"] button[aria-checked="true"],
+.stMain [data-testid="stButtonGroup"] button[aria-selected="true"],
+.stMain [data-testid="stButtonGroup"] button[kind="segmented_controlActive"]{{
   background:{t['accent']}!important;color:{t['on-accent']}!important;
   border-color:{t['accent']}!important;}}
-[data-testid="stMain"] .stButton button,
-[data-testid="stMain"] [data-testid="stButton"] button,
-[data-testid="stMain"] .stButton button *,
-[data-testid="stMain"] [data-testid="stButton"] button *{{color:{t['ink']}!important;}}
-[data-testid="stMain"] .stButton button,
-[data-testid="stMain"] [data-testid="stButton"] button{{
+.stMain .stButton button,
+.stMain [data-testid="stButton"] button,
+.stMain .stButton button *,
+.stMain [data-testid="stButton"] button *{{color:{t['ink']}!important;}}
+.stMain .stButton button,
+.stMain [data-testid="stButton"] button{{
   background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;}}
-[data-testid="stMain"] .stButton button[kind="primary"],
-[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"]{{
+.stMain .stButton button[kind="primary"],
+.stMain [data-testid="stButton"] button[kind="primary"]{{
   background:{t['accent']}!important;border-color:{t['accent']}!important;}}
-[data-testid="stMain"] .stButton button[kind="primary"],
-[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"],
-[data-testid="stMain"] .stButton button[kind="primary"] *,
-[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"] *{{
+.stMain .stButton button[kind="primary"],
+.stMain [data-testid="stButton"] button[kind="primary"],
+.stMain .stButton button[kind="primary"] *,
+.stMain [data-testid="stButton"] button[kind="primary"] *{{
   color:{t['on-accent']}!important;}}
-[data-testid="stMain"] input::placeholder,
-[data-testid="stMain"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
-[data-testid="stMain"] [data-baseweb="popover"] li,
-[data-testid="stMain"] [role="listbox"]{{
+/* Streamlit names its own buttons stBaseButton-<kind>. The rules above match
+   on .stButton / kind=, which the segmented control and the primary button do
+   not carry — both kept painting themselves #E2E8F0 from the static config
+   palette, so the SELECTED currency pill was a light box holding light text at
+   1.13:1. Match the testid prefix and there is nothing left to miss. */
+/* st.link_button is an <a data-testid="stBaseLinkButton-secondary">, not a
+   <button>, so none of the button rules reached it: Activity drew 30 "Read →"
+   links at 1.1:1. Link buttons and buttons are the same control to a reader. */
+.stMain [data-testid^="stBaseLinkButton-"],
+.stMain [data-testid^="stBaseButton-"]{{
+  background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;
+  color:{t['ink']}!important;}}
+.stMain [data-testid="stBaseButton-primary"],
+.stMain [data-testid="stBaseButton-segmented_controlActive"]{{
+  background:{t['accent']}!important;border-color:{t['accent']}!important;}}
+.stMain [data-testid="stBaseButton-primary"],
+.stMain [data-testid="stBaseButton-primary"] p,
+.stMain [data-testid="stBaseButton-primary"] div,
+.stMain [data-testid="stBaseButton-segmented_controlActive"],
+.stMain [data-testid="stBaseButton-segmented_controlActive"] p,
+.stMain [data-testid="stBaseButton-segmented_controlActive"] div{{
+  color:{t['on-accent']}!important;}}
+.stMain [data-testid^="stBaseLinkButton-"],
+.stMain [data-testid^="stBaseLinkButton-"] p,
+.stMain [data-testid^="stBaseLinkButton-"] div{{color:{t['ink']}!important;}}
+/* The remaining widgets Streamlit paints from the static config palette. Each
+   was found by walking the live DOM for a light surface or a dark glyph on the
+   dark ground, not by reading the source. */
+.stMain [data-testid="stSliderThumbValue"],
+.stMain [data-testid="stTickBarMin"],
+.stMain [data-testid="stTickBarMax"]{{color:{t['ink-2']}!important;}}
+.stMain [data-testid="stSliderTickBar"]{{background:transparent!important;}}
+.stMain pre,.stMain [data-testid="stCode"],.stMain .stCode pre{{
+  background:{t['sunk']}!important;color:{t['ink']}!important;}}
+.stMain [data-baseweb="tag"]{{
+  background:{t['sunk']}!important;color:{t['ink']}!important;}}
+.stMain [data-testid="stFileUploaderDropzone"],
+.stMain [data-testid="stFileUploaderFile"]{{
+  background:{t['sunk']}!important;border-color:{t['rule-strong']}!important;}}
+.stMain [data-testid="stAlertContainer"],
+.stMain [data-testid="stAlertContentInfo"],
+.stMain [data-testid="stAlertContentSuccess"],
+.stMain [data-testid="stAlertContentWarning"],
+.stMain [data-testid="stAlertContentError"]{{color:{t['ink']}!important;}}
+.stMain [data-testid="stNotification"],
+.stMain [data-testid="stAlert"] > div{{
+  background:{t['sunk']}!important;color:{t['ink']}!important;}}
+/* A button narrower than its label must not break the word. Streamlit's own
+   rules allow an intra-word break, which turned "Refresh" in a 1/8 column into
+   a 190px vertical tower of single letters. Wrap between words, never inside
+   one — the button gets taller by a line instead of by seven. */
+.stMain button p,.stMain button div,.stMain a[data-testid^="stBaseLinkButton"] p{{
+  overflow-wrap:normal!important;word-break:normal!important;}}
+/* The dataframe hover toolbar floats a white 79x44 panel over a dark table. */
+.stMain [data-testid="stElementToolbar"],
+.stMain [data-testid="stElementToolbar"] > div,
+.stMain [data-testid="stElementToolbarButton"]{{
+  background:{t['sheet']}!important;color:{t['ink-2']}!important;
+  border-color:{t['rule']}!important;}}
+/* An unchecked box or radio is a pure-white 16px square on a dark page. Only
+   the UNCHECKED state is repainted — the checked one carries the accent fill
+   and its tick, and must keep them. */
+.stMain label[data-baseweb="checkbox"]:has(input:not(:checked))>span:first-child,
+.stMain label[data-baseweb="radio"]:has(input:not(:checked))>div,
+.stMain label[data-baseweb="radio"]:has(input:not(:checked))>div>div{{
+  background:{t['sunk']}!important;border-color:{t['rule-strong']}!important;}}
+.stMain input::placeholder,
+.stMain textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
+.stMain [data-baseweb="popover"] li,
+.stMain [role="listbox"]{{
   background:{t['sheet']}!important;color:{t['ink']}!important;}}
-[data-testid="stMain"] [data-testid="stCheckbox"] label,
-[data-testid="stMain"] [data-testid="stRadio"] label,
-[data-testid="stMain"] [data-testid="stCaptionContainer"]{{color:{t['ink-2']}!important;}}
-[data-testid="stMain"] [data-baseweb="tab"]{{color:{t['ink-2']}!important;}}
-[data-testid="stMain"] [data-testid="stMetricValue"]{{color:{t['ink']}!important;}}
-[data-testid="stMain"] [data-testid="stMetricLabel"]{{color:{t['ink-3']}!important;}}
+.stMain [data-testid="stCheckbox"] label,
+.stMain [data-testid="stRadio"] label,
+.stMain [data-testid="stCaptionContainer"]{{color:{t['ink-2']}!important;}}
+.stMain [data-baseweb="tab"]{{color:{t['ink-2']}!important;}}
+.stMain [data-testid="stMetricValue"]{{color:{t['ink']}!important;}}
+.stMain [data-testid="stMetricLabel"]{{color:{t['ink-3']}!important;}}
 /* Streamlit paints its OWN text colour from config.toml, which is static and
    therefore the light value. Anything the selectors above do not name keeps it
    — which in dark mode meant the bottom bar's links and Material icon glyphs
@@ -1034,20 +1139,20 @@ def _chrome(mode: str) -> str:
    that carry text and were missed. */
 /* Streamlit ships Source Sans Pro and applies it to containers this sheet
    does not name, so two faces rendered side by side. One family, everywhere. */
-[data-testid="stMain"],[data-testid="stSidebar"],
-[data-testid="stMain"] *:not([class*="material"]):not([data-testid="stIconMaterial"]),
+.stMain,[data-testid="stSidebar"],
+.stMain *:not([class*="material"]):not([data-testid="stIconMaterial"]),
 [data-testid="stSidebar"] *:not([class*="material"]):not([data-testid="stIconMaterial"]){{
   font-family:{_FONT_SANS};}}
-[data-testid="stMain"] a[data-testid="stPageLink-NavLink"],
-[data-testid="stMain"] a[data-testid="stPageLink-NavLink"] *,
-[data-testid="stMain"] span[data-testid="stIconMaterial"],
-[data-testid="stMain"] [data-testid="stMarkdownContainer"] a{{
+.stMain a[data-testid="stPageLink-NavLink"],
+.stMain a[data-testid="stPageLink-NavLink"] *,
+.stMain span[data-testid="stIconMaterial"],
+.stMain [data-testid="stMarkdownContainer"] a{{
   color:{t['ink-2']}!important;}}
-[data-testid="stMain"] a[data-testid="stPageLink-NavLink"][aria-current],
-[data-testid="stMain"] a[data-testid="stPageLink-NavLink"][aria-current] *{{
+.stMain a[data-testid="stPageLink-NavLink"][aria-current],
+.stMain a[data-testid="stPageLink-NavLink"][aria-current] *{{
   color:{t['ink']}!important;}}
 /* Charts inherit the page ground, so the plot area must not stay white. */
-[data-testid="stMain"] .js-plotly-plot .plotly .main-svg{{background:transparent!important;}}
+.stMain .js-plotly-plot .plotly .main-svg{{background:transparent!important;}}
 </style>"""
 
 
@@ -1138,8 +1243,11 @@ def design_shell() -> None:
     mode = active_theme()
     # ACTIVE_THEME is what the Plotly literals read; keep it in step with the
     # CSS on every run, since both are regenerated per rerun anyway.
-    global ACTIVE_THEME
+    global ACTIVE_THEME, CHART_SEQUENCE, DIVERGING, VERDICT_RAMP
     ACTIVE_THEME = mode
+    CHART_SEQUENCE = CHART_SEQUENCES[mode]
+    DIVERGING = DIVERGINGS[mode]
+    VERDICT_RAMP = VERDICT_RAMPS[mode]
     _emit(_min(CSS) + _min(_chrome(mode)))
 
 
