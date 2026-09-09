@@ -660,48 +660,32 @@ else:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6: NAV HISTORY + QUICK NAV
+# SECTION 6: PORTFOLIO VALUE HISTORY
 # ══════════════════════════════════════════════════════════════════════════════
-col_nav, col_links = st.columns([3, 2])
+# Quick Navigation (8 st.page_links duplicating the sidebar and the bottom
+# bar) was deleted in Phase 3: a dashboard should carry contextual actions,
+# not a second sitemap. The NAV history chart now uses the full width.
+nav_history = get_nav_history(base_currency)
+if not nav_history.empty and len(nav_history) > 1:
+    st.markdown("#### Portfolio Value History")
+    nav_history["date"] = pd.to_datetime(nav_history["date"])
+    fig_nav = go.Figure()
+    fig_nav.add_trace(go.Scatter(
+        x=nav_history["date"],
+        y=nav_history["total_value"],
+        mode="lines",
+        line=dict(color="#1E88E5", width=2.5),
+        fill="tozeroy",
+        fillcolor="rgba(30,136,229,0.08)",
+    ))
+    fig_nav.update_layout(
+        height=220,
+        margin=dict(t=5, l=5, r=5, b=5),
+        xaxis_title="", yaxis_title=base_currency,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    show_chart(fig_nav, key="cmd_nav_hist")
+else:
+    st.caption("NAV snapshots accumulate daily when you visit the Dashboard. Check back soon.")
 
-with col_nav:
-    nav_history = get_nav_history(base_currency)
-    if not nav_history.empty and len(nav_history) > 1:
-        st.markdown("#### Portfolio Value History")
-        nav_history["date"] = pd.to_datetime(nav_history["date"])
-        fig_nav = go.Figure()
-        fig_nav.add_trace(go.Scatter(
-            x=nav_history["date"],
-            y=nav_history["total_value"],
-            mode="lines",
-            line=dict(color="#1E88E5", width=2.5),
-            fill="tozeroy",
-            fillcolor="rgba(30,136,229,0.08)",
-        ))
-        fig_nav.update_layout(
-            height=220,
-            margin=dict(t=5, l=5, r=5, b=5),
-            xaxis_title="", yaxis_title=base_currency,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        show_chart(fig_nav, key="cmd_nav_hist")
-    else:
-        st.caption("NAV snapshots accumulate daily when you visit the Dashboard. Check back soon.")
-
-with col_links:
-    st.markdown("#### Quick Navigation")
-
-    nav_items = [
-        ("pages/2_Portfolio_Dashboard.py", "Dashboard", "Live prices, P&L, holdings"),
-        ("pages/18_Risk_Strategy.py", "Risk & Strategy", "Regime, sizing, risk governance"),
-        ("pages/18_Equity_Deep_Dive.py", "Equity Deep Dive", "360-degree stock research"),
-        ("pages/22_Dividend_Dashboard.py", "Dividends", "Income tracking & projections"),
-        ("pages/20_Earnings_Calendar.py", "Earnings Calendar", "Upcoming reporting dates"),
-        ("pages/21_Technical_Analysis.py", "Technical Analysis", "Charts & indicators"),
-        ("pages/23_Peer_Comparison.py", "Peer Comparison", "Side-by-side fundamentals"),
-        ("pages/3_Portfolio_News.py", "Portfolio News", "AI-summarised news feed"),
-    ]
-
-    for page, label, desc in nav_items:
-        st.page_link(page, label=f"{label} — *{desc}*")

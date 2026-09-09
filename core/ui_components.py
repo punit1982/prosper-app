@@ -351,7 +351,10 @@ def fmt_compact(value, currency: str = "", *, decimals: int = 1) -> str:
         if a >= cutoff:
             body = f"{a / cutoff:,.{decimals}f}".rstrip("0").rstrip(".")
             return f"{currency + ' ' if currency else ''}{sign}{body}{suffix}"
-    body = f"{a:,.0f}" if a >= 1 else f"{a:,.2f}"
+    # Below 1,000 keep two decimals. This rounded a 7.81 AED share price to
+    # "AED 8" — invisible while the helper only ever saw portfolio-scale
+    # figures, wrong the moment a per-share price is passed through it.
+    body = f"{a:,.2f}" if a >= 1 else f"{a:,.4f}".rstrip("0")
     return f"{currency + ' ' if currency else ''}{sign}{body}"
 
 
@@ -393,6 +396,15 @@ def stat_grid(stats, *, columns: int = 3) -> None:
     is what turned every 3-KPI row into three 70px rows."""
     import html as _html
     import streamlit as st
+
+    # P3-2: drop cells with nothing in them BEFORE laying out the grid. A
+    # 2-cell grid beats a 3-cell grid with a hole, and every caller benefits
+    # from fixing it here rather than at ~20 call sites. Command Center spent
+    # two grid rows on six figures of which three were em-dashes.
+    stats = [s for s in stats if s[1] not in (None, "", "—", "-")]
+    if not stats:
+        return
+
     cells = []
     for s in stats:
         label, value = s[0], s[1]
@@ -404,7 +416,7 @@ def stat_grid(stats, *, columns: int = 3) -> None:
             cell.append(f"<div class='d {_dir_class(dval)}'>{_html.escape(str(delta))}</div>")
         cell.append("</div>")
         cells.append("".join(cell))
-    n = max(2, min(4, columns))
+    n = max(2, min(4, min(columns, len(cells))))
     st.markdown(f"<div class='p-stats c{n}'>{''.join(cells)}</div>", unsafe_allow_html=True)
 
 

@@ -294,144 +294,22 @@ try:
         if weight_col in enriched.columns:
             make_pie(enriched, "cap_size", weight_col, "Market Cap Distribution", "cap_size")
 
-    # ── Performance Returns Table ────────────────────────────────────────────────
+    # ── Portfolio Returns: REMOVED (Phase 3) ────────────────────────────────
+    # This fetched a price history for every holding across nine periods —
+    # 182 x 9 = 1,638 get_history() calls in a 5-worker pool with a 60s cap,
+    # session-cached only. Same fan-out P2-2 removed from the Performance
+    # page, and the last known freeze path on a 512MiB / 0.15vCPU instance.
+    #
+    # It was also wrong in a way nothing surfaced: it applied TODAY's weights
+    # to historical prices, so its 1-year return disagreed with the
+    # Performance page's, which draws the portfolio line from nav_snapshots.
+    # Two pages, one question, two answers, no reconciliation.
+    #
+    # Performance is now the single owner of "how did the portfolio do".
     st.divider()
-    st.subheader("📈 Portfolio Returns")
-
-    from core.data_engine import get_history, calc_cagr
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import time as _time
-
-    PERF_PERIODS = [
-        ("1d",  "5d",  None),
-        ("1w",  "5d",  None),
-        ("1m",  "1mo", None),
-        ("3m",  "3mo", None),
-        ("6m",  "6mo", None),
-        ("1y",  "1y",  1.0),
-        ("YTD", "ytd", None),
-        ("3y",  "3y",  3.0),
-        ("5y",  "5y",  5.0),
-    ]
-
-    perf_t_col   = "ticker_resolved" if "ticker_resolved" in enriched.columns else "ticker"
-    # Deduplicate tickers to prevent "duplicate labels" error when creating DataFrame
-    perf_tickers = deduplicate_tickers(enriched[perf_t_col].dropna().tolist())
-
-    # ── 30-min session_state cache — avoid re-fetching on every page visit ────
-    PERF_CACHE_TTL  = 1800   # 30 minutes
-    PERF_CACHE_KEY  = "portfolio_returns_cache"
-    PERF_CACHE_TS   = "portfolio_returns_ts"
-
-    now_ts     = _time.time()
-    cached_ts  = st.session_state.get(PERF_CACHE_TS, 0)
-    perf_cache = st.session_state.get(PERF_CACHE_KEY)
-    cache_age  = int(now_ts - cached_ts)
-
-    refresh_col, _ = st.columns([1, 5])
-    with refresh_col:
-        recalc_btn = st.button("🔄 Recalculate", key="perf_recalc",
-                               help="Refresh multi-period return data (takes ~30s)")
-
-    if recalc_btn:
-        perf_cache = None   # force re-fetch
-
-    if perf_tickers and weight_col in enriched.columns and perf_cache is None:
-        total_mv = enriched[weight_col].sum()
-        # Build weights from deduplicated tickers, summing market_value for duplicate rows
-        perf_weights = {}
-        for t in perf_tickers:
-            mv = enriched[enriched[perf_t_col] == t][weight_col].sum()
-            perf_weights[t] = mv / total_mv if total_mv > 0 else 1.0 / len(perf_tickers)
-
-        # Fetch ALL period+ticker combos in ONE parallel pool (max 60 s total)
-        def _fetch_period(t, yf_period):
-            h = get_history(t, yf_period)
-            if isinstance(h, pd.DataFrame) and len(h) >= 2:
-                col = "Close" if "Close" in h.columns else h.columns[0]
-                from core.yf_utils import extract_close_series
-                series = extract_close_series(h, t)
-                return t, yf_period, series.dropna()
-            if isinstance(h, pd.Series) and len(h) >= 2:
-                return t, yf_period, h.dropna()
-            return t, yf_period, None
-
-        all_combos   = [(t, yf_p) for t in perf_tickers for _, yf_p, _ in PERF_PERIODS]
-        perf_hist    = {}   # {(ticker, yf_period): Series}
-
-        with st.spinner(f"Calculating returns for {len(perf_tickers)} holdings across 9 periods…"):
-            fetch_pool = ThreadPoolExecutor(max_workers=5)
-            try:
-                futs = {fetch_pool.submit(_fetch_period, t, p): (t, p) for t, p in all_combos}
-                try:
-                    for f in as_completed(futs, timeout=60):
-                        try:
-                            t, p, series = f.result(timeout=10)
-                            if series is not None and len(series) >= 2:
-                                perf_hist[(t, p)] = series
-                        except Exception:
-                            pass
-                except Exception:
-                    pass  # 60-second cap — use whatever we fetched
-            finally:
-                fetch_pool.shutdown(wait=False)
-
-        # Compute weighted-average portfolio return for each period
-        perf_results = {}
-        for label, yf_p, years in PERF_PERIODS:
-            histories = {t: perf_hist[(t, yf_p)] for t in perf_tickers if (t, yf_p) in perf_hist}
-            if not histories:
-                perf_results[label] = {"Return": None, "CAGR": None}
-                continue
-            normalized = {t: s / s.iloc[0] * 100 for t, s in histories.items() if len(s) > 0}
-            if not normalized:
-                perf_results[label] = {"Return": None, "CAGR": None}
-                continue
-            port_df  = pd.DataFrame(normalized).ffill().bfill()
-            w_s = pd.Series({t: perf_weights.get(t, 0) for t in port_df.columns})
-            w_s = w_s / w_s.sum()
-            port_series = (port_df * w_s).sum(axis=1)
-            ret_pct  = (port_series.iloc[-1] / port_series.iloc[0] - 1) * 100
-            cagr_val = calc_cagr(port_series.iloc[0], port_series.iloc[-1], years) if years else None
-            perf_results[label] = {"Return": ret_pct, "CAGR": cagr_val}
-
-        # Save to session_state cache
-        st.session_state[PERF_CACHE_KEY] = perf_results
-        st.session_state[PERF_CACHE_TS]  = _time.time()
-        perf_cache = perf_results
-
-    if perf_cache is not None:
-        age_str = f"{cache_age//60}m {cache_age%60}s ago" if cache_age >= 60 else f"{cache_age}s ago"
-        st.caption(f"Returns calculated **{age_str}** · refreshes every 30 min")
-
-        perf_rows = []
-        for label, _, years in PERF_PERIODS:
-            r    = perf_cache.get(label, {})
-            ret  = r.get("Return")
-            cagr = r.get("CAGR")
-            perf_rows.append({
-                "Period": label,
-                "Return": f"{ret:+.2f}%" if ret is not None else "",
-                "CAGR":   f"{cagr*100:+.2f}%" if cagr is not None else "",
-            })
-        perf_df = pd.DataFrame(perf_rows)
-        # Color-code returns
-        def _perf_color(val):
-            if not val or val == "": return ""
-            try:
-                v = float(val.replace("%", "").replace("+", ""))
-                if v > 0: return "color: #1a9e5c; font-weight: 600"
-                if v < 0: return "color: #d63031; font-weight: 600"
-            except ValueError:
-                pass
-            return ""
-        styled_perf = perf_df.style.map(_perf_color, subset=["Return", "CAGR"])
-        # 9 rows x 3 columns — a card-per-row table reads fine on a phone and
-        # does not need the sortable grid widget.
-        render_responsive_table(perf_df, title_col="Period")
-    elif not perf_tickers or weight_col not in enriched.columns:
-        st.caption("Market value data needed — ensure prices are loaded.")
-
+    st.caption("Returns over time live on the **Performance** page, which draws "
+               "the portfolio line from daily NAV snapshots.")
+    st.page_link("pages/5_Performance.py", label="Open Performance", icon="📈")
 
     # ── Risk Metrics ──────────────────────────────────────────────────────────
     st.divider()

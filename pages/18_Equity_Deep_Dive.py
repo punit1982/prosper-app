@@ -35,6 +35,28 @@ st.caption("Comprehensive 360° view of any stock — fundamentals, analyst cons
 holdings = get_all_holdings()
 portfolio_tickers = sorted(holdings["ticker"].dropna().unique().tolist()) if not holdings.empty else []
 
+# P3-8: the picker defaulted to portfolio_tickers[0] — the ALPHABETICALLY first
+# holding, which for this book is a numeric-prefix Asian ticker (000660.KS /
+# 4519.T / 543895.BO). If that line cannot be priced the page opens on a fetch
+# error. Order by market value instead, so the page opens on the position that
+# matters most and is most likely to have a price. Falls back to alphabetical
+# when the enriched frame is not in session yet.
+def _by_value(tickers):
+    # enriched_cache_key and SETTINGS are already imported at the top of this
+    # module (core.settings, not core.database — getting that wrong here would
+    # be swallowed by the except and silently leave the list alphabetical).
+    _enr = st.session_state.get(enriched_cache_key(SETTINGS.get("base_currency", "USD")))
+    if _enr is None or getattr(_enr, "empty", True) or "market_value" not in _enr.columns:
+        return tickers
+    try:
+        _mv = (_enr.assign(_v=pd.to_numeric(_enr["market_value"], errors="coerce"))
+                   .groupby("ticker")["_v"].sum().to_dict())
+    except Exception:
+        return tickers
+    return sorted(tickers, key=lambda t: (-(_mv.get(t) or 0), t))
+
+portfolio_tickers = _by_value(portfolio_tickers)
+
 # Build resolved ticker map from enriched data if available
 base_currency = SETTINGS.get("base_currency", "USD")
 _enriched_cache = st.session_state.get(enriched_cache_key(base_currency))
