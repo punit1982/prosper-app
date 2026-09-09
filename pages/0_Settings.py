@@ -10,6 +10,7 @@ import streamlit as st
 from core.settings import SETTINGS, save_user_settings, get_defaults, load_user_settings
 
 from core.ui_components import page_header
+import core.ledger_ui as _lu
 page_header('Settings', 'Currency, refresh, data sources and keys')
 # Reload current saved settings (not the cached import-time snapshot)
 current = load_user_settings()
@@ -18,6 +19,21 @@ defaults = get_defaults()
 # ─────────────────────────────────────────
 # DISPLAY SETTINGS
 # ─────────────────────────────────────────
+st.subheader("Appearance")
+_theme_now = _lu.active_theme()
+_theme_pick = st.radio(
+    "Theme", ["light", "dark"],
+    index=["light", "dark"].index(_theme_now), horizontal=True,
+    format_func=lambda t: "Light — for daylight" if t == "light" else "Dark — for evenings",
+    key="s_theme",
+    help="Light is the default because this is often read outdoors, where a "
+         "dark ground reflects instead of emitting.",
+)
+if _theme_pick != _theme_now:
+    save_user_settings({"pref_theme": _theme_pick})
+    SETTINGS.update({"pref_theme": _theme_pick})
+    st.rerun()
+
 st.subheader("🖥️ Display & Appearance")
 
 col_disp1, col_disp2 = st.columns(2)

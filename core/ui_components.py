@@ -172,8 +172,14 @@ MOBILE_TOKENS = {
 
 _MOBILE_CSS = """
 <style>
+/* --p-up / --p-down / --p-accent are declared by core/ledger_ui, which owns
+   the token set and swaps it per theme. They are NOT redeclared here: this
+   sheet is emitted per page and therefore AFTER design_shell(), so a copy of
+   the light values here would silently override the dark ones the moment the
+   user picked dark. Only the two tokens ledger_ui does not define stay, and
+   both are theme-neutral greys by construction (HANDOFF §4 rule 2). */
 :root{
-  --p-up:#047857; --p-down:#b91c1c; --p-flat:#475569; --p-accent:#1e3a8a;
+  --p-flat:#475569;
   --p-line:rgba(128,128,128,0.22);
   --p-surface:rgba(128,128,128,0.06);
 }

@@ -8,17 +8,22 @@ across ``pages/``, 41 distinct font sizes, and no spacing scale at all.
 
 WHAT CHANGED FROM v1, AND WHY
 -----------------------------
-1. **Light-first — designed, not yet active.** v1 was dark because finance
-   apps are dark, which is choosing by category. The owner reads this outdoors
-   in the Gulf; under ~10,000 lux a dark ground reflects rather than emits and
-   the dimmest token is the first to disappear — which is exactly where v1 put
-   the provenance strip, the cost basis and every ex-date.
+1. **Light by default, dark on request.** v1 was dark because finance apps are
+   dark, which is choosing by category. The owner reads this outdoors in the
+   Gulf; under ~10,000 lux a dark ground reflects rather than emits and the
+   dimmest token is the first to disappear.
 
-   BOTH palettes are defined and contrast-verified below. The app currently
-   RUNS on the dark one, pinned by `_THEME_PIN`, because .streamlit/config.toml
-   forces Streamlit's own chrome dark and ~47 hard-coded hexes in pages/ assume
-   a dark ground. Going light is two lines once the sweep replaces them: flip
-   config.toml and delete the pin. Do not flip one without the other.
+   Both palettes are defined and contrast-verified below. `active_theme()`
+   reads the user's choice (Settings -> Appearance, default light) and
+   `design_shell()` emits exactly that one, plus `_chrome()` to repaint
+   Streamlit's own surfaces — necessary because .streamlit/config.toml is
+   static and can only declare one.
+
+   There is deliberately NO `prefers-color-scheme` anywhere. A static config
+   cannot follow the OS, so following it in CSS only guarantees the two
+   disagree — which is precisely what shipped broken in v7.35: on a phone set
+   to dark, `:root:not([data-p-theme="light"])` (0,2,0) outranked the light
+   pin (`:root`, 0,1,0) and painted white text onto Streamlit's light chrome.
 
 2. **Rules, not cards.** v1 carried an 18-instance `border-left` severity
    stripe. A ruled list at 1px carries the same grouping, costs no elevation,
@@ -171,8 +176,15 @@ CSS = f"""<style>
   --p-s4:{SPACE[3]};--p-s5:{SPACE[4]};--p-s6:{SPACE[5]};
   --p-sans:{_FONT_SANS};--p-mono:{_FONT_MONO};
 }}
-@media (prefers-color-scheme:dark){{:root:not([data-p-theme="light"]){{{_vars("dark")}}}}}
-:root[data-p-theme="dark"]{{{_vars("dark")}}}
+/* NO prefers-color-scheme here, deliberately. Streamlit's own chrome is set in
+   .streamlit/config.toml, which is static and cannot follow the OS — so
+   following it in CSS guarantees the two disagree. That is exactly what broke:
+   on a phone set to dark, `:root:not([data-p-theme="light"])` (specificity
+   0,2,0) beat the light pin (`:root`, 0,1,0), so the dark palette painted onto
+   Streamlit's light chrome and every heading went white-on-white.
+
+   The app now declares its own ground, the user chooses it, and design_shell()
+   emits exactly one palette. */
 
 /* Streamlit's own chrome. Reclaim the block padding and hide the 32-link
    collapsed sidebar, which otherwise counts against every tap-target audit. */
@@ -871,12 +883,60 @@ def nav(active: str = "today") -> str:
 # ══════════════════════════════════════════════════════════════════════════
 # STREAMLIT WRAPPERS
 # ══════════════════════════════════════════════════════════════════════════
-# Streamlit's own theme is declared in .streamlit/config.toml, which cannot
-# read prefers-color-scheme. So the app pins ONE ground and this sheet matches
-# it, rather than letting the OS pick a palette Streamlit's chrome will not
-# follow. ACTIVE_THEME, config.toml and this pin move together — changing one
-# alone leaves half the app painting on the wrong surface.
-_THEME_PIN = '<style>:root{' + _vars(ACTIVE_THEME) + '}</style>' 
+# ══════════════════════════════════════════════════════════════════════════
+# THEME
+# ══════════════════════════════════════════════════════════════════════════
+# The app declares its own ground and the user chooses it. .streamlit/config.toml
+# is static and sets Streamlit's chrome to the LIGHT palette; when the user picks
+# dark, _chrome() repaints that chrome from the tokens so the two agree. This is
+# why there is no prefers-color-scheme anywhere: a static config cannot follow
+# the OS, so following it in CSS only guarantees a mismatch.
+THEMES = ("light", "dark")
+
+
+def active_theme() -> str:
+    """The user's choice, defaulting to light. Read fresh each run so the
+    toggle takes effect on the very next rerun."""
+    try:
+        from core.settings import SETTINGS
+        t = str(SETTINGS.get("pref_theme", "light")).lower()
+        return t if t in THEMES else "light"
+    except Exception:
+        return "light"
+
+
+def _chrome(mode: str) -> str:
+    """Repaint Streamlit's own surfaces from the token set.
+
+    config.toml can only declare one palette, so everything Streamlit draws
+    itself — the app background, headers, inputs, expanders, tables — has to be
+    re-coloured here when the user picks the other one. Scoped to the widgets
+    that actually carry a background, rather than a blanket `* {color:...}`,
+    which would also repaint the semantic up/down figures.
+    """
+    t = TOKENS[mode]
+    return f"""<style>
+:root{{{_vars(mode)}}}
+.stApp,[data-testid="stAppViewContainer"],[data-testid="stHeader"]{{
+  background:{t['paper']}!important;}}
+[data-testid="stSidebar"]{{background:{t['sheet']}!important;}}
+[data-testid="stMain"],[data-testid="stMain"] p,[data-testid="stMain"] li,
+[data-testid="stMain"] h1,[data-testid="stMain"] h2,[data-testid="stMain"] h3,
+[data-testid="stMain"] h4,[data-testid="stMain"] label,
+[data-testid="stMain"] [data-testid="stMarkdownContainer"]{{color:{t['ink']};}}
+[data-testid="stMain"] .stTextInput input,[data-testid="stMain"] .stNumberInput input,
+[data-testid="stMain"] .stTextArea textarea,[data-testid="stMain"] [data-baseweb="select"]>div{{
+  background:{t['sheet']}!important;color:{t['ink']}!important;
+  border-color:{t['rule-strong']}!important;}}
+[data-testid="stMain"] [data-testid="stExpander"],
+[data-testid="stMain"] [data-testid="stExpander"] details{{
+  background:{t['sheet']}!important;border-color:{t['rule']}!important;}}
+[data-testid="stMain"] [data-testid="stDataFrame"]{{background:{t['sheet']}!important;}}
+[data-testid="stMain"] hr{{border-color:{t['rule']}!important;}}
+[data-testid="stMain"] code{{background:{t['sunk']}!important;color:{t['ink']}!important;}}
+/* Charts inherit the page ground, so the plot area must not stay white. */
+[data-testid="stMain"] .js-plotly-plot .plotly .main-svg{{background:transparent!important;}}
+</style>"""
 
 
 def design_shell() -> None:
@@ -892,7 +952,12 @@ def design_shell() -> None:
     and it shipped anyway. Do not add a guard here.
     """
     import streamlit as st
-    st.markdown(CSS + _THEME_PIN, unsafe_allow_html=True)
+    mode = active_theme()
+    # ACTIVE_THEME is what the Plotly literals read; keep it in step with the
+    # CSS on every run, since both are regenerated per rerun anyway.
+    global ACTIVE_THEME
+    ACTIVE_THEME = mode
+    st.markdown(CSS + _chrome(mode), unsafe_allow_html=True)
 
 
 def write(*html: str) -> None:
