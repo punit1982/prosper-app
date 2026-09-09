@@ -223,9 +223,14 @@ def ticker_detail():
                                if search_text.upper() in t.upper() or search_text.lower() in names.get(t, "").lower()]
         else:
             filtered_tickers = tickers
+        # Arrive from Security on a specific name and open on it.
+        _opts = filtered_tickers if filtered_tickers else tickers
+        _rt = st.session_state.get("research_ticker")
+        _idx = _opts.index(_rt) if _rt in _opts else 0
         selected = st.selectbox(
             "🔍 Deep-dive into a holding",
-            filtered_tickers if filtered_tickers else tickers,
+            _opts,
+            index=_idx,
             format_func=lambda t: f"{t}  —  {names.get(t, '')}",
             label_visibility="collapsed",
         )

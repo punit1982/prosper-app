@@ -99,6 +99,16 @@ if not ticker:
     st.info("Select a ticker above to begin.")
     st.stop()
 
+# This page is the single entry point for research on one name. Publishing the
+# selection means every drill-down below opens on the same stock instead of
+# making the user re-pick it — which is the whole reason Research Hub existed,
+# and why it can now be deleted.
+#
+# The drill-downs match on the PORTFOLIO ticker, not the resolved one (EMAAR,
+# not EMAAR.AE), because that is what their own pickers list. `_display_ticker`
+# only exists on the Portfolio branch, so fall back to the typed ticker.
+st.session_state["research_ticker"] = locals().get("_display_ticker") or ticker
+
 # ─────────────────────────────────────────
 # FETCH CORE DATA
 # ─────────────────────────────────────────
@@ -297,6 +307,8 @@ st.divider()
 ])
 
 with tab_peers:
+    st.caption("A snapshot of sector peers. The full side-by-side is one tap away.")
+    st.page_link("pages/23_Peer_Comparison.py", label="Full peer comparison — valuation, quality, growth, risk", icon="↗️")
     try:
         from core.data_engine import get_ticker_info_batch as _peer_info_batch
         st.markdown("#### Sector peers")
@@ -630,6 +642,8 @@ with tab_fundamentals:
         fetch_failed("this section", e)
 
 with tab_analyst:
+    st.caption("Consensus and tone. Rating history and upgrade/downgrade flow are one tap away.")
+    st.page_link("pages/7_Analyst_Consensus.py", label="Full analyst detail — targets, rating history, upgrades", icon="↗️")
     try:
         st.subheader("Analyst Consensus")
 
@@ -858,6 +872,8 @@ with tab_ownership:
         fetch_failed("this section", e)
 
 with tab_technical:
+    st.caption("The signals that matter at a glance. Full indicator charts are one tap away.")
+    st.page_link("pages/21_Technical_Analysis.py", label="Full technical analysis — MACD, RSI, Bollinger, volume", icon="↗️")
     try:
         st.subheader("Technical Signals")
         _tech_hist = get_history(ticker, "1y")

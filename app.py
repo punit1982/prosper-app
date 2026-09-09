@@ -289,11 +289,24 @@ pg = st.navigation({
     "Decide": [
         st.Page("pages/15_GROW_Analysis.py", title="GROW Engine", icon="🌱"),
         st.Page("pages/19_Options_Desk.py", title="Options Desk", icon="🌾"),
-        st.Page("pages/18_Equity_Deep_Dive.py", title="Equity Deep Dive", icon="🔬"),
+        st.Page("pages/18_Equity_Deep_Dive.py", title="Security", icon="🔬"),
         st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
     ],
-    "Signals — confirmation only": [
-        st.Page("pages/13_Research_Hub.py", title="Research Hub", icon="🔭"),
+    # These four were siblings of Security in a flat list of nine, which is
+    # what made "which do I open first?" a real question and spawned Research
+    # Hub — a page whose entire content was an answer to it.
+    #
+    # They are NOT merged into Security as tabs, deliberately. Streamlit tabs
+    # are eager: every hidden tab is built and shipped on every render, and
+    # these are 549 / 434 / 272 lines against Security's 57 / 89 / 162-line
+    # summaries of the same ground. Folding them in would render four deep
+    # analyses on every visit to a page most visits never drill past — on a
+    # 512MiB / 0.15vCPU instance that is a real regression, not a tidy-up.
+    #
+    # Instead Security is the entry point and publishes `research_ticker`, and
+    # each of its thin tabs links here for the full version, arriving on the
+    # same stock. The group name says the relationship.
+    "Security — full analysis": [
         st.Page("pages/7_Analyst_Consensus.py", title="Analyst Consensus", icon="🎯"),
         st.Page("pages/8_Sentiment.py", title="Sentiment", icon="💬"),
         st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),

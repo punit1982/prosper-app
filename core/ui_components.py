@@ -777,7 +777,10 @@ def show_chart(fig, *, key: str | None = None, height: int | None = None,
 _NAV_ITEMS = [
     ("pages/00_Command_Center.py",     "Home",      ":material/home:"),
     ("pages/2_Portfolio_Dashboard.py", "Portfolio", ":material/table_chart:"),
-    ("pages/13_Research_Hub.py",       "Research",  ":material/search:"),
+    # Slot 3 pointed at Research Hub — a page whose only content was five links
+    # to other pages, i.e. a third navigation system reached from the second.
+    # It now opens Security, which is where research on a name actually starts.
+    ("pages/18_Equity_Deep_Dive.py",   "Research",  ":material/search:"),
     ("pages/18_Risk_Strategy.py",      "Risk",      ":material/shield:"),
     ("pages/24_AI_Chat.py",            "Ask",       ":material/forum:"),
 ]
