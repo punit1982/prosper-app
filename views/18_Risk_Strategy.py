@@ -225,19 +225,24 @@ _combined_summary = {
     ("Bouncing Back", "Critical"): "Recovery signals but world events are dangerous. Stay cautious despite improving fundamentals.",
 }
 _summary_text = _combined_summary.get((simple_name, geo_simple), simple_desc)
-# Show regime explanation + action clearly (user complained they can't see what regime means)
+# Three stacked paragraphs became one line plus a tap.
+#
+# The first two — what the regime is, and what to do in it — are word for word
+# what Today's market-cycle popover says. Repeating them here cost ~230px on a
+# page that is four phone screens long, to tell a reader something they read on
+# the screen they arrived from. The THIRD paragraph is this page's own: the
+# regime crossed with world risk. That is the line that stays visible.
 st.markdown(
-    f"<div style='margin:4px 0 12px 0;padding:12px 16px;border-radius:8px;"
+    f"<div style='margin:4px 0 10px 0;padding:10px 14px;border-radius:8px;"
     f"background:rgba(128,128,128,0.03);border-left:4px solid {r_color}'>"
-    f"<div style='font-size:0.9rem;color:var(--p-mark);margin-bottom:6px'>"
-    f"{_regime_icon} <b>{simple_name}</b> — {simple_desc}</div>"
-    f"<div style='font-size:0.85rem;color:var(--p-ink-3);margin-bottom:6px'>"
-    f"<b>What to do:</b> {_regime_action}</div>"
-    f"<div style='font-size:0.85rem;color:var(--p-ink-3)'>"
-    f"<b>With current world risk ({geo_simple}):</b> {_summary_text}</div>"
+    f"<div style='font-size:0.88rem;color:var(--p-ink-2)'>"
+    f"<b>{simple_name} · world risk {geo_simple}.</b> {_summary_text}</div>"
     f"</div>",
     unsafe_allow_html=True,
 )
+with st.popover(f"What “{simple_name}” means ⓘ", use_container_width=False):
+    st.markdown(f"{_regime_icon} **{simple_name}** — {simple_desc}")
+    st.markdown(f"**What to do:** {_regime_action}")
 
 if geo_tier == GEO_RED:
     st.error("**World Risk: Critical** — All parameters forced to defensive mode. Reduce exposure immediately.")
@@ -459,6 +464,16 @@ if tab_health:
         st.error(f"**Portfolio down {portfolio_drawdown:.1f}%** — {pl['action']}")
         has_alerts = True
 
+    # Measured on the live app: seventeen of these, at 128px each, were 2,176px
+    # — 62% of a four-screen page — and sixteen of them said the same sentence:
+    # "X is down N% — no PROSPER analysis found." That is one fact about the
+    # portfolio (nothing has been scored), repeated once per holding, in the
+    # shape of an urgent warning.
+    #
+    # The ones that carry a real verdict still render as warnings. The ones
+    # whose only content is the drawdown become a ruled list, six deep, with a
+    # single line saying how many are unscored and what to do about it.
+    _unscored = []
     for alert in cb_result.get("position_alerts", []):
         ticker = alert["ticker"]
         drawdown = alert["drawdown"]
@@ -512,13 +527,24 @@ if tab_health:
                     f"Re-run PROSPER analysis to get current conviction-weighted guidance."
                 )
         else:
-            # No PROSPER analysis exists
-            st.warning(
-                f"**{ticker}** is down {drawdown:.1f}% — "
-                f"No PROSPER analysis found. Run a PROSPER analysis on this ticker "
-                f"to get a specific recommendation on whether to hold, trim, or add."
-            )
+            # No PROSPER analysis exists — collected, not shouted.
+            _unscored.append((ticker, drawdown))
         has_alerts = True
+
+    if _unscored:
+        import core.ledger_ui as _lu
+        _unscored.sort(key=lambda x: x[1])
+        _show = _unscored if st.session_state.get("risk_unscored_all") else _unscored[:6]
+        st.markdown(_lu.section(f"Unscored — {len(_unscored)}"),
+                    unsafe_allow_html=True)
+        _lu.write("".join(
+            _lu.ledger_row(_tk, "no Durability score yet", "",
+                           change=f'<span class="down">{_dd:+.1f}%</span>',
+                           change_value=_dd)
+            for _tk, _dd in _show))
+        if len(_unscored) > len(_show):
+            st.checkbox(f"Show all {len(_unscored)}", key="risk_unscored_all")
+        st.caption("Score these on Evaluate to turn a drawdown into a hold, trim or add.")
 
     # Rebalancing triggers (simplified language)
     if triggers:
@@ -534,9 +560,24 @@ if tab_health:
     risk_df["country"] = risk_df[_t_col].apply(lambda t: (info_map.get(t, {}).get("country") or "Unknown"))
     conc_warnings = concentration_risk_check(risk_df)
     if conc_warnings:
-        for w in conc_warnings[:3]:
-            st.markdown(f"🟡 **Concentration:** {w['detail']}")
-        has_alerts = True
+        # Two things were wrong here on the live page: the same warning printed
+        # twice, and the warning itself was "Unknown is 100.0% of portfolio" —
+        # an artefact of missing sector data, not a concentration. A warning
+        # about a bucket the app cannot name tells the reader nothing they can
+        # act on, and Allocation already states the coverage gap plainly.
+        _seen, _conc = set(), []
+        for w in conc_warnings:
+            _d = str(w.get("detail", "")).strip()
+            if not _d or _d in _seen:
+                continue
+            if _d.lower().startswith(("unknown", "other")):
+                continue
+            _seen.add(_d)
+            _conc.append(_d)
+        for _d in _conc[:3]:
+            st.markdown(f"🟡 **Concentration:** {_d}")
+        if _conc:
+            has_alerts = True
 
     if not has_alerts:
         st.success("No alerts — portfolio looks healthy.")

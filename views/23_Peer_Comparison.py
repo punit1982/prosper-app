@@ -244,6 +244,35 @@ for t in all_compare:
 
 comp_df = pd.DataFrame(rows)
 
+# ── Is there anything to compare? ────────────────────────────────────────────
+# Measured on the live app: 6.23 phone screens — the longest low-information
+# page in the book — of a comparison grid whose cells were almost all em-dashes.
+# Peers are auto-detected from a sector, and this portfolio's sector data is
+# missing for about four fifths of it, so the page frequently has nothing to
+# compare against and said so in 6,000 pixels of empty table.
+#
+# An empty state that names the reason is shorter AND more use than a table of
+# dashes, which reads as "the app is broken" rather than "the data is absent".
+_VALUE_COLS = ["Market Cap", "P/E (TTM)", "P/E (Fwd)", "P/B", "P/S", "EV/EBITDA",
+               "ROE", "Profit Margin", "Revenue Growth"]
+_present = [c for c in _VALUE_COLS if c in comp_df.columns]
+_filled = int(comp_df[_present].notna().sum().sum()) if _present else 0
+_cells = len(comp_df) * max(1, len(_present))
+if _filled / _cells < 0.15:
+    import core.ledger_ui as _lu
+    _sector = (selected_info or {}).get("sector") or ""
+    _why = ("no sector is recorded for it, so peers cannot be detected"
+            if not _sector or _sector in ("—", "Unknown")
+            else f"the providers returned no fundamentals for its peers in {_sector}")
+    st.markdown(_lu.empty(
+        f"Nothing to compare {selected_ticker} against yet",
+        f"Prosper found {len(all_compare) - 1} candidate peers, but {_why}. "
+        "Fundamentals for funds, ETFs and many non-US listings are not covered "
+        "by the free providers this app uses. Enter peer tickers by hand above "
+        "to compare anything Prosper can price.",
+    ), unsafe_allow_html=True)
+    st.stop()
+
 # ── Hero: Selected Stock Summary ──
 sel_row = comp_df[comp_df["is_holding"]].iloc[0] if not comp_df[comp_df["is_holding"]].empty else None
 if sel_row is not None:
