@@ -345,7 +345,7 @@ with col_attrib:
                 _attr.append(_ui.ledger_row(
                     str(r["ticker"]),
                     str(r.get("name") or "")[:34],
-                    _ui.money(_amt, None, base_currency),
+                    value_html=_ui.money(_amt, None, base_currency),
                     change=f'<span class="{"up" if _amt > 0 else "down"}">'
                            f'{float(r["pct_contrib"]):+.1f}% of position</span>',
                     change_value=_amt,
@@ -467,106 +467,70 @@ with col_alerts:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4: HEATMAP + ALLOCATION PIE (side by side)
+# SECTION 4: PORTFOLIO HEAT MAP
 # ══════════════════════════════════════════════════════════════════════════════
-col_hm, col_alloc = st.columns([3, 2])
+# The heat map uses the full width now: the allocation pie that shared
+# this row was removed as a duplicate of Holdings -> Allocation.
+st.markdown("#### Portfolio Heat Map")
 
-with col_hm:
-    st.markdown("#### Portfolio Heat Map")
+if "day_change_pct" in enriched.columns and "market_value" in enriched.columns:
+    hm_df = enriched[["ticker", "name", "market_value", "day_change_pct"]].copy()
+    hm_df["market_value"] = pd.to_numeric(hm_df["market_value"], errors="coerce").fillna(0)
+    hm_df["day_change_pct"] = pd.to_numeric(hm_df["day_change_pct"], errors="coerce").fillna(0)
+    hm_df = hm_df[hm_df["market_value"] > 0]
+    hm_df["label"] = hm_df["ticker"] + "<br>" + hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%")
 
-    if "day_change_pct" in enriched.columns and "market_value" in enriched.columns:
-        hm_df = enriched[["ticker", "name", "market_value", "day_change_pct"]].copy()
-        hm_df["market_value"] = pd.to_numeric(hm_df["market_value"], errors="coerce").fillna(0)
-        hm_df["day_change_pct"] = pd.to_numeric(hm_df["day_change_pct"], errors="coerce").fillna(0)
-        hm_df = hm_df[hm_df["market_value"] > 0]
-        hm_df["label"] = hm_df["ticker"] + "<br>" + hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%")
+    if not hm_df.empty:
+        try:
+            # Add sector if available for hierarchical treemap
+            if "sector" in enriched.columns:
+                sector_map = dict(zip(enriched["ticker"], enriched.get("sector", "").fillna("Other")))
+                hm_df["sector"] = hm_df["ticker"].map(sector_map).fillna("Other")
+                hm_df["sector"] = hm_df["sector"].replace({"": "Other", "nan": "Other"})
+                path_cols = ["sector", "label"]
+            else:
+                path_cols = ["label"]
 
-        if not hm_df.empty:
-            try:
-                # Add sector if available for hierarchical treemap
-                if "sector" in enriched.columns:
-                    sector_map = dict(zip(enriched["ticker"], enriched.get("sector", "").fillna("Other")))
-                    hm_df["sector"] = hm_df["ticker"].map(sector_map).fillna("Other")
-                    hm_df["sector"] = hm_df["sector"].replace({"": "Other", "nan": "Other"})
-                    path_cols = ["sector", "label"]
-                else:
-                    path_cols = ["label"]
+            fig = px.treemap(
+                hm_df,
+                path=path_cols,
+                values="market_value",
+                color="day_change_pct",
+                color_continuous_scale=_ui.DIVERGING,
+                color_continuous_midpoint=0,
+            )
+            fig.update_layout(
+                margin=dict(t=5, l=5, r=5, b=5),
+                height=350,
+                coloraxis_colorbar=dict(title="Day %", len=0.5),
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            fig.update_traces(textfont=dict(size=13), textposition="middle center")
+            show_chart(fig, key="cmd_heatmap")
+        except Exception:
+            # Fallback: simple bar chart if treemap fails
+            hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
+            colors = ["#047857" if v >= 0 else "#b91c1c" for v in hm_df["day_change_pct"]]
+            fig = go.Figure(go.Bar(
+                x=hm_df["market_value"], y=hm_df["ticker"],
+                orientation="h", marker_color=colors,
+                text=hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%"),
+                textposition="outside",
+            ))
+            fig.update_layout(
+                height=350, margin=dict(t=5, l=5, r=40, b=5),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis_title="Market Value", yaxis_title="",
+            )
+            show_chart(fig, key="cmd_heatmap_fallback")
 
-                fig = px.treemap(
-                    hm_df,
-                    path=path_cols,
-                    values="market_value",
-                    color="day_change_pct",
-                    color_continuous_scale=_ui.DIVERGING,
-                    color_continuous_midpoint=0,
-                )
-                fig.update_layout(
-                    margin=dict(t=5, l=5, r=5, b=5),
-                    height=350,
-                    coloraxis_colorbar=dict(title="Day %", len=0.5),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                )
-                fig.update_traces(textfont=dict(size=13), textposition="middle center")
-                show_chart(fig, key="cmd_heatmap")
-            except Exception:
-                # Fallback: simple bar chart if treemap fails
-                hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
-                colors = ["#047857" if v >= 0 else "#b91c1c" for v in hm_df["day_change_pct"]]
-                fig = go.Figure(go.Bar(
-                    x=hm_df["market_value"], y=hm_df["ticker"],
-                    orientation="h", marker_color=colors,
-                    text=hm_df["day_change_pct"].apply(lambda x: f"{x:+.1f}%"),
-                    textposition="outside",
-                ))
-                fig.update_layout(
-                    height=350, margin=dict(t=5, l=5, r=40, b=5),
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis_title="Market Value", yaxis_title="",
-                )
-                show_chart(fig, key="cmd_heatmap_fallback")
-
-with col_alloc:
-    st.markdown("#### Allocation by Sector")
-
-    if "market_value" in enriched.columns and "sector" in enriched.columns:
-        alloc_df = enriched[["sector", "market_value"]].copy()
-        alloc_df["market_value"] = pd.to_numeric(alloc_df["market_value"], errors="coerce").fillna(0)
-        alloc_df = alloc_df.groupby("sector")["market_value"].sum().reset_index()
-        alloc_df = alloc_df[alloc_df["market_value"] > 0].sort_values("market_value", ascending=True)
-        total_alloc = alloc_df["market_value"].sum()
-        alloc_df["pct"] = (alloc_df["market_value"] / total_alloc * 100).round(1)
-
-        if not alloc_df.empty:
-            # Phase 3: ranked bars instead of a Plotly bar chart. Same three
-            # facts per row, a third of the height, no chart bundle, and the
-            # ordering is guaranteed by the component rather than by whichever
-            # sort the caller happened to apply. Chart guidance is explicit
-            # that category must never be encoded by colour alone — every bar
-            # carries its own name, percent and money.
-            _top = alloc_df.sort_values("market_value", ascending=False)
-            _lead = _top.iloc[0]
-            st.markdown(_ui.read(
-                f'Largest exposure is <b>{_lead["sector"]}</b> at '
-                f'{_lead["pct"]:.1f}% of the book. Top three are '
-                f'{_top.head(3)["pct"].sum():.1f}%.'
-            ), unsafe_allow_html=True)
-            st.markdown(_ui.ranked_bars([
-                {"name": str(r["sector"]) or "Unclassified",
-                 "pct": float(r["pct"]),
-                 "meta": f'{base_currency} {r["market_value"]:,.0f}',
-                 "state": "over" if float(r["pct"]) > 25 else ""}
-                for _, r in _top.iterrows()
-            ], limit=12), unsafe_allow_html=True)
-    elif "market_value" in enriched.columns:
-        # Simple top-10 bar chart if no sector data
-        top10 = enriched.nlargest(10, "market_value")[["ticker", "market_value"]]
-        fig_t10 = px.bar(top10, x="ticker", y="market_value", color="market_value",
-                         color_continuous_scale="Blues")
-        fig_t10.update_layout(height=350, margin=dict(t=5, l=5, r=5, b=5),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              showlegend=False)
-        show_chart(fig_t10, key="cmd_top10")
-
+# Allocation by Sector was REMOVED from the Command Center (Phase 3).
+#
+# This page answers "am I fine, and does anything need me today?". A sector
+# breakdown answers "how is the book composed?", which is a different question
+# asked at a different time — and it was the third place the same split
+# appeared, after Holdings -> Allocation and Portfolio Summary. Removing it
+# takes ~350px off the scroll and leaves one owner of the question.
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════

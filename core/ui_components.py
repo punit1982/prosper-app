@@ -802,12 +802,20 @@ _BOTTOM_NAV_CSS = """
     background:var(--p-sheet,#ffffff);
     border-top:1px solid rgba(128,128,128,0.28);
   }
+  /* Each column must FILL its grid track, not size to its content. With
+     width:auto the first cell took its label's width and the row read as
+     left-shifted, with Home wider than the rest and the icons off-centre. */
   [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
-    [data-testid="stColumn"]{width:auto !important;min-width:0 !important;flex:none !important;}
+    [data-testid="stColumn"]{
+      width:100% !important;min-width:0 !important;flex:none !important;
+      padding:0 !important;display:flex !important;justify-content:center !important;}
+  [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
+    [data-testid="stColumn"] > div{width:100% !important;}
   [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
     a[data-testid="stPageLink-NavLink"]{
       display:flex;flex-direction:column;align-items:center;justify-content:center;
-      gap:1px;min-height:52px;padding:6px 2px;margin:0;border-radius:0;opacity:0.65;
+      gap:2px;min-height:52px;padding:6px 2px;margin:0;border-radius:0;opacity:0.7;
+      width:100%;text-align:center;
     }
   [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]
     a[data-testid="stPageLink-NavLink"] p{font-size:0.62rem !important;font-weight:600 !important;

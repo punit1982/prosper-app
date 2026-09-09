@@ -714,6 +714,9 @@ def portfolio_section():
     # SQLite cache age — survives server restarts, shows on fresh sessions
     sqlite_age = get_price_cache_age()
 
+    # Without keep_row() these two stack on a phone and the refresh button —
+    # an icon — takes a full-width 44px row of its own under a one-line caption.
+    _ui.keep_row()
     hdr1, hdr2 = st.columns([7, 1])
     with hdr1:
         _fmt_age = fmt_age
@@ -728,8 +731,8 @@ def portfolio_section():
         else:
             st.caption(f"📡 Prices: **live** · Base: **{sym}**")
     with hdr2:
-        manual_refresh = st.button("🔄", use_container_width=True, key="frag_refresh",
-                                    help="Refresh prices now")
+        manual_refresh = st.button("Refresh", key="frag_refresh",
+                                    help="Fetch fresh prices for every holding")
 
     needs_fetch = not has_cache or cache_is_stale or manual_refresh
 

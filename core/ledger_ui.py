@@ -711,10 +711,10 @@ def group(label: str, value: str = "") -> str:
             f'<span class="v">{_e(value)}</span></div>')
 
 
-def ledger_row(ticker: str, name: str, value: str, *, qty: str = "",
+def ledger_row(ticker: str, name: str, value: str = "", *, qty: str = "",
                change: str = "", change_value=None, prov: str = "",
                unrealized: str = "", unrealized_value=None,
-               income: str = "") -> str:
+               income: str = "", value_html: str = "") -> str:
     """One position, up to four lines, everything a decision needs.
 
         LITE                                    USD 9.8K
@@ -732,8 +732,12 @@ def ledger_row(ticker: str, name: str, value: str, *, qty: str = "",
     percent, `income` the yield and ex-date. All four were asked for and none
     is in _build_stock_table / _build_fund_table today.
     """
+    # `value` is ESCAPED — pass plain text. For a pre-rendered figure (money()
+    # returns markup) use `value_html`. Passing markup as `value` printed the
+    # raw <span> on the Command Center's attribution rows in v7.36; making the
+    # two paths explicit is what stops that recurring.
     left = [f'<div class="tk">{_e(ticker)}</div>']
-    right = [f'<div class="v">{_e(value)}</div>']
+    right = [f'<div class="v">{value_html or _e(value)}</div>']
     if name:
         left.append(f'<div class="nm">{_e(name)}</div>')
     if change:
@@ -934,9 +938,66 @@ def _chrome(mode: str) -> str:
 [data-testid="stMain"] [data-testid="stDataFrame"]{{background:{t['sheet']}!important;}}
 [data-testid="stMain"] hr{{border-color:{t['rule']}!important;}}
 [data-testid="stMain"] code{{background:{t['sunk']}!important;color:{t['ink']}!important;}}
+
+/* ── Streamlit's own controls ────────────────────────────────────────────
+   These carry their own backgrounds from the static config.toml palette, so
+   under the other theme they stay the wrong colour. The segmented controls
+   used across Holdings, Risk, Income, Security and Activity rendered as WHITE
+   pills with white labels in dark mode — the control was unreadable, not just
+   off-brand. Placeholders were invisible for the same reason. */
+[data-testid="stMain"] [data-baseweb="segmented-control"],
+[data-testid="stMain"] [data-testid="stButtonGroup"]{{background:transparent!important;}}
+[data-testid="stMain"] [data-testid="stButtonGroup"] button,
+[data-testid="stMain"] [data-baseweb="segmented-control"] button{{
+  background:{t['sheet']}!important;color:{t['ink-2']}!important;
+  border:1px solid {t['rule-strong']}!important;}}
+[data-testid="stMain"] [data-testid="stButtonGroup"] button[aria-checked="true"],
+[data-testid="stMain"] [data-testid="stButtonGroup"] button[aria-selected="true"],
+[data-testid="stMain"] [data-testid="stButtonGroup"] button[kind="segmented_controlActive"]{{
+  background:{t['accent']}!important;color:{t['on-accent']}!important;
+  border-color:{t['accent']}!important;}}
+[data-testid="stMain"] .stButton button{{
+  background:{t['sheet']}!important;color:{t['ink']}!important;
+  border:1px solid {t['rule-strong']}!important;}}
+[data-testid="stMain"] .stButton button[kind="primary"]{{
+  background:{t['accent']}!important;color:{t['on-accent']}!important;
+  border-color:{t['accent']}!important;}}
+[data-testid="stMain"] input::placeholder,
+[data-testid="stMain"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
+[data-testid="stMain"] [data-baseweb="popover"] li,
+[data-testid="stMain"] [role="listbox"]{{
+  background:{t['sheet']}!important;color:{t['ink']}!important;}}
+[data-testid="stMain"] [data-testid="stCheckbox"] label,
+[data-testid="stMain"] [data-testid="stRadio"] label,
+[data-testid="stMain"] [data-testid="stCaptionContainer"]{{color:{t['ink-2']}!important;}}
+[data-testid="stMain"] [data-baseweb="tab"]{{color:{t['ink-2']}!important;}}
+[data-testid="stMain"] [data-testid="stMetricValue"]{{color:{t['ink']}!important;}}
+[data-testid="stMain"] [data-testid="stMetricLabel"]{{color:{t['ink-3']}!important;}}
 /* Charts inherit the page ground, so the plot area must not stay white. */
 [data-testid="stMain"] .js-plotly-plot .plotly .main-svg{{background:transparent!important;}}
 </style>"""
+
+
+def keep_row() -> None:
+    """Keep the NEXT st.columns() horizontal on a phone.
+
+    HANDOFF §4 rule 4 records that st.columns stacks below ~640px "with no
+    per-row opt-out". There is no Python opt-out, but there is a CSS one, and
+    without it a `st.columns([7, 1])` header spends two full-height rows on a
+    caption and a single icon button. Scoped off a marker's next sibling, the
+    same way every other row-level rule in this app is.
+    """
+    import streamlit as st
+    st.markdown(
+        "<style>@media (max-width:767px){"
+        '[data-testid="stElementContainer"]:has(.p-keeprow){display:none;}'
+        '[data-testid="stElementContainer"]:has(.p-keeprow)+[data-testid="stHorizontalBlock"]{'
+        "flex-wrap:nowrap!important;align-items:center!important;gap:8px!important;}"
+        '[data-testid="stElementContainer"]:has(.p-keeprow)+[data-testid="stHorizontalBlock"]'
+        '>[data-testid="stColumn"]{min-width:0!important;}'
+        "}</style><div class='p-keeprow'></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def design_shell() -> None:
