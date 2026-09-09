@@ -1,11 +1,11 @@
-# Prosper — Handoff (9 Sep 2026, current at v7.34)
+# Prosper — Handoff (9 Sep 2026, current at v7.35)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
 **Where the work stands.** Phases 1, 2 and six pushes of Phase 3 are shipped and live.
-**Phase 3 (mobile) is IN PROGRESS** — pushes 1-12 are live (`695f4f6` … `bc5dabf`). §13 carries
+**Phase 3 (mobile) is IN PROGRESS** — pushes 1-13 are live (`695f4f6` … `d2e5262`). §13 carries
 what shipped, what is left, and in what order, through to done.
 
 Phase 3 is being built against a second design review (9 Sep) that audited the 8 Sep proposal
@@ -18,12 +18,16 @@ The original 8 Sep review, kept for the IA argument (24 → 11 destinations, whi
 **The design system is `core/ledger_ui.py`.** Read its module docstring before touching any UI —
 it carries the tokens, the contrast table, and the reason the app is still dark.
 
-**THE ONE TRAP IN THE CURRENT STATE.** Both palettes (light and dark) are defined and
-contrast-verified, and the design is light-first *by intent* — but the app RUNS dark, pinned by
-`_THEME_PIN`, because `.streamlit/config.toml` forces Streamlit's chrome dark and ~47 hard-coded
-hexes in `pages/` assume a dark ground. **Flipping `config.toml` alone will paint half the app
-light-on-light.** Going light is: sweep the hexes → flip the config → delete the pin. All three,
-in that order.
+**THE APP IS LIGHT.** `core/ledger_ui.ACTIVE_THEME` is the single declaration of the ground. It
+drives the CSS token pin, the Plotly literals (`c()`, `CHART_SEQUENCE`, `VERDICT_RAMP`,
+`DIVERGING`) and — by hand, so keep them in step — `.streamlit/config.toml`. **Change one without
+the others and half the app paints on the wrong surface.** The dark palette is still defined and
+contrast-verified; switching back is `ACTIVE_THEME = "dark"` plus the four config.toml values.
+
+**Never hard-code a colour in a page again.** Use `ledger_ui.c("up")` for a Plotly literal, a
+`--p-*` var in CSS, `verdict()` for a rating word, `CHART_SEQUENCE` for a multi-series chart. The
+sweep removed 174 literals; the point was not tidiness, it was that 11 greens and 16 reds made
+"up" mean four different things.
 
 **The §11/§12 audits are measured leads, not gospel.** Four of the eleven Phase 2 findings were
 wrong on inspection (a "dead" function that was actually called, a "crash" that can't happen, a bad
@@ -919,6 +923,7 @@ contradictions, and it is worth preserving.
 | 10 | `7024e09` | CIO briefing leads with pulse + actions, explanation behind a tap (parses, does not re-prompt) · **all 8 donuts → `ranked_bars`** · Summary's 5 eager pie-tabs → one picker with selectbox drill-down |
 | 11 | `6c67c17` | **Risk** 4 tabs + nested set → segmented controls · **Income** (renamed from Dividends) 4 tabs → picker, hero de-eyebrowed |
 | 12 | `bc5dabf` | **Security** 7 tabs → segmented control · **Peer Comparison** 5 tabs → segmented control |
+| 13 | `d2e5262` | **Token sweep + the light flip** — 174 literals mapped to tokens, `ACTIVE_THEME` drives CSS + Plotly + config.toml, zero text colours below 4.5:1 |
 
 **The bug worth remembering.** Push 2 guarded `design_shell()` with a session flag. Streamlit
 rebuilds the DOM every rerun, so after the first load the stylesheet was never re-emitted and
@@ -967,12 +972,10 @@ Each row is roughly one working session. The order is dependency-correct: do not
 
 | # | Item | Why it is where it is |
 |---|---|---|
-| **1** | **Token sweep** — replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the `ledger_ui` tokens | **Prerequisite for 2.** Mechanical and greppable. |
-| **2** | **Flip to light** — `.streamlit/config.toml` → light, delete `_THEME_PIN` | Only after 1. The whole point of light-first is the use scene: read outdoors in Gulf daylight, where a dark ground stops emitting and the dimmest token disappears first. **Flipping without 1 paints half the app light-on-light.** |
-| **3** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
-| **4** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Security and Activity are done, so the surviving page set is now known. |
-| **5** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
-| **6** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
+| **1** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
+| **2** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Security and Activity are done, so the surviving page set is now known. |
+| **3** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
+| **4** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
 
 **Done is:** 24 destinations → 11, five tabs, one navigation system, every page on `ledger_ui`
 tokens, light by default, and loading/empty/error drawn everywhere they can occur.
