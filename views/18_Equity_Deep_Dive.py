@@ -28,7 +28,8 @@ import core.ledger_ui as _lu
 from core.ui_components import (page_header, hero_metric, stat_grid,
                                 fmt_compact, render_responsive_table)
 page_header("Security", "One name, everything Prosper knows about it")
-st.caption("Comprehensive 360° view of any stock — fundamentals, analyst consensus, sentiment, ownership, and the GROW two-verdict analysis.")
+# The page header already carries a subtitle. A caption immediately under it is
+# a second one, and on a phone the two together were 90px before the picker.
 
 # ─────────────────────────────────────────
 # TICKER PICKER — Main Screen
@@ -65,6 +66,9 @@ _resolve_map = {}
 if _enriched_cache is not None and not _enriched_cache.empty and "ticker_resolved" in _enriched_cache.columns:
     _resolve_map = dict(zip(_enriched_cache["ticker"], _enriched_cache["ticker_resolved"]))
 
+# Three stacked full-width rows on a phone otherwise: source, search, picker.
+import core.ledger_ui as _lui
+_lui.keep_row()
 pick_col1, pick_col2, pick_col3 = st.columns([1, 2, 2])
 with pick_col1:
     source = st.radio("Source", ["Portfolio", "Manual"], horizontal=True, key="dd_source")

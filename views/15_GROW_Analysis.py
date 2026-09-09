@@ -19,11 +19,16 @@ from core.data_engine import get_ticker_info_batch
 
 from core.ui_components import page_header
 page_header('Evaluate', 'Two verdicts per name: durability and entry')
-st.caption(
-    f"**{GROW_VERSION}** — two questions, answered separately: *is this worth owning* (Durability, no price in it) "
-    f"and *is it worth buying today* (Entry, from expected return vs the return the risk demands). "
-    f"For one stock in depth, use **Equity Deep Dive**."
-)
+# The method used to be the page: a full screen of explanation with no name
+# scored on it. It is behind a tap now, and the screen belongs to the verdicts.
+with st.popover(f"How {GROW_VERSION} scores a name ⓘ", use_container_width=False):
+    st.markdown(
+        f"**{GROW_VERSION}** asks two questions, and answers them separately.\n\n"
+        f"**Durability** — is this worth owning at all? No price enters it.\n\n"
+        f"**Entry** — is it worth buying *today*? Expected return against the "
+        f"return the risk demands.\n\n"
+        f"For one name in depth, use **Security**."
+    )
 
 if not framework_available():
     st.error("GROW framework files are missing from the app's `grow/` folder.")
