@@ -276,12 +276,33 @@ if sel_row is not None:
 st.divider()
 
 # ── Tabs ──
-tab_table, tab_valuation, tab_quality, tab_growth, tab_risk = st.tabs([
-    "📋 Full Comparison", "💰 Valuation", "✅ Quality", "📈 Growth", "⚠️ Risk",
-])
+# Five eager tabs, each charting the same peer set a different way — all built
+# on every render. One picker, one render. Emoji come off the labels: they are
+# decoration on a control, not an icon system.
+_PEER_TABS = ["Full comparison", "Valuation", "Quality", "Growth", "Risk"]
+_peer_pick = st.segmented_control(
+    "View", _PEER_TABS, key="peer_view", default=_PEER_TABS[0],
+    label_visibility="collapsed",
+) or _PEER_TABS[0]
+
+
+class _Section:
+    """Lazy stand-in for a `with tab_x:` context — same pattern as Security."""
+
+    def __init__(self, name): self.name = name
+    def __bool__(self): return self.name == _peer_pick
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
+
+
+tab_table     = _Section("Full comparison")
+tab_valuation = _Section("Valuation")
+tab_quality   = _Section("Quality")
+tab_growth    = _Section("Growth")
+tab_risk      = _Section("Risk")
 
 # ── TAB 1: Full Table ──
-with tab_table:
+if tab_table:
     display_df = comp_df.copy()
 
     # Format columns
@@ -330,7 +351,7 @@ with tab_table:
     render_responsive_table(fmt_df, title_col="Ticker")
 
 # ── TAB 2: Valuation ──
-with tab_valuation:
+if tab_valuation:
     val_metrics = ["P/E (TTM)", "P/E (Fwd)", "P/B", "P/S", "EV/EBITDA"]
     val_data = comp_df[["Ticker"] + val_metrics].copy()
 
@@ -373,7 +394,7 @@ with tab_valuation:
             st.info(f"**{selected_ticker}** is **in-line** with peers (Fwd P/E {sel_val:.1f} vs peer median {med_val:.1f})")
 
 # ── TAB 3: Quality ──
-with tab_quality:
+if tab_quality:
     quality_metrics = {
         "ROE": ("Return on Equity", True),
         "ROA": ("Return on Assets", True),
@@ -445,7 +466,7 @@ with tab_quality:
         show_chart(fig)
 
 # ── TAB 4: Growth ──
-with tab_growth:
+if tab_growth:
     growth_metrics = {
         "Revenue Growth": "Revenue Growth (YoY)",
         "Earnings Growth": "Earnings Growth (YoY)",
@@ -488,7 +509,7 @@ with tab_growth:
         show_chart(fig_peg)
 
 # ── TAB 5: Risk ──
-with tab_risk:
+if tab_risk:
     risk_metrics = {
         "Beta": "Beta (Market Sensitivity)",
         "D/E": "Debt-to-Equity Ratio",

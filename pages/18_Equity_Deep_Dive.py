@@ -300,13 +300,40 @@ st.divider()
 # One screen per name. "Peers" closes the last gap that still sent the user to
 # a separate page for research on the same ticker — Analyst, Sentiment and
 # Technical already live here as tabs.
-(tab_chart, tab_fundamentals, tab_analyst, tab_peers,
- tab_ownership, tab_technical, tab_ai) = st.tabs([
-    "Price & Chart", "Fundamentals", "Analyst & Sentiment", "Peers",
-    "Ownership", "Technical Signals", "GROW",
-])
+# Seven eager tabs on the app's heaviest research page: each one was built and
+# shipped on every render, including a price-history fetch, a fundamentals
+# pull, an analyst call and a peer batch — for a visit that usually reads one
+# of them. A segmented control renders exactly the one asked for.
+#
+# GROW stays last and stays on-demand; it is the only section that spends
+# model tokens.
+_SEC_TABS = ["Price & Chart", "Fundamentals", "Analyst & Sentiment", "Peers",
+             "Ownership", "Technical Signals", "GROW"]
+_sec_pick = st.segmented_control(
+    "Section", _SEC_TABS, key="dd_section", default=_SEC_TABS[0],
+    label_visibility="collapsed",
+) or _SEC_TABS[0]
 
-with tab_peers:
+
+class _Section:
+    """Lazy stand-in for a `with tab_x:` context — same pattern as Risk and
+    Income. Truthy only when selected, so the body simply does not run."""
+
+    def __init__(self, name): self.name = name
+    def __bool__(self): return self.name == _sec_pick
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
+
+
+tab_chart        = _Section("Price & Chart")
+tab_fundamentals = _Section("Fundamentals")
+tab_analyst      = _Section("Analyst & Sentiment")
+tab_peers        = _Section("Peers")
+tab_ownership    = _Section("Ownership")
+tab_technical    = _Section("Technical Signals")
+tab_ai           = _Section("GROW")
+
+if tab_peers:
     st.caption("A snapshot of sector peers. The full side-by-side is one tap away.")
     st.page_link("pages/23_Peer_Comparison.py", label="Full peer comparison — valuation, quality, growth, risk", icon="↗️")
     try:
@@ -365,7 +392,7 @@ with tab_peers:
 # ═══════════════════════════════════════════════════════════════════
 # TAB 1 — PRICE CHART (wrapped in container for tab context)
 # ═══════════════════════════════════════════════════════════════════
-with tab_chart:
+if tab_chart:
     try:
         st.subheader("Price History")
 
@@ -478,7 +505,7 @@ with tab_chart:
     except Exception as e:
         fetch_failed("this section", e)
 
-with tab_fundamentals:
+if tab_fundamentals:
     try:
         st.subheader("Key Fundamentals")
 
@@ -641,7 +668,7 @@ with tab_fundamentals:
     except Exception as e:
         fetch_failed("this section", e)
 
-with tab_analyst:
+if tab_analyst:
     st.caption("Consensus and tone. Rating history and upgrade/downgrade flow are one tap away.")
     st.page_link("pages/7_Analyst_Consensus.py", label="Full analyst detail — targets, rating history, upgrades", icon="↗️")
     try:
@@ -805,7 +832,7 @@ with tab_analyst:
     except Exception as e:
         fetch_failed("this section", e)
 
-with tab_ownership:
+if tab_ownership:
     try:
         @st.fragment
         def ownership_section():
@@ -868,7 +895,7 @@ with tab_ownership:
     except Exception as e:
         fetch_failed("this section", e)
 
-with tab_technical:
+if tab_technical:
     st.caption("The signals that matter at a glance. Full indicator charts are one tap away.")
     st.page_link("pages/21_Technical_Analysis.py", label="Full technical analysis — MACD, RSI, Bollinger, volume", icon="↗️")
     try:
@@ -959,7 +986,7 @@ with tab_technical:
     except Exception as e:
         fetch_failed("this section", e)
 
-with tab_ai:
+if tab_ai:
     try:
         # ── Portfolio position display (if user holds this stock) ──
         if not holdings.empty:
