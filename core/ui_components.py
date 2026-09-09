@@ -107,12 +107,11 @@ def render_responsive_table(df, *, title_col: str | None = None) -> None:
                 cells.append(f"<td data-label=\"{_html.escape(str(c))}\">{val}</td>")
         body_rows.append(f"<tr>{''.join(cells)}</tr>")
 
-    st.markdown(
+    _emit(
         _RESPONSIVE_TABLE_CSS
         + f"<div class='ptable-wrap'><table class='ptable'>"
         + f"<thead><tr>{head}</tr></thead>"
-        + f"<tbody>{''.join(body_rows)}</tbody></table></div>",
-        unsafe_allow_html=True,
+        + f"<tbody>{''.join(body_rows)}</tbody></table></div>"
     )
 
 
@@ -349,8 +348,22 @@ def mobile_shell() -> None:
     "already have" the stylesheet from, and a session-scoped guard would skip
     the injection on every rerun after the first. One <style> block is a few
     hundred bytes and duplicate rules are idempotent."""
+    _emit(_MOBILE_CSS)
+
+
+def _emit(html: str) -> None:
+    """Emit markup WITHOUT Streamlit's Markdown pipeline.
+
+    Same reason as core.ledger_ui._emit: st.markdown parses the string as
+    Markdown first, which truncates a <style> block at its first CSS comment
+    and eats `*` as emphasis. Every stylesheet in this module carries comments,
+    so every one of them was arriving cut. st.html hands the string straight to
+    the sanitiser instead. Comments are stripped on the way out regardless —
+    they belong in the source, not in a payload re-sent on every rerun.
+    """
+    import re
     import streamlit as st
-    st.markdown(_MOBILE_CSS, unsafe_allow_html=True)
+    st.html(re.sub(r"/\*.*?\*/", "", html, flags=re.S))
 
 
 def fmt_compact(value, currency: str = "", *, decimals: int = 1) -> str:
@@ -401,7 +414,7 @@ def hero_metric(label: str, value: str, *, delta: str = "", delta_value=None,
     if sub:
         parts.append(f"<div class='p-hero-sub'>{_html.escape(sub)}</div>")
     parts.append("</div>")
-    st.markdown("".join(parts), unsafe_allow_html=True)
+    _emit("".join(parts))
 
 
 def stat_grid(stats, *, columns: int = 3) -> None:
@@ -433,7 +446,7 @@ def stat_grid(stats, *, columns: int = 3) -> None:
         cell.append("</div>")
         cells.append("".join(cell))
     n = max(2, min(4, min(columns, len(cells))))
-    st.markdown(f"<div class='p-stats c{n}'>{''.join(cells)}</div>", unsafe_allow_html=True)
+    _emit(f"<div class='p-stats c{n}'>{''.join(cells)}</div>")
 
 
 def row_list(rows, *, group: str = "") -> None:
@@ -464,7 +477,7 @@ def row_list(rows, *, group: str = "") -> None:
             f"{chg_html}</div>"
             "</div>"
         )
-    st.markdown(f"<div class='p-rows'>{''.join(out)}</div>", unsafe_allow_html=True)
+    _emit(f"<div class='p-rows'>{''.join(out)}</div>")
 
 
 _PAGE_HEADER_CSS = """
@@ -488,10 +501,9 @@ def page_header(title: str, meta: str = "") -> None:
     import html as _html
     import streamlit as st
     meta_html = f"<div class='m'>{_html.escape(meta)}</div>" if meta else ""
-    st.markdown(
+    _emit(
         _PAGE_HEADER_CSS
-        + f"<div class='p-head'><div class='t'>{_html.escape(title)}</div>{meta_html}</div>",
-        unsafe_allow_html=True,
+        + f"<div class='p-head'><div class='t'>{_html.escape(title)}</div>{meta_html}</div>"
     )
 
 
@@ -558,11 +570,10 @@ def responsive_holdings(rows, *, group: str = "", limit: int = 25) -> int:
             f"{chg_html}</div>"
             "</div>"
         )
-    st.markdown(
+    _emit(
         _RESPONSIVE_SWAP_CSS
         + f"<div class='p-mobile-only'><div class='p-rows'>{''.join(out)}</div></div>"
-        + "<div class='p-df-marker'></div>",
-        unsafe_allow_html=True,
+        + "<div class='p-df-marker'></div>"
     )
     return hidden
 
@@ -857,8 +868,7 @@ def bottom_nav() -> None:
     so anything rendered after the page body disappears on exactly the screens
     where a way out matters most."""
     import streamlit as st
-    st.markdown(_BOTTOM_NAV_CSS + "<div class='p-navmark'></div>",
-                unsafe_allow_html=True)
+    _emit(_BOTTOM_NAV_CSS + "<div class='p-navmark'></div>")
     cols = st.columns(5, gap="small")
     for col, (page, label, icon) in zip(cols, _NAV_ITEMS):
         with col:
@@ -978,11 +988,10 @@ def position_rows(rows, *, key_prefix: str, limit: int = 25,
 
     if group:
         label = group if not hidden else f"{group} · top {len(shown)} by value"
-        st.markdown(f"<div class='p-group'>{label}</div>", unsafe_allow_html=True)
+        _emit(f"<div class='p-group'>{label}</div>")
     # The marker must be the LAST element before the rows — the CSS styles its
     # following siblings.
-    st.markdown(_TAP_ROWS_CSS + "<div class='p-rowmark'></div>",
-                unsafe_allow_html=True)
+    _emit(_TAP_ROWS_CSS + "<div class='p-rowmark'></div>")
 
     clicked = None
     for i, r in enumerate(shown):
@@ -1074,16 +1083,13 @@ _MOBILE_ONLY_CSS = """
 
 def mobile_only_start() -> None:
     """Open a phone-only region (see :func:`mobile_only_end`)."""
-    import streamlit as st
-    st.markdown(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>",
-                unsafe_allow_html=True)
+    _emit(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>")
 
 
 def mobile_only_end() -> None:
     """Close a phone-only region. The immediately following ``st.dataframe``
     becomes desktop-only, so the same data has one presentation per width."""
-    import streamlit as st
-    st.markdown("<div class='p-monly-b'></div>", unsafe_allow_html=True)
+    _emit("<div class='p-monly-b'></div>")
 
 
 _MOBILE_ONLY_CSS = """
@@ -1115,13 +1121,10 @@ _MOBILE_ONLY_CSS = """
 
 def mobile_only_start() -> None:
     """Open a phone-only region (see :func:`mobile_only_end`)."""
-    import streamlit as st
-    st.markdown(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>",
-                unsafe_allow_html=True)
+    _emit(_MOBILE_ONLY_CSS + "<div class='p-monly-a'></div>")
 
 
 def mobile_only_end() -> None:
     """Close a phone-only region. The ``st.dataframe`` that follows becomes
     desktop-only, so the same data has exactly one presentation per width."""
-    import streamlit as st
-    st.markdown("<div class='p-monly-b'></div>", unsafe_allow_html=True)
+    _emit("<div class='p-monly-b'></div>")

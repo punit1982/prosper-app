@@ -930,6 +930,45 @@ def _chrome(mode: str) -> str:
 .stApp,[data-testid="stAppViewContainer"],[data-testid="stHeader"]{{
   background:{t['paper']}!important;}}
 [data-testid="stSidebar"]{{background:{t['sheet']}!important;}}
+/* The sidebar carried ONLY a background override, so its text kept
+   Streamlit's static config colour — measured 30 elements at 1.1:1 in dark
+   mode, i.e. the whole navigation was invisible. Links, labels, headings and
+   the collapse control all need the token set. */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] *:not(svg):not(path){{color:{t['ink-2']}!important;}}
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] *{{color:{t['ink-2']}!important;}}
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"][aria-current] *{{
+  color:{t['ink']}!important;}}
+[data-testid="stSidebar"] h1,[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,[data-testid="stSidebar"] summary{{color:{t['ink']}!important;}}
+[data-testid="stSidebar"] hr{{border-color:{t['rule']}!important;}}
+[data-testid="stSidebarNav"] li a{{color:{t['ink-2']}!important;}}
+/* The sidebar's WIDGETS still painted themselves from the static config
+   palette: the text input, the select and the secondary buttons all sat at
+   #F8FAFC — white boxes carrying dark-mode text, on a dark ground. Colour
+   alone was never enough; the surfaces have to move too. */
+[data-testid="stSidebar"] [data-testid="stTextInputRootElement"],
+[data-testid="stSidebar"] [data-baseweb="input"],
+[data-testid="stSidebar"] [data-baseweb="base-input"],
+[data-testid="stSidebar"] [data-baseweb="select"]>div,
+[data-testid="stSidebar"] [data-baseweb="popover"] li,
+[data-testid="stSidebar"] [role="listbox"],
+[data-testid="stSidebar"] input,[data-testid="stSidebar"] textarea{{
+  background:{t['sunk']}!important;color:{t['ink']}!important;
+  border-color:{t['rule-strong']}!important;}}
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+[data-testid="stSidebar"] .stButton button,
+[data-testid="stSidebar"] [data-testid="stButton"] button{{
+  background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;}}
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] div,
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] p{{
+  color:{t['ink']}!important;}}
+[data-testid="stSidebar"] input::placeholder,
+[data-testid="stSidebar"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
+[data-testid="stMain"] [data-testid="stTextInputRootElement"],
+[data-testid="stMain"] [data-baseweb="base-input"]{{
+  background:{t['sheet']}!important;border-color:{t['rule-strong']}!important;}}
 [data-testid="stMain"],[data-testid="stMain"] p,[data-testid="stMain"] li,
 [data-testid="stMain"] h1,[data-testid="stMain"] h2,[data-testid="stMain"] h3,
 [data-testid="stMain"] h4,[data-testid="stMain"] label,
@@ -993,6 +1032,12 @@ def _chrome(mode: str) -> str:
    — which in dark mode meant the bottom bar's links and Material icon glyphs
    rendered in near-black on the dark ground. Page links and icons are the two
    that carry text and were missed. */
+/* Streamlit ships Source Sans Pro and applies it to containers this sheet
+   does not name, so two faces rendered side by side. One family, everywhere. */
+[data-testid="stMain"],[data-testid="stSidebar"],
+[data-testid="stMain"] *:not([class*="material"]):not([data-testid="stIconMaterial"]),
+[data-testid="stSidebar"] *:not([class*="material"]):not([data-testid="stIconMaterial"]){{
+  font-family:{_FONT_SANS};}}
 [data-testid="stMain"] a[data-testid="stPageLink-NavLink"],
 [data-testid="stMain"] a[data-testid="stPageLink-NavLink"] *,
 [data-testid="stMain"] span[data-testid="stIconMaterial"],
@@ -1015,17 +1060,35 @@ def keep_row() -> None:
     caption and a single icon button. Scoped off a marker's next sibling, the
     same way every other row-level rule in this app is.
     """
-    import streamlit as st
-    st.markdown(
+    _emit(
         "<style>@media (max-width:767px){"
         '[data-testid="stElementContainer"]:has(.p-keeprow){display:none;}'
         '[data-testid="stElementContainer"]:has(.p-keeprow)+[data-testid="stHorizontalBlock"]{'
         "flex-wrap:nowrap!important;align-items:center!important;gap:8px!important;}"
         '[data-testid="stElementContainer"]:has(.p-keeprow)+[data-testid="stHorizontalBlock"]'
         '>[data-testid="stColumn"]{min-width:0!important;}'
-        "}</style><div class='p-keeprow'></div>",
-        unsafe_allow_html=True,
+        "}</style><div class='p-keeprow'></div>"
     )
+
+
+def _emit(html: str) -> None:
+    """Emit raw HTML/CSS WITHOUT Streamlit's Markdown pipeline.
+
+    st.markdown parses its argument as Markdown *before* the HTML reaches the
+    browser, and that parser has now mangled this stylesheet twice:
+
+      1. it truncated the block at the first CSS comment (fixed by _min), and
+      2. it ate `*` as emphasis — `*:not([class*="material"])` arrived in the
+         DOM as ` :not([class`, cutting the sheet dead at that point and
+         silently dropping every rule after it, including the bottom-nav icon
+         colour that dark mode needs.
+
+    st.html skips the parser entirely and hands the string straight to the same
+    DOMPurify sanitiser st.markdown ends at. Anything that is markup, not
+    prose, goes through here.
+    """
+    import streamlit as st
+    st.html(html)
 
 
 def _min(css: str) -> str:
@@ -1077,10 +1140,9 @@ def design_shell() -> None:
     # CSS on every run, since both are regenerated per rerun anyway.
     global ACTIVE_THEME
     ACTIVE_THEME = mode
-    st.markdown(_min(CSS) + _min(_chrome(mode)), unsafe_allow_html=True)
+    _emit(_min(CSS) + _min(_chrome(mode)))
 
 
 def write(*html: str) -> None:
     """Render component output. One call per logical block."""
-    import streamlit as st
-    st.markdown("".join(html), unsafe_allow_html=True)
+    _emit("".join(html))

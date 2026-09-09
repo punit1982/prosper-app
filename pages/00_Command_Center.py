@@ -29,6 +29,7 @@ from core.data_engine import fmt_large
 from core.ui_components import fmt_age
 from core.ui_errors import safe_message
 import core.ledger_ui as _lu
+import html as _html
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 # Rendered after the data loads, so the date, the base currency and the
@@ -230,6 +231,10 @@ _ui.write(_ui.hero(
 # Two 3-cell carded grids become one ruled block. stat_row drops cells with no
 # value before laying out, so "Realized —" and "Div / yr —" stop occupying a
 # slot each instead of rendering as holes.
+_priced = int(pd.to_numeric(enriched.get("current_price", pd.Series(dtype=float)),
+                            errors="coerce").notna().sum())
+_unpriced = max(0, holdings_count - _priced)
+
 _div_cache_key = f"cmd_div_income_{base_currency}"
 div_income_est = st.session_state.get(_div_cache_key, 0)
 _ui.write(_ui.stat_row([
@@ -237,7 +242,13 @@ _ui.write(_ui.stat_row([
     ("Unrealized", fmt_compact(unrealized_pnl, base_currency), f"{unrealized_pct:+.1f}%", unrealized_pnl),
     ("Realized", fmt_compact(realized_pnl, base_currency) if realized_pnl else "", "", realized_pnl),
     ("Cash", fmt_compact(total_cash, base_currency) if total_cash else ""),
-    ("Currencies", str(len(enriched["currency"].unique()) if "currency" in enriched.columns else 1)),
+    # "Currencies: 9" was here. It is trivia — the count never changes what
+    # you do, and it cost a cell on the screen you look at every morning.
+    # Replaced with how much of the book is actually priced right now, which
+    # is the first thing that explains a total that looks wrong. Phase 1 made
+    # this computable and nothing displayed it.
+    ("Priced", f"{_priced}/{holdings_count}" if holdings_count else "",
+     f"{_unpriced} unpriced" if _unpriced else "", -1 if _unpriced else None),
     ("Div / yr", fmt_compact(div_income_est, base_currency) if div_income_est > 0 else ""),
 ], columns=3))
 
@@ -263,210 +274,180 @@ if _regime_explanation:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3: TOP MOVERS + PERFORMANCE ATTRIBUTION + ALERTS (3 columns)
 # ══════════════════════════════════════════════════════════════════════════════
-col_movers, col_attrib, col_alerts = st.columns([2, 2, 2])
+# SECTION 3: WHAT NEEDS YOU, THEN WHAT MOVED
+# ══════════════════════════════════════════════════════════════════════════════
+# Order reversed and one block deleted, from a live measurement at 375px.
+#
+# Was: Top Movers (360px) + P&L Attribution (611px) + Attention Required,
+# in that order, inside st.columns(3) — which stacks on a phone. So the
+# decision queue, the whole point of this page, began 1,728px down, on
+# screen 3, behind 971px of "what moved today" split across two blocks.
+#
+# The two were not duplicates: movers ranked by PERCENT, attribution by
+# MONEY. But on a 2.3M book the money ranking is the one that matters —
+# +11% on a small line is not news, +1.5% on the largest holding is — so
+# there is now one list, ranked by money, showing both figures. Roughly
+# 700px saved and the queue moved to screen one.
 
-# ── Top Movers ──
-with col_movers:
-    st.markdown("#### Top Movers Today")
+st.markdown("#### Attention Required")
+alerts = []
 
-    if "day_change_pct" in enriched.columns:
-        movers_df = enriched[["ticker", "name", "day_change_pct", "day_gain", "market_value"]].copy()
-        movers_df["day_change_pct"] = pd.to_numeric(movers_df["day_change_pct"], errors="coerce")
-        movers_df["day_gain"] = pd.to_numeric(movers_df["day_gain"], errors="coerce")
-        movers_df = movers_df.dropna(subset=["day_change_pct"])
-        # Drop exactly-zero rows: a missing day change is filled as 0, not null,
-        # so without this the top-3 / bottom-3 fill with "+0.0%" lines in ticker
-        # order and the widget looks like it has data when it has none.
-        movers_df = movers_df[movers_df["day_change_pct"] != 0]
+# Concentration alerts
+if "market_value" in enriched.columns:
+    mv = pd.to_numeric(enriched["market_value"], errors="coerce").fillna(0)
+    total = mv.sum()
+    if total > 0:
+        weights = mv / total
+        for idx, w in weights.items():
+            if w > 0.15:
+                ticker = enriched.loc[idx, "ticker"]
+                alerts.append(("critical", "🎯", f"**{ticker}** is {w:.0%} of portfolio"))
 
-        if not movers_df.empty:
-            gainers = movers_df.nlargest(3, "day_change_pct")
-            losers = movers_df.nsmallest(3, "day_change_pct")
+        if "sector" in enriched.columns:
+            sector_weights = enriched.copy()
+            sector_weights["mv"] = mv
+            sector_agg = sector_weights.groupby("sector")["mv"].sum() / total
+            for sec, sw in sector_agg.items():
+                if sw > 0.35 and sec not in ("", "Unknown", None):
+                    alerts.append(("warn", "🎯", f"**{sec}** sector {sw:.0%}"))
 
-            # Phase 3: tinted cards with a 3px coloured border-left become
-            # ruled rows. Two substantive changes, not just styling:
-            #   * the MONEY is now the same size and weight as the percent,
-            #     right-aligned with it. It was 0.85em in #666 — about 2.8:1
-            #     on this ground, which is below the AA floor and is why it
-            #     read as faint grey noise beside the number that matters.
-            #   * the position's market value leads the row, so a +11% on a
-            #     small line no longer looks like a +11% on a large one.
-            _rows = []
-            for _, row in pd.concat([gainers, losers]).iterrows():
-                pct = float(row["day_change_pct"])
-                amt = row.get("day_gain")
-                amt = float(amt) if pd.notna(amt) else None
-                _rows.append(_ui.ledger_row(
-                    str(row["ticker"]),
-                    str(row.get("name") or "")[:38],
-                    fmt_compact(row.get("market_value"), base_currency),
-                    change=_ui.money(amt, pct, base_currency) if amt is not None
-                           else f'<span class="{"up" if pct > 0 else "down"}">{pct:+.1f}%</span>',
-                    change_value=amt if amt is not None else pct,
-                ))
-            st.markdown("".join(_rows), unsafe_allow_html=True)
-        else:
-            st.caption("No price data available yet.")
+# Big daily drops
+if "day_change_pct" in enriched.columns:
+    big_drops = enriched[pd.to_numeric(enriched["day_change_pct"], errors="coerce") < -3]
+    for _, row in big_drops.iterrows():
+        pct = float(row["day_change_pct"])
+        alerts.append(("warn", "📉", f"**{row['ticker']}** down {pct:.1f}%"))
+
+# Earnings within 5 days — use cached earnings data if available (avoid slow batch fetch)
+_earnings_cache = st.session_state.get("cmd_earnings_alerts", [])
+for tk, days in _earnings_cache:
+    tag = "TODAY" if days == 0 else f"in {days}d"
+    alerts.append(("neutral", "📅", f"**{tk}** earnings {tag}"))
+
+# AI analysis coverage
+try:
+    analyses = get_all_prosper_analyses()
+    if not analyses.empty:
+        cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent = analyses[analyses["analysis_date"] >= cutoff]
+        coverage = len(recent) / holdings_count * 100 if holdings_count > 0 else 0
+        if coverage < 50:
+            alerts.append(("neutral", "🤖", f"Only {coverage:.0f}% analysed (7d)"))
+except Exception:
+    pass
+
+# FORTRESS regime warnings
+try:
+    from core.fortress import check_circuit_breakers
+    if regime_name == "Slowing Down":
+        alerts.append(("warn", "🏰", "**Slowing Down** regime active — reduce risk"))
+    elif regime_name == "Heating Up":
+        alerts.append(("warn", "🏰", "**Heating Up** — tighten stops, trim winners"))
+
+    if total_cost > 0:
+        dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
+        if dd_pct <= -5:
+            cb = check_circuit_breakers(dd_pct)
+            level = cb["portfolio_level"]["level"]
+            if level != "NONE":
+                alerts.append(("critical", "🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
+except Exception:
+    pass
+
+if alerts:
+    # Phase 3: the same alerts, rendered as ruled rows instead of eight
+    # tinted pills of one visual class. Severity now reads from a dot and
+    # the row's own words; the emoji, the status chip and the
+    # rgba(255,255,255,0.03) fill (which only works on a dark ground) are
+    # gone. Alert text and ordering are unchanged.
+    #
+    # Sorted so critical outranks warn outranks neutral — previously the
+    # first eight in generation order won, which is concentration-then-
+    # drops-then-earnings, not severity.
+    import re as _re
+    from core.ledger_ui import attention as _attention
+
+    _rank = {"critical": 0, "warn": 1, "neutral": 2}
+    _lvl = {"critical": "critical", "warn": "warn", "neutral": "info"}
+    _ordered = sorted(alerts, key=lambda a: _rank.get(a[0], 3))
+
+    _items = []
+    for level, _icon, text in _ordered:
+        # Alert text is authored with Markdown emphasis ("**ADBE** down
+        # 6.7%") and goes into raw HTML, where Streamlit does not run the
+        # Markdown parser. attention() escapes its inputs, so strip the
+        # emphasis markers rather than converting them to tags.
+        _items.append({
+            "level": _lvl.get(level, "info"),
+            "title": _re.sub(r"\*\*(.+?)\*\*", r"\1", text),
+            "why": "",
+            "source": "",
+        })
+    st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
+else:
+    # The healthy state, designed. This is the modal condition — most days
+    # nothing has breached anything — so it should read as a finished
+    # answer, not as an absence of content.
+    st.markdown(_ui.empty(
+        "Nothing needs you today",
+        "No holding is outside its concentration limit, no position moved "
+        "more than 3%, and the market cycle has not changed. The next thing "
+        "that could need attention is an earnings date.",
+    ), unsafe_allow_html=True)
+
+
+st.markdown("#### What moved the portfolio today")
+
+if "day_change_pct" in enriched.columns:
+    movers_df = enriched[["ticker", "name", "day_change_pct", "day_gain", "market_value"]].copy()
+    movers_df["day_change_pct"] = pd.to_numeric(movers_df["day_change_pct"], errors="coerce")
+    movers_df["day_gain"] = pd.to_numeric(movers_df["day_gain"], errors="coerce")
+    movers_df = movers_df.dropna(subset=["day_change_pct"])
+    # Drop exactly-zero rows: a missing day change is filled as 0, not null,
+    # so without this the top-3 / bottom-3 fill with "+0.0%" lines in ticker
+    # order and the widget looks like it has data when it has none.
+    movers_df = movers_df[movers_df["day_change_pct"] != 0]
+
+    if not movers_df.empty:
+        # Ranked by MONEY, not percent. On a book this size a +11% move on a
+        # small line contributes less than +1.5% on the largest holding, and
+        # the old percent ranking put the former at the top every time. Both
+        # figures are still shown; only the ordering changed.
+        _mv = movers_df.dropna(subset=["day_gain"])
+        if _mv.empty:
+            _mv = movers_df.assign(day_gain=0.0)
+        gainers = _mv.nlargest(3, "day_gain")
+        losers = _mv.nsmallest(3, "day_gain")
+
+        # Phase 3: tinted cards with a 3px coloured border-left become
+        # ruled rows. Two substantive changes, not just styling:
+        #   * the MONEY is now the same size and weight as the percent,
+        #     right-aligned with it. It was 0.85em in #666 — about 2.8:1
+        #     on this ground, which is below the AA floor and is why it
+        #     read as faint grey noise beside the number that matters.
+        #   * the position's market value leads the row, so a +11% on a
+        #     small line no longer looks like a +11% on a large one.
+        _rows = []
+        for _, row in pd.concat([gainers, losers]).iterrows():
+            pct = float(row["day_change_pct"])
+            amt = row.get("day_gain")
+            amt = float(amt) if pd.notna(amt) else None
+            _rows.append(_ui.ledger_row(
+                str(row["ticker"]),
+                str(row.get("name") or "")[:38],
+                fmt_compact(row.get("market_value"), base_currency),
+                change=_ui.money(amt, pct, base_currency) if amt is not None
+                       else f'<span class="{"up" if pct > 0 else "down"}">{pct:+.1f}%</span>',
+                change_value=amt if amt is not None else pct,
+            ))
+        st.markdown("".join(_rows), unsafe_allow_html=True)
     else:
-        st.caption("Visit Portfolio Dashboard to load live prices.")
+        st.caption("No price data available yet.")
+else:
+    st.caption("Visit Portfolio Dashboard to load live prices.")
 
 # ── Performance Attribution ──
-with col_attrib:
-    st.markdown("#### P&L Attribution")
-
-    if "day_gain" in enriched.columns:
-        _acols = [c for c in ("ticker", "name", "day_gain", "market_value")
-                  if c in enriched.columns]
-        attrib_df = enriched[_acols].copy()
-        attrib_df["day_gain"] = pd.to_numeric(attrib_df["day_gain"], errors="coerce").fillna(0)
-        attrib_df["market_value"] = pd.to_numeric(attrib_df["market_value"], errors="coerce").fillna(0)
-        attrib_df = attrib_df[attrib_df["day_gain"] != 0].sort_values("day_gain")
-
-        if not attrib_df.empty:
-            # Calculate % contribution to total day P&L
-            total_day_pnl = attrib_df["day_gain"].sum()
-            attrib_df["pct_contrib"] = (attrib_df["day_gain"] / attrib_df["market_value"] * 100).round(2)
-
-            top_contrib = attrib_df.tail(5)
-            bot_contrib = attrib_df.head(5)
-            show_df = pd.concat([bot_contrib, top_contrib]).drop_duplicates()
-            show_df = show_df.sort_values("day_gain")
-
-            # Phase 3: this was a horizontal Plotly bar chart with
-            # textposition="outside" and a 5px left margin, so every NEGATIVE
-            # bar wrote its label off the canvas — "0 (-5.2%)" and "+2," were
-            # clipped at both ends on a real phone. A ranked list carries the
-            # same three facts (who, how much money, what percent of that
-            # position) with no clipping, no axis to read, and no chart
-            # bundle on a 512MiB instance.
-            show_df = show_df.sort_values("day_gain", ascending=False)
-            _attr = []
-            for _, r in show_df.iterrows():
-                _amt = float(r["day_gain"])
-                _attr.append(_ui.ledger_row(
-                    str(r["ticker"]),
-                    str(r.get("name") or "")[:34],
-                    value_html=_ui.money(_amt, None, base_currency),
-                    change=f'<span class="{"up" if _amt > 0 else "down"}">'
-                           f'{float(r["pct_contrib"]):+.1f}% of position</span>',
-                    change_value=_amt,
-                ))
-            st.markdown("".join(_attr), unsafe_allow_html=True)
-        else:
-            st.caption("No P&L changes today.")
-    else:
-        st.caption("Load prices from Dashboard first.")
-
-# ── Alerts ──
-with col_alerts:
-    st.markdown("#### Attention Required")
-    alerts = []
-
-    # Concentration alerts
-    if "market_value" in enriched.columns:
-        mv = pd.to_numeric(enriched["market_value"], errors="coerce").fillna(0)
-        total = mv.sum()
-        if total > 0:
-            weights = mv / total
-            for idx, w in weights.items():
-                if w > 0.15:
-                    ticker = enriched.loc[idx, "ticker"]
-                    alerts.append(("critical", "🎯", f"**{ticker}** is {w:.0%} of portfolio"))
-
-            if "sector" in enriched.columns:
-                sector_weights = enriched.copy()
-                sector_weights["mv"] = mv
-                sector_agg = sector_weights.groupby("sector")["mv"].sum() / total
-                for sec, sw in sector_agg.items():
-                    if sw > 0.35 and sec not in ("", "Unknown", None):
-                        alerts.append(("warn", "🎯", f"**{sec}** sector {sw:.0%}"))
-
-    # Big daily drops
-    if "day_change_pct" in enriched.columns:
-        big_drops = enriched[pd.to_numeric(enriched["day_change_pct"], errors="coerce") < -3]
-        for _, row in big_drops.iterrows():
-            pct = float(row["day_change_pct"])
-            alerts.append(("warn", "📉", f"**{row['ticker']}** down {pct:.1f}%"))
-
-    # Earnings within 5 days — use cached earnings data if available (avoid slow batch fetch)
-    _earnings_cache = st.session_state.get("cmd_earnings_alerts", [])
-    for tk, days in _earnings_cache:
-        tag = "TODAY" if days == 0 else f"in {days}d"
-        alerts.append(("neutral", "📅", f"**{tk}** earnings {tag}"))
-
-    # AI analysis coverage
-    try:
-        analyses = get_all_prosper_analyses()
-        if not analyses.empty:
-            cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-            recent = analyses[analyses["analysis_date"] >= cutoff]
-            coverage = len(recent) / holdings_count * 100 if holdings_count > 0 else 0
-            if coverage < 50:
-                alerts.append(("neutral", "🤖", f"Only {coverage:.0f}% analysed (7d)"))
-    except Exception:
-        pass
-
-    # FORTRESS regime warnings
-    try:
-        from core.fortress import check_circuit_breakers
-        if regime_name == "Slowing Down":
-            alerts.append(("warn", "🏰", "**Slowing Down** regime active — reduce risk"))
-        elif regime_name == "Heating Up":
-            alerts.append(("warn", "🏰", "**Heating Up** — tighten stops, trim winners"))
-
-        if total_cost > 0:
-            dd_pct = min(0, (total_value - total_cost) / total_cost * 100)
-            if dd_pct <= -5:
-                cb = check_circuit_breakers(dd_pct)
-                level = cb["portfolio_level"]["level"]
-                if level != "NONE":
-                    alerts.append(("critical", "🚨", f"Breaker **{level}**: {dd_pct:.1f}%"))
-    except Exception:
-        pass
-
-    if alerts:
-        # Phase 3: the same alerts, rendered as ruled rows instead of eight
-        # tinted pills of one visual class. Severity now reads from a dot and
-        # the row's own words; the emoji, the status chip and the
-        # rgba(255,255,255,0.03) fill (which only works on a dark ground) are
-        # gone. Alert text and ordering are unchanged.
-        #
-        # Sorted so critical outranks warn outranks neutral — previously the
-        # first eight in generation order won, which is concentration-then-
-        # drops-then-earnings, not severity.
-        import re as _re
-        from core.ledger_ui import attention as _attention
-
-        _rank = {"critical": 0, "warn": 1, "neutral": 2}
-        _lvl = {"critical": "critical", "warn": "warn", "neutral": "info"}
-        _ordered = sorted(alerts, key=lambda a: _rank.get(a[0], 3))
-
-        _items = []
-        for level, _icon, text in _ordered:
-            # Alert text is authored with Markdown emphasis ("**ADBE** down
-            # 6.7%") and goes into raw HTML, where Streamlit does not run the
-            # Markdown parser. attention() escapes its inputs, so strip the
-            # emphasis markers rather than converting them to tags.
-            _items.append({
-                "level": _lvl.get(level, "info"),
-                "title": _re.sub(r"\*\*(.+?)\*\*", r"\1", text),
-                "why": "",
-                "source": "",
-            })
-        st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
-    else:
-        # The healthy state, designed. This is the modal condition — most days
-        # nothing has breached anything — so it should read as a finished
-        # answer, not as an absence of content.
-        st.markdown(_ui.empty(
-            "Nothing needs you today",
-            "No holding is outside its concentration limit, no position moved "
-            "more than 3%, and the market cycle has not changed. The next thing "
-            "that could need attention is an earnings date.",
-        ), unsafe_allow_html=True)
-
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -650,6 +631,19 @@ investor's actual holdings listed above."""
 # It PARSES rather than re-prompts, so briefings already saved in the database
 # render the new way without regenerating — and if the model ever returns a
 # shape this cannot read, the whole text falls through unchanged.
+def _safe_md(text: str) -> str:
+    """Escape `$` so Streamlit does not read the briefing as LaTeX.
+
+    st.markdown treats `$...$` as inline maths. The briefing is full of dollar
+    amounts, so a line like "Cash is negative (-$254,204) against a $2.3M book"
+    had everything between the two dollar signs swallowed by KaTeX — the text
+    rendered as "254,204)**against a" in maths italics, and the surrounding
+    `**` showed as literal asterisks because the markdown parse had already
+    broken. Observed live on the Risk Watch section.
+    """
+    return (text or "").replace("\\$", "$").replace("$", "\\$")
+
+
 def _split_briefing(text: str) -> dict:
     import re as _re
     if not text:
@@ -674,21 +668,22 @@ def _render_briefing(text: str, meta: str = "") -> None:
              if k not in ("portfolio pulse", "action items")]
 
     if not _pulse and not _actions:
-        st.markdown(text)                      # unrecognised shape — show it all
+        st.markdown(_safe_md(text))            # unrecognised shape — show it all
         if meta:
             st.caption(meta)
         return
 
     if _pulse:
-        st.markdown(_ui.read(f"<b>What changed.</b> {_pulse}"), unsafe_allow_html=True)
+        st.markdown(_ui.read(f"<b>What changed.</b> {_html.escape(_pulse)}"),
+                    unsafe_allow_html=True)
     if _actions:
         st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
-        st.markdown(_actions)
+        st.markdown(_safe_md(_actions))
     if _rest:
         with st.expander("Why it matters — key moves and risk watch", expanded=False):
             for _title, _body in _rest:
                 st.markdown(f"**{_title}**")
-                st.markdown(_body)
+                st.markdown(_safe_md(_body))
     if meta:
         st.caption(meta)
 
