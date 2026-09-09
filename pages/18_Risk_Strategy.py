@@ -56,14 +56,14 @@ _GEO_SIMPLE = {GEO_GREEN: "Calm", GEO_AMBER: "Elevated", GEO_RED: "Critical"}
 # ─────────────────────────────────────────
 # PAGE SETUP
 # ─────────────────────────────────────────
-page_header('Risk & Strategy', 'Regime, position sizing and portfolio governance')
+page_header('Risk', 'Guardrails, and which of them are breached')
 
 # ── Load Portfolio ──
 base_currency = SETTINGS.get("base_currency", "USD")
 holdings = get_all_holdings()
 
 if holdings.empty:
-    st.info("No holdings found. Upload your portfolio first via the **Upload Portal**.")
+    st.info("No holdings found. Upload your portfolio first via the **Add holdings**.")
     st.stop()
 
 cache_key = enriched_cache_key(base_currency)
@@ -986,7 +986,7 @@ if tab_advanced:
                 show_chart(fig_radar)
         else:
             st.info(
-                "No factor data available yet. Visit the **Portfolio Dashboard** and click "
+                "No factor data available yet. Visit the **Holdings** and click "
                 "**Load Extended Metrics** to enrich your holdings with style/factor data."
             )
 
@@ -1103,4 +1103,4 @@ if tab_advanced:
                     pivot = rate_df.pivot_table(index="Broker", columns="Currency", values="Rate %", aggfunc="first")
                     st.dataframe(pivot.style.format("{:.2f}%", na_rep="—"), use_container_width=True)
         else:
-            st.info("No cash positions recorded. Add them via Upload Portal.")
+            st.info("No cash positions recorded. Add them via Add holdings.")

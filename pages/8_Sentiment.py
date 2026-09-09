@@ -25,10 +25,11 @@ from core.settings import SETTINGS, enriched_cache_key
 SENT_TTL = 1800  # 30 minutes — re-fetch sentiment every 30 min
 
 from core.ui_components import page_header
+import core.ledger_ui as _lu
 page_header('Sentiment', 'How the news is leaning on each position')
 holdings = get_all_holdings()
 if holdings.empty:
-    st.info("Add holdings via **Upload Portal** to see sentiment analysis.")
+    st.info("Add holdings via **Add holdings** to see sentiment analysis.")
     st.stop()
 
 # ── Resolve tickers once ──────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ else:
     names = dict(zip(holdings["ticker"], holdings["name"]))
 
 if not tickers:
-    st.info("No tickers with live prices. Load prices from **Portfolio Dashboard** first.")
+    st.info("No tickers with live prices. Load prices from **Holdings** first.")
     st.stop()
 
 # ── Sentiment cache (30-min TTL in session_state) ─────────────────────────────
@@ -196,10 +197,13 @@ if not sdf.empty:
 
     avg_raw = sdf["Composite"].mean()
     avg_display = round(avg_raw)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Portfolio Avg Sentiment", f"{avg_display:+d}", delta=score_label(avg_raw / 100))
-    c2.metric("Most Bullish", sdf.loc[sdf["Composite"].idxmax(), "Ticker"] if not sdf.empty else "—")
-    c3.metric("Most Bearish", sdf.loc[sdf["Composite"].idxmin(), "Ticker"] if not sdf.empty else "—")
+    # st.metric in st.columns stacks into three full-width rows below ~640px.
+    # stat_row stays a grid and drops cells with no value.
+    _lu.write(_lu.stat_row([
+        ("Avg sentiment", f"{avg_display:+d}", score_label(avg_raw / 100), avg_raw),
+        ("Most bullish", sdf.loc[sdf["Composite"].idxmax(), "Ticker"] if not sdf.empty else ""),
+        ("Most bearish", sdf.loc[sdf["Composite"].idxmin(), "Ticker"] if not sdf.empty else ""),
+    ], columns=3))
 
     with st.expander("📊 Full Sentiment Table", expanded=False):
         from core.data_engine import clean_nan
@@ -262,17 +266,18 @@ def ticker_detail():
     sources_active = c.get("sources_active", 1)
     st.caption(f"**{sources_active} of 5 sources active** — weights redistributed dynamically")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric(f"📰 News ({c.get('news', {}).get('weight', '30%')})",
-                f"{round(c.get('news', {}).get('score', 0) * 100):+d}")
-    col2.metric(f"💬 StockTwits ({c.get('stocktwits', {}).get('weight', '15%')})",
-                f"{round(c.get('stocktwits', {}).get('score', 0) * 100):+d}")
-    col3.metric(f"📡 Reddit ({c.get('reddit', {}).get('weight', '10%')})",
-                f"{round(c.get('reddit', {}).get('score', 0) * 100):+d}")
-    col4.metric(f"🏦 Analyst ({c.get('analyst', {}).get('weight', '20%')})",
-                f"{round(c.get('analyst', {}).get('score', 0) * 100):+d}")
-    col5.metric(f"🌐 G-News ({c.get('google_news', {}).get('weight', '25%')})",
-                f"{round(c.get('google_news', {}).get('score', 0) * 100):+d}")
+    # Five metrics in st.columns(5) became five ~70px rows on a phone. One
+    # grid, three across, and the emoji come off the labels — the weight is
+    # the useful part.
+    def _src(key, label, default):
+        d = c.get(key, {}) or {}
+        return (f"{label} {d.get('weight', default)}",
+                f"{round((d.get('score') or 0) * 100):+d}", "", d.get("score"))
+    _lu.write(_lu.stat_row([
+        _src("news", "News", "30%"), _src("stocktwits", "StockTwits", "15%"),
+        _src("reddit", "Reddit", "10%"), _src("analyst", "Analyst", "20%"),
+        _src("google_news", "Google News", "25%"),
+    ], columns=3))
 
     # StockTwits messages
     st_data = c.get("stocktwits", {})

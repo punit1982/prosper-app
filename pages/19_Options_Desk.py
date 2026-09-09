@@ -81,7 +81,7 @@ except Exception as e:
     st.stop()
 
 if not slate:
-    page_header("Options Desk", "HARVEST v1.0")
+    page_header("Options", "HARVEST v1.0 — the doctrine this desk enforces")
     empty_state(
         "options scan",
         action=("The nightly scan hasn't run yet. It fetches the chains, measures implied "

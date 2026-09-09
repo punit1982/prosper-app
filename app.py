@@ -48,47 +48,31 @@ _mobile_shell()
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-html, body, [class*="css"], .stMarkdown, .stMetricValue, .stMetricLabel,
-.stDataFrame, .stTextInput input, .stSelectbox select, .stButton button,
+/* One face, loaded once. This block imported Inter and forced it onto every
+   element with !important, while core/ledger_ui declares IBM Plex Sans as the
+   product face — so two families fought over the same nodes and which one won
+   depended on emission order. Plex is also already the chart font
+   (ui_components._CHART_FONT), so this makes the interface and the charts
+   agree instead of disagreeing. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+html, body, [class*="css"], .stMarkdown, .stDataFrame,
+.stTextInput input, .stSelectbox select, .stButton button,
 [data-testid="stSidebar"], [data-testid="stHeader"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
 }
 h1, h2, h3, h4, h5, h6 {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-    letter-spacing: -0.5px;
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    letter-spacing: -0.02em;
 }
-/* st.metric survives on 5 not-yet-converted pages (Sentiment, Analyst
-   Consensus, Performance, grow_render) — 23 calls. Keep its overflow/size
-   rules until those move to stat_grid / hero_metric. */
-[data-testid="stMetricValue"] {
-    font-weight: 600 !important;
-    font-size: clamp(1rem, 2.2vw, 1.8rem) !important;
-    overflow: visible !important;
-    text-overflow: unset !important;
-    white-space: nowrap !important;
-    word-break: keep-all !important;
-    min-width: 0;
-    line-height: 1.3 !important;
-}
-[data-testid="stMetricValue"] > div,
-[data-testid="stMetricLabel"],
-[data-testid="stMetricDelta"] {
-    overflow: visible !important;
-    text-overflow: unset !important;
-    white-space: nowrap !important;
-}
-[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
-[data-testid="stMetric"],
-[data-testid="metric-container"],
-[data-testid="stMetric"] > div,
-[data-testid="stMetric"] > div > div,
-[data-testid="stMetric"] label,
-[data-testid="stMetric"] label > div {
-    overflow: visible !important;
-    min-width: 0;
-    text-overflow: unset !important;
-}
+/* The st.metric block that stood here is gone (P2-9, done properly this
+   time). It carried twelve overflow and sizing rules for a widget the app no
+   longer calls — all 23 remaining .metric() calls moved to stat_row / kv in
+   Push 18. It was also the last thing in app.py competing with the design
+   system for the same selectors.
+
+   Reverted once before, in Phase 2, because the grep that declared st.metric
+   dead missed `colN.metric(...)` on column objects. Verified by count this
+   time: zero .metric( call sites in pages/ or core/. */
 [data-testid="stColumn"],
 [data-testid="stColumn"] > div,
 [data-testid="stHorizontalBlock"] > div {
@@ -270,14 +254,14 @@ if not get_nav_snapshot_exists_today(_base):
 
 # ── Full Navigation ──────────────────────────────────────────────────────────
 pg = st.navigation({
-    "Prosper": [
-        st.Page("pages/00_Command_Center.py", title="Command Center", icon="🏠", default=True),
+    "Today": [
+        st.Page("pages/00_Command_Center.py", title="Today", icon="🏠", default=True),
     ],
     "Portfolio": [
-        st.Page("pages/2_Portfolio_Dashboard.py", title="Dashboard", icon="📊"),
-        st.Page("pages/4_Portfolio_Summary.py", title="Summary", icon="🧩"),
+        st.Page("pages/2_Portfolio_Dashboard.py", title="Holdings", icon="📊"),
+        st.Page("pages/4_Portfolio_Summary.py", title="Allocation", icon="🧩"),
         st.Page("pages/5_Performance.py", title="Performance", icon="📈"),
-        st.Page("pages/18_Risk_Strategy.py", title="Risk & Strategy", icon="🏰"),
+        st.Page("pages/18_Risk_Strategy.py", title="Risk", icon="🏰"),
         st.Page("pages/22_Dividend_Dashboard.py", title="Income", icon="💰"),
     ],
     # Split by what the page is FOR, not by what it is made of.
@@ -292,10 +276,10 @@ pg = st.navigation({
     # target as if it carried the same weight as the framework's own arithmetic. The
     # group name now says what they are.
     "Decide": [
-        st.Page("pages/15_GROW_Analysis.py", title="GROW Engine", icon="🌱"),
-        st.Page("pages/19_Options_Desk.py", title="Options Desk", icon="🌾"),
+        st.Page("pages/15_GROW_Analysis.py", title="Evaluate", icon="🌱"),
+        st.Page("pages/19_Options_Desk.py", title="Options", icon="🌾"),
         st.Page("pages/18_Equity_Deep_Dive.py", title="Security", icon="🔬"),
-        st.Page("pages/24_AI_Chat.py", title="Ask Prosper", icon="💬"),
+        st.Page("pages/24_AI_Chat.py", title="Ask", icon="💬"),
     ],
     # These four were siblings of Security in a flat list of nine, which is
     # what made "which do I open first?" a real question and spawned Research
@@ -327,10 +311,10 @@ pg = st.navigation({
     ],
     "Settings": [
         st.Page("pages/0_Settings.py", title="Settings", icon="⚙️"),
-        st.Page("pages/1_Upload_Portal.py", title="Upload Portal", icon="📤"),
-        st.Page("pages/25_IBKR_Sync.py", title="IBKR Sync", icon="🔗"),
-        st.Page("pages/17_User_Management.py", title="Users", icon="👥"),
-        st.Page("pages/26_Onboarding.py", title="Onboarding", icon="🚀"),
+        st.Page("pages/1_Upload_Portal.py", title="Add holdings", icon="📤"),
+        st.Page("pages/25_IBKR_Sync.py", title="Connections", icon="🔗"),
+        st.Page("pages/17_User_Management.py", title="Account & access", icon="👥"),
+        st.Page("pages/26_Onboarding.py", title="Setup", icon="🚀"),
     ],
 })
 

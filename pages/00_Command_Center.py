@@ -40,7 +40,7 @@ holdings = get_all_holdings()
 
 if holdings.empty:
     st.info("Welcome to Prosper! Upload your first brokerage screenshot or CSV to get started.")
-    st.page_link("pages/1_Upload_Portal.py", label="Go to Upload Portal", icon="📤")
+    st.page_link("pages/1_Upload_Portal.py", label="Go to Add holdings", icon="📤")
     st.stop()
 
 # ── Enrich Portfolio (use cache if available) ────────────────────────────────
@@ -87,7 +87,7 @@ else:
 
 from core.ui_components import page_header as _page_header
 _page_header(
-    "Command Center",
+    "Today",
     f"{datetime.now().strftime('%a, %d %b %Y')} · {base_currency} · data {_age_txt}",
 )
 

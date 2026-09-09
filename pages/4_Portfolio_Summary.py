@@ -24,11 +24,11 @@ from core.settings import SETTINGS, enriched_cache_key
 
 from core.ui_components import (page_header, hero_metric, stat_grid,
                                 fmt_compact, render_responsive_table)
-page_header("Portfolio Summary", "Where the money actually sits")
+page_header("Allocation", "Where the money actually sits")
 
 holdings = get_all_holdings()
 if holdings.empty:
-    st.info("Add holdings via **Upload Portal** to see your portfolio summary.")
+    st.info("Add holdings via **Add holdings** to see your portfolio summary.")
     st.stop()
 
 

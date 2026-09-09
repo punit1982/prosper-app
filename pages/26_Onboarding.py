@@ -184,7 +184,7 @@ elif current_step == 3:
     else:
         st.markdown(
             "<div style='padding:16px;border-radius:12px;border:1px solid #333;color:#475569'>"
-            "No worries! You can add holdings anytime from the <strong>Upload Portal</strong> "
+            "No worries! You can add holdings anytime from the <strong>Add holdings</strong> "
             "or <strong>IBKR Sync</strong> page in the sidebar."
             "</div>",
             unsafe_allow_html=True,

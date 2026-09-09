@@ -23,7 +23,7 @@ import core.ledger_ui as _lu
 page_header('Performance', 'How the portfolio has actually done')
 holdings = get_all_holdings()
 if holdings.empty:
-    st.info("Add holdings via **Upload Portal** to see performance analysis.")
+    st.info("Add holdings via **Add holdings** to see performance analysis.")
     st.stop()
 
 base_currency = SETTINGS.get("base_currency", "USD")
@@ -211,15 +211,15 @@ try:
         years_diff = days_diff / 365.25 if days_diff > 0 else None
         nav_cagr = calc_cagr(first_val, latest_val, years_diff) if years_diff and years_diff > 0 else None
 
-        nc1, nc2, nc3, nc4 = st.columns(4)
-        nc1.metric("Current Value", f"{base_currency} {latest_val:,.0f}")
-        nc2.metric("All-Time High", f"{base_currency} {ath:,.0f}")
-        nc3.metric("Drawdown from ATH", f"{drawdown_from_ath:+.1f}%")
-        nc4.metric(
-            "Total Return",
-            f"{total_return_pct:+.1f}%" if total_return_pct is not None else "—",
-            delta=f"CAGR: {nav_cagr*100:+.1f}%" if nav_cagr is not None else ""
-        )
+        _lu.write(_lu.stat_row([
+            ("Current value", f"{base_currency} {latest_val:,.0f}"),
+            ("All-time high", f"{base_currency} {ath:,.0f}"),
+            ("Drawdown from ATH", f"{drawdown_from_ath:+.1f}%", "", drawdown_from_ath),
+            ("Total return",
+             f"{total_return_pct:+.1f}%" if total_return_pct is not None else "",
+             f"CAGR {nav_cagr*100:+.1f}%" if nav_cagr is not None else "",
+             total_return_pct),
+        ], columns=2))
 
         # NAV chart
         nav_fig = go.Figure()

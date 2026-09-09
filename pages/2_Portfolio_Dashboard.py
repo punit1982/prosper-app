@@ -249,11 +249,11 @@ with st.sidebar:
 # ─────────────────────────────────────────
 from core.ui_components import page_header as _ph, mobile_shell as _ms
 _ms()
-_ph("Portfolio Dashboard")
+_ph("Holdings")
 
 holdings = get_all_holdings()
 if holdings.empty:
-    st.info("Your portfolio is empty. Go to **Upload Portal** to add your first brokerage screenshot.")
+    st.info("Your portfolio is empty. Go to **Add holdings** to import your first brokerage export.")
     st.stop()
 
 ttl       = SETTINGS.get("price_cache_ttl_seconds", 300)
@@ -1010,7 +1010,7 @@ def portfolio_section():
             )
         else:
             st.caption(
-                "🔗 Set up **IBKR Sync** (Flex token + query id) to have these priced "
+                "🔗 Set up **Connections** (Flex token + query id) to have these priced "
                 "automatically from your broker's own mark, once a day."
             )
 
@@ -1037,7 +1037,7 @@ def portfolio_section():
             "These are UAE (ADX / DFM) listings. Their only free live source (Mubasher) blocks "
             "requests from cloud servers, so the app can't reach it directly — the ticker is fine, "
             "nothing to change in Edit Holdings.  \n"
-            "**Fix:** run **IBKR Sync** (or re-upload the account in **Upload Portal**) and they'll "
+            "**Fix:** run **Connections** (or re-upload the account in **Add holdings**) and they'll "
             "value from your broker's own price."
         )
         _ibkr_backfill_notice()
@@ -1056,7 +1056,7 @@ def portfolio_section():
             "**No market quote exists for these — and none is expected:**  \n"
             f"{lines}  \n"
             "They show no value because the broker's last reported price is also missing. "
-            "Re-upload that account in **Upload Portal** to capture it."
+            "Re-upload that account in **Add holdings** to capture it."
         )
     if "52w_high" not in df.columns:
         st.caption("ℹ️ Click **📊 Load Extended Metrics** for Analyst Consensus, 52W H/L, Growth data, Fund metrics, and more.")

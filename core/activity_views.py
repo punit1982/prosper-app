@@ -32,7 +32,7 @@ def portfolio_news() -> None:
     from core.ui_components import page_header
     holdings = get_all_holdings()
     if holdings.empty:
-        st.info("Add holdings via **Upload Portal** to see related news.")
+        st.info("Add holdings via **Add holdings** to see related news.")
         st.stop()
 
     # ── Controls (persisted) ──

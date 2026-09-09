@@ -205,7 +205,13 @@ _MOBILE_CSS = """
   [data-testid="stMain"] hr{margin:0.7rem 0 !important;}
 
   /* Tap targets. Nav links, buttons and tabs all render at 32px by default. */
+  /* Match on data-testid as well as the class: Streamlit marks the wrapper
+     with data-testid="stButton" and the class is not guaranteed, so
+     `.stButton button` alone missed primary buttons — measured at 40px in the
+     harness, under the 44px floor this rule exists to enforce. */
   [data-testid="stMain"] .stButton button,
+  [data-testid="stMain"] [data-testid="stButton"] button,
+  [data-testid="stMain"] button[data-testid^="stBaseButton"],
   [data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"],
   [data-testid="stMain"] button[data-baseweb="tab"]{
     min-height:44px !important;
@@ -785,13 +791,16 @@ def show_chart(fig, *, key: str | None = None, height: int | None = None,
 # then forces it back into a 5-across grid (st.columns would otherwise stack
 # below ~640px — the same rule this whole design system exists to work around).
 _NAV_ITEMS = [
-    ("pages/00_Command_Center.py",     "Home",      ":material/home:"),
-    ("pages/2_Portfolio_Dashboard.py", "Portfolio", ":material/table_chart:"),
-    # Slot 3 pointed at Research Hub — a page whose only content was five links
-    # to other pages, i.e. a third navigation system reached from the second.
-    # It now opens Security, which is where research on a name actually starts.
+    # The five tabs the design review settled on, named for the moment the user
+    # is in rather than the data behind them. Confirmed by the owner 9 Sep.
+    #
+    # Activity replaces Risk in slot 4: Risk is a sit-down tool reached from
+    # More, whereas "what happened, and what is coming?" is a daily question —
+    # and Activity is now one page instead of the four it merged.
+    ("pages/00_Command_Center.py",     "Today",     ":material/today:"),
+    ("pages/2_Portfolio_Dashboard.py", "Holdings",  ":material/table_chart:"),
     ("pages/18_Equity_Deep_Dive.py",   "Research",  ":material/search:"),
-    ("pages/18_Risk_Strategy.py",      "Risk",      ":material/shield:"),
+    ("pages/9_Activity.py",            "Activity",  ":material/history:"),
     ("pages/24_AI_Chat.py",            "Ask",       ":material/forum:"),
 ]
 

@@ -963,13 +963,19 @@ def _chrome(mode: str) -> str:
   background:{t['accent']}!important;color:{t['on-accent']}!important;
   border-color:{t['accent']}!important;}}
 [data-testid="stMain"] .stButton button,
-[data-testid="stMain"] .stButton button *{{color:{t['ink']}!important;}}
-[data-testid="stMain"] .stButton button{{
+[data-testid="stMain"] [data-testid="stButton"] button,
+[data-testid="stMain"] .stButton button *,
+[data-testid="stMain"] [data-testid="stButton"] button *{{color:{t['ink']}!important;}}
+[data-testid="stMain"] .stButton button,
+[data-testid="stMain"] [data-testid="stButton"] button{{
   background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;}}
-[data-testid="stMain"] .stButton button[kind="primary"]{{
+[data-testid="stMain"] .stButton button[kind="primary"],
+[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"]{{
   background:{t['accent']}!important;border-color:{t['accent']}!important;}}
 [data-testid="stMain"] .stButton button[kind="primary"],
-[data-testid="stMain"] .stButton button[kind="primary"] *{{
+[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"],
+[data-testid="stMain"] .stButton button[kind="primary"] *,
+[data-testid="stMain"] [data-testid="stButton"] button[kind="primary"] *{{
   color:{t['on-accent']}!important;}}
 [data-testid="stMain"] input::placeholder,
 [data-testid="stMain"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}

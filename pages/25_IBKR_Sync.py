@@ -42,7 +42,7 @@ except ImportError:
 
 
 # ── Page Header ──────────────────────────────────────────────────────────────
-page_header('IBKR Sync', 'Import your Interactive Brokers portfolio')
+page_header('Connections', 'Brokers and feeds — sync health and last update')
 
 # ── Helper Functions ─────────────────────────────────────────────────────────
 def parse_ibkr_csv(csv_file) -> pd.DataFrame:

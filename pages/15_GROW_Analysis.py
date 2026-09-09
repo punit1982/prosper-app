@@ -18,7 +18,7 @@ from core.grow_render import ENTRY_COLORS, durability_color
 from core.data_engine import get_ticker_info_batch
 
 from core.ui_components import page_header
-page_header('GROW Engine', 'Two verdicts per name: durability and entry')
+page_header('Evaluate', 'Two verdicts per name: durability and entry')
 st.caption(
     f"**{GROW_VERSION}** — two questions, answered separately: *is this worth owning* (Durability, no price in it) "
     f"and *is it worth buying today* (Entry, from expected return vs the return the risk demands). "
@@ -32,7 +32,7 @@ if not framework_available():
 holdings = get_all_holdings()
 portfolio_tickers = sorted(holdings["ticker"].dropna().unique().tolist()) if not holdings.empty else []
 if not portfolio_tickers:
-    st.info("Upload holdings via **Upload Portal** to run GROW on your portfolio.")
+    st.info("Upload holdings via **Add holdings** to run GROW on your portfolio.")
     st.stop()
 
 # ─────────────────────────────────────────

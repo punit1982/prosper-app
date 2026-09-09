@@ -23,7 +23,7 @@ import core.ledger_ui as _lu
 page_header('Analyst Consensus', 'What the street thinks, across your holdings')
 holdings = get_all_holdings()
 if holdings.empty:
-    st.info("Add holdings via **Upload Portal** to see analyst data.")
+    st.info("Add holdings via **Add holdings** to see analyst data.")
     st.stop()
 
 # Use resolved tickers when available (e.g. EMAAR.AE instead of EMAAR)
@@ -121,12 +121,13 @@ try:
     target_high   = targets.get("high") or info.get("targetHighPrice")
     num_analysts  = info.get("numberOfAnalystOpinions", "—")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Current Price", f"{current_price:,.2f}" if current_price else "—")
-    c2.metric("Target Low", f"{target_low:,.2f}" if target_low else "—")
-    c3.metric("Target Mean", f"{target_mean:,.2f}" if target_mean else "—")
-    c4.metric("Target High", f"{target_high:,.2f}" if target_high else "—")
-    c5.metric("# Analysts", str(num_analysts))
+    _lu.write(_lu.stat_row([
+        ("Current price", f"{current_price:,.2f}" if current_price else ""),
+        ("Target low", f"{target_low:,.2f}" if target_low else ""),
+        ("Target mean", f"{target_mean:,.2f}" if target_mean else ""),
+        ("Target high", f"{target_high:,.2f}" if target_high else ""),
+        ("Analysts", str(num_analysts) if num_analysts else ""),
+    ], columns=3))
 
     # Upside / downside
     if current_price and target_mean:

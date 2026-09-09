@@ -14,7 +14,7 @@ from core.database import save_holdings, get_all_holdings, save_cash_position
 from core.ui_errors import unexpected
 
 # ── Page Header ──────────────────────────────────────────────────────────────
-page_header('Upload Portal', 'Import holdings from any broker — screenshots, CSV, Excel or PDF')
+page_header('Add holdings', 'Import holdings from any broker — screenshots, CSV, Excel or PDF')
 
 SUPPORTED_CURRENCIES = [
     "USD", "AED", "INR", "EUR", "GBP", "CHF", "SGD", "HKD",

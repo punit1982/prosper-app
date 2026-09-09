@@ -10,6 +10,7 @@ import json
 from typing import Optional
 
 import streamlit as st
+import core.ledger_ui as _lu
 
 ENTRY_COLORS = {
     "STRONG BUY": "#047857",
@@ -189,12 +190,22 @@ def render_grow_analysis(analysis: dict, ticker: str = "", ccy: str = "") -> Non
 
     # Classification (plain-English row, codes in expander)
     if cls:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Archetype", f"{cls.get('archetype_name') or cls.get('archetype') or '—'}")
-        c2.metric("Runner-up would say", f"{cls.get('runner_up_entry') or '—'}", help=f"Runner-up archetype: {cls.get('runner_up', '—')}")
-        c3.metric("Horizon", f"{cls.get('horizon_years', '—')} yrs", help=f"Valuation date {cls.get('valuation_date', '—')}")
-        c4.metric("Evidence stage", f"{cls.get('stage', '—')} · {cls.get('basis', '—')}",
-                  help="Proof stage · measurement basis (see GROW §5)")
+        # Four st.metric in st.columns(4) became four ~70px rows on a phone.
+        # These are label/value facts about one classification, so they read as
+        # key/value rows — and the `help` tooltips, which a phone cannot hover,
+        # become visible sub-lines instead of hidden ones.
+        import core.ledger_ui as _lu
+        _rows = [
+            ("Archetype", cls.get("archetype_name") or cls.get("archetype") or "—", ""),
+            ("Runner-up would say", cls.get("runner_up_entry") or "—",
+             f"Runner-up archetype: {cls.get('runner_up', '—')}"),
+            ("Horizon", f"{cls.get('horizon_years', '—')} yrs",
+             f"Valuation date {cls.get('valuation_date', '—')}"),
+            ("Evidence stage", f"{cls.get('stage', '—')} · {cls.get('basis', '—')}",
+             "Proof stage · measurement basis (GROW §5)"),
+        ]
+        st.markdown("".join(_lu.kv(k, v, note=n) for k, v, n in _rows),
+                    unsafe_allow_html=True)
 
     # Driving inputs
     if driving:
