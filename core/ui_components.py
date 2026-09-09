@@ -181,7 +181,11 @@ _MOBILE_CSS = """
 :root{
   --p-flat:#475569;
   --p-line:rgba(128,128,128,0.22);
-  --p-surface:rgba(128,128,128,0.06);
+  /* Solid, not translucent. A 6% grey composites differently depending on how
+     many surfaces it stacks over, so the same semantic colour measured 5.2:1
+     on the page ground and 3.9:1 inside a stat cell. --p-sunk is a real token
+     in both palettes and composites predictably. */
+  --p-surface:var(--p-sunk, rgba(128,128,128,0.06));
 }
 
 /* ── Reclaim the top of the screen ───────────────────────────────────────

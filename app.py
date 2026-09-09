@@ -45,13 +45,6 @@ st.session_state.pop("_google_auth_rendered_this_rerun", None)
 from core.ui_components import mobile_shell as _mobile_shell
 _mobile_shell()
 
-# Phase 3 design system (core/ledger_ui.py): tokens + ruled components. Injected
-# here, beside mobile_shell and before pg.run(), for the same reason — 21 of the
-# 24 pages call st.stop(), so anything after pg.run() never renders on exactly
-# those pages. It adds tokens and component classes only; it does not repaint
-# Streamlit's chrome, so unconverted pages are untouched.
-from core.ledger_ui import design_shell as _design_shell
-_design_shell()
 
 st.markdown("""
 <style>
@@ -162,6 +155,19 @@ _run_auth()
 # loaded at startup, so every restart/redeploy silently reverted to defaults.
 from core.settings import ensure_settings_loaded as _ensure_settings_loaded
 _ensure_settings_loaded()
+
+# Phase 3 design system (core/ledger_ui.py): tokens + ruled components.
+#
+# MUST come after _ensure_settings_loaded(). design_shell() reads the user's
+# theme from SETTINGS, and when it ran before the load it always saw an empty
+# proxy and fell back to light — so the dark toggle silently did nothing. Found
+# in the preview harness; no headless test can see it, because the bug is in
+# the ORDER of two calls that both succeed.
+#
+# Still before pg.run(), which is the other constraint: 21 of the 24 pages call
+# st.stop(), so anything after pg.run() never renders on exactly those pages.
+from core.ledger_ui import design_shell as _design_shell
+_design_shell()
 
 # ── Onboarding Check ────────────────────────────────────────────────────────
 if "onboarding_complete" not in st.session_state:

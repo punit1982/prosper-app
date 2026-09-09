@@ -919,8 +919,14 @@ def _chrome(mode: str) -> str:
     which would also repaint the semantic up/down figures.
     """
     t = TOKENS[mode]
+    # `:root:root` is specificity (0,2,0); the base sheet declares the light
+    # tokens at `:root` (0,1,0). Winning on SPECIFICITY rather than on source
+    # order makes this immune to the sheet being emitted again later — which
+    # is what a loading skeleton, a fragment or a future caller will eventually
+    # do, and what turned the bottom bar white and the page title invisible in
+    # dark mode. Do not lower this to a single :root.
     return f"""<style>
-:root{{{_vars(mode)}}}
+:root:root{{{_vars(mode)}}}
 .stApp,[data-testid="stAppViewContainer"],[data-testid="stHeader"]{{
   background:{t['paper']}!important;}}
 [data-testid="stSidebar"]{{background:{t['sheet']}!important;}}
@@ -956,12 +962,15 @@ def _chrome(mode: str) -> str:
 [data-testid="stMain"] [data-testid="stButtonGroup"] button[kind="segmented_controlActive"]{{
   background:{t['accent']}!important;color:{t['on-accent']}!important;
   border-color:{t['accent']}!important;}}
+[data-testid="stMain"] .stButton button,
+[data-testid="stMain"] .stButton button *{{color:{t['ink']}!important;}}
 [data-testid="stMain"] .stButton button{{
-  background:{t['sheet']}!important;color:{t['ink']}!important;
-  border:1px solid {t['rule-strong']}!important;}}
+  background:{t['sheet']}!important;border:1px solid {t['rule-strong']}!important;}}
 [data-testid="stMain"] .stButton button[kind="primary"]{{
-  background:{t['accent']}!important;color:{t['on-accent']}!important;
-  border-color:{t['accent']}!important;}}
+  background:{t['accent']}!important;border-color:{t['accent']}!important;}}
+[data-testid="stMain"] .stButton button[kind="primary"],
+[data-testid="stMain"] .stButton button[kind="primary"] *{{
+  color:{t['on-accent']}!important;}}
 [data-testid="stMain"] input::placeholder,
 [data-testid="stMain"] textarea::placeholder{{color:{t['ink-3']}!important;opacity:1;}}
 [data-testid="stMain"] [data-baseweb="popover"] li,
@@ -973,6 +982,19 @@ def _chrome(mode: str) -> str:
 [data-testid="stMain"] [data-baseweb="tab"]{{color:{t['ink-2']}!important;}}
 [data-testid="stMain"] [data-testid="stMetricValue"]{{color:{t['ink']}!important;}}
 [data-testid="stMain"] [data-testid="stMetricLabel"]{{color:{t['ink-3']}!important;}}
+/* Streamlit paints its OWN text colour from config.toml, which is static and
+   therefore the light value. Anything the selectors above do not name keeps it
+   — which in dark mode meant the bottom bar's links and Material icon glyphs
+   rendered in near-black on the dark ground. Page links and icons are the two
+   that carry text and were missed. */
+[data-testid="stMain"] a[data-testid="stPageLink-NavLink"],
+[data-testid="stMain"] a[data-testid="stPageLink-NavLink"] *,
+[data-testid="stMain"] span[data-testid="stIconMaterial"],
+[data-testid="stMain"] [data-testid="stMarkdownContainer"] a{{
+  color:{t['ink-2']}!important;}}
+[data-testid="stMain"] a[data-testid="stPageLink-NavLink"][aria-current],
+[data-testid="stMain"] a[data-testid="stPageLink-NavLink"][aria-current] *{{
+  color:{t['ink']}!important;}}
 /* Charts inherit the page ground, so the plot area must not stay white. */
 [data-testid="stMain"] .js-plotly-plot .plotly .main-svg{{background:transparent!important;}}
 </style>"""
@@ -1000,6 +1022,37 @@ def keep_row() -> None:
     )
 
 
+def _min(css: str) -> str:
+    """Strip CSS comments and leading indentation before emitting.
+
+    st.markdown runs the string through a Markdown pipeline before it reaches
+    the DOM, and that pipeline mangles a multi-line <style> containing comment
+    blocks — the sheet arrived TRUNCATED at the first comment, silently losing
+    every rule after it. Measured in the harness: _chrome() returned 4,605
+    bytes and the DOM held 1,457, cut exactly at a `/* ... */`.
+
+    The comments belong in the source, not in the payload, so they are removed
+    on the way out. This also stops re-sending several KB of prose on every
+    rerun.
+    """
+    import re as _re
+    css = _re.sub(r"/\*.*?\*/", "", css, flags=_re.S)
+    return "\n".join(ln.strip() for ln in css.splitlines() if ln.strip())
+
+
+def shell_css() -> str:
+    """The complete stylesheet for the ACTIVE theme: tokens, components and the
+    Streamlit chrome repaint, in that order.
+
+    Anything that needs the sheet must use this rather than CSS alone. CSS
+    declares the LIGHT tokens on :root — emitting it again after design_shell()
+    silently reverts the palette for everything below it, which is what turned
+    the bottom bar white and the section labels unreadable in dark mode. Found
+    in the preview harness by counting --p-ink-2 declarations in the DOM.
+    """
+    return _min(CSS) + _min(_chrome(active_theme()))
+
+
 def design_shell() -> None:
     """Inject the token + component sheet, globally, from app.py — BEFORE
     pg.run(), because 21 of the 24 pages call st.stop() and anything after
@@ -1018,7 +1071,7 @@ def design_shell() -> None:
     # CSS on every run, since both are regenerated per rerun anyway.
     global ACTIVE_THEME
     ACTIVE_THEME = mode
-    st.markdown(CSS + _chrome(mode), unsafe_allow_html=True)
+    st.markdown(_min(CSS) + _min(_chrome(mode)), unsafe_allow_html=True)
 
 
 def write(*html: str) -> None:

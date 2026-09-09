@@ -55,7 +55,10 @@ else:
     # that could mean anything, and matching the row geometry stops the page
     # jumping when the data lands.
     import core.ledger_ui as _boot
-    _boot.write(_boot.CSS)
+    # shell_css(), not CSS: the bare sheet declares the LIGHT tokens, so
+    # emitting it here — after design_shell() — reverted the whole page to the
+    # light palette in dark mode.
+    _boot.write(_boot.shell_css())
     _ph = st.empty()
     with _ph.container():
         _boot.write(

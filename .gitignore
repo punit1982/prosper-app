@@ -37,3 +37,7 @@ data/uploads/*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Preview harness scratch copy (auth-bypassed; never deploy)
+.harness/
+.ledger_proof_preview.html
