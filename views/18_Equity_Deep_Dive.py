@@ -27,7 +27,7 @@ import core.ledger_ui as _lu
 
 from core.ui_components import (page_header, hero_metric, stat_grid,
                                 fmt_compact, render_responsive_table)
-page_header("Equity Deep Dive", "One name, everything Prosper knows about it")
+page_header("Security", "One name, everything Prosper knows about it")
 st.caption("Comprehensive 360° view of any stock — fundamentals, analyst consensus, sentiment, ownership, and the GROW two-verdict analysis.")
 
 # ─────────────────────────────────────────

@@ -1094,6 +1094,14 @@ def _chrome(mode: str) -> str:
 .stMain [data-testid="stFileUploaderDropzone"],
 .stMain [data-testid="stFileUploaderFile"]{{
   background:{t['sunk']}!important;border-color:{t['rule-strong']}!important;}}
+/* The dropzone's own copy ("Drag and drop file here", the size limit) keeps
+   Streamlit's static textColor — measured 1.12:1 on Connections. */
+.stMain [data-testid="stFileUploaderDropzone"] span,
+.stMain [data-testid="stFileUploaderDropzone"] div,
+.stMain [data-testid="stFileUploaderDropzoneInstructions"] span,
+.stMain [data-testid="stFileUploaderDropzoneInstructions"] small,
+.stMain [data-testid="stFileUploaderFile"] span,
+.stMain [data-testid="stFileUploaderFile"] div{{color:{t['ink-2']}!important;}}
 .stMain [data-testid="stAlertContainer"],
 .stMain [data-testid="stAlertContentInfo"],
 .stMain [data-testid="stAlertContentSuccess"],

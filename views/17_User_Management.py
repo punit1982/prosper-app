@@ -12,7 +12,8 @@ import streamlit as st
 
 from core.ui_errors import fetch_failed, unexpected
 
-st.header("User Management")
+from core.ui_components import page_header as _ph
+_ph("Account & access", "Who can sign in, and what they can see")
 
 # ── Check auth ──────────────────────────────────────────────────────────────
 AUTH_ENABLED = os.getenv("PROSPER_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
