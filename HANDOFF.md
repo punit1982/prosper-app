@@ -1,20 +1,39 @@
-# Prosper — Handoff (8 Sep 2026, current at v7.23)
+# Prosper — Handoff (9 Sep 2026, current at v7.25)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
-**Where the work stands.** A three-front review on 8 Sep 2026 measured the data layer, the code
-weight and the phone experience. **Phase 1 (data sources) and Phase 2 (simplicity & speed) are
-both shipped and live. Phase 3 (mobile) is audited and waiting** — §12, with STEP 0 being a
-re-measure in the preview harness because Phase 2 moved three of the screens the audit was based
-on. Full review, with the phone mockups:
-`https://claude.ai/code/artifact/3b209668-235c-4b33-9402-5fdcbc9732c4`
+**Where the work stands.** Phases 1, 2 and the first two pushes of Phase 3 are shipped and live.
+**Phase 3 (mobile) is now IN PROGRESS, not waiting** — two pushes are live (v7.24 `695f4f6`,
+v7.25 `6a7da75`); the remainder is §13.
+
+Phase 3 is being built against a second design review (9 Sep) that audited the 8 Sep proposal
+itself and scored it 9/20 technical, 23/40 Nielsen. That review, the token system and eight
+screens rendered by the shipped code:
+`https://claude.ai/code/artifact/aa161c0b-b317-4b9f-9954-3172536b0dc2`
+The original 8 Sep review, kept for the IA argument (24 → 11 destinations, which still stands):
+`https://claude.ai/code/artifact/342f6ad4-b305-4fcd-bf10-1d20025220c6`
+
+**The design system is `core/ledger_ui.py`.** Read its module docstring before touching any UI —
+it carries the tokens, the contrast table, and the reason the app is still dark.
+
+**THE ONE TRAP IN THE CURRENT STATE.** Both palettes (light and dark) are defined and
+contrast-verified, and the design is light-first *by intent* — but the app RUNS dark, pinned by
+`_THEME_PIN`, because `.streamlit/config.toml` forces Streamlit's chrome dark and ~47 hard-coded
+hexes in `pages/` assume a dark ground. **Flipping `config.toml` alone will paint half the app
+light-on-light.** Going light is: sweep the hexes → flip the config → delete the pin. All three,
+in that order.
 
 **The §11/§12 audits are measured leads, not gospel.** Four of the eleven Phase 2 findings were
 wrong on inspection (a "dead" function that was actually called, a "crash" that can't happen, a bad
 grep, a non-issue Streamlit already handles) — see the ledger at the top of §11. Verify each Phase
 3 finding against the current code before acting on it.
+
+**tests/test_harvest.py is 56/60 on main** — four pre-existing failures
+(`test_real_businesses_are_kept`, `test_wrappers_are_skipped` + 2) that predate Phase 3 and are
+unrelated to it. `test_market_data.py` is 91/91. Do not treat the harvest suite as a clean
+baseline until those four are diagnosed.
 
 **Before you touch anything: `git pull`, then check `list_deploys` via the Render MCP.** Two separate
 Claude sessions have worked this repo on the same day and one shipped v7.15 while the other was
@@ -839,3 +858,78 @@ cleanup, then finish P2-9) → `P3-6` (qty/avg-cost rows) → `P3-4` (bars for d
 (decide, from real numbers, whether Risk needs splitting) → `P3-10` (`history_cache`) →
 `P3-9` (watchdog, needs a phone). The first five are subtraction and low-risk; do them as one or
 two pushes and verify each on a phone before the next.
+
+---
+
+## 13. PHASE 3 — mobile rehaul (IN PROGRESS, 9 Sep 2026)
+
+Built against the 9 Sep design review, which audited the 8 Sep proposal and found it wanting:
+9/20 on the Impeccable technical audit, 23/40 on Nielsen, 495 detector findings, and — the
+disqualifying one — **six numeric self-contradictions in a review whose central charge was that
+two pages give different numbers for the same thing.** The rebuilt system scores 19/20 with 0
+detector findings. The IA argument from 8 Sep (24 → 11 destinations) survived unchanged; only the
+visual system and the components were replaced.
+
+### Shipped and live
+
+| Push | Commit | What |
+|---|---|---|
+| **1** | `695f4f6` | The floating FAB deleted (app.py, 98 lines) · Quick Navigation deleted (Command Center) · Portfolio Summary's 1,638-call returns block deleted · `stat_grid` drops empty cells · Deep Dive defaults to the largest holding · `fmt_compact` sub-1000 rounding bug fixed |
+| **2** | `6a7da75` | `core/ledger_ui.py` — the design system · `design_shell()` wired into `app.py` · Command Center's alert queue converted to ruled rows, sorted by severity, capped at 4 with an explicit overflow row · `scripts/render_ledger_proof.py` |
+
+**Net so far:** four navigation systems → two (sidebar + bottom bar). The last known freeze path
+is gone. Nothing visual changed on 23 of 24 pages — Push 2 adds tokens and component classes but
+deliberately does not repaint Streamlit's chrome, so unconverted pages are untouched.
+
+### The design system — `core/ledger_ui.py`
+
+Read the module docstring first; it is the spec. Summary:
+
+- **13 colour tokens**, light and dark, every text/ground pair computed ≥4.5:1 (the table is in
+  the docstring). One interactive accent, three semantics (`up`/`down`/`watch`) which are
+  deliberately *not* the accent, and `mark` — a colourless token for a broker valuation, because
+  a mark is not a price and colouring it would imply otherwise.
+- **6-step type scale, 12px floor.** The old app has 41 distinct sizes; the v1 proposal put four
+  sizes inside 3.5px and nav labels at 9.5px.
+- **44px on everything tappable**, pills and buttons included.
+- **16 components**, all pure functions returning HTML — testable without Streamlit, which is how
+  `scripts/render_ledger_proof.py` can render eight screens offline.
+- **Motion:** press 120ms, hover 150ms (gated `hover:hover` so touch does not stick), focus
+  instant, skeleton shimmer 1.4s. Nothing else moves, because Streamlit re-runs the whole script
+  on every interaction — any entry animation replays on every tap.
+
+`venv/bin/python3 scripts/render_ledger_proof.py out.html` renders the system to a static page.
+Every screen calls the real components and reads one shared `BOOK` dict, so the proof cannot
+drift from the code and two screens cannot disagree. That constraint is the fix for the v1
+contradictions, and it is worth preserving.
+
+### Remaining, in order
+
+1. **Token sweep.** Replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the
+   tokens. Mechanical and greppable. **This is the prerequisite for everything below.**
+2. **Flip to light.** `.streamlit/config.toml` → light, delete `_THEME_PIN`. Only after (1).
+   The whole reason for light-first is the use scene: this is read outdoors in Gulf daylight,
+   where a dark ground stops emitting and the dimmest token disappears first.
+3. **Convert Command Center fully** — hero, provenance strip, movers with money as well as
+   percent. The alert queue is already done.
+4. **The three missing states** — loading (on a spun-down free tier this is genuinely the
+   most-seen screen in the product), empty/healthy Today (true ~340 days a year), and error.
+   `skeleton()` and `empty()` exist and are unused.
+5. **Merge the five research pages into Security** (D8) — Deep Dive already has the tabs. This
+   removes the most code of anything remaining.
+6. **Merge the news and event pages into Activity** (D9).
+7. **`ranked_bars()` for the 8 donuts** — five on Summary, one each on Risk, Deep Dive, Dividends.
+8. **Holdings rows carry quantity and average cost** (P3-6b) — `ledger_row()` takes them already.
+9. **`st.metric` → `stat_grid`** (P3-11, 23 calls), then the `[data-testid="stMetric*"]` block in
+   `app.py` can finally go.
+10. **Naming** — Today / Holdings / Ask / Activity / More, Security, Evaluate, Risk, Income,
+    Options, Add holdings, Connections. Confirmed by the owner on 9 Sep with no changes.
+11. **`history_cache`** (P3-10) — still needed by Summary's risk section, Technical, Deep Dive and
+    `portfolio_optimizer`.
+
+### Two things that are NOT design problems
+
+- **The free-tier cold start (30–60s)** is infrastructure. No layout work touches it; $7/mo does.
+  Until then, the loading state in (4) is the only real mitigation.
+- **`tests/test_harvest.py` 56/60** — four failures predate Phase 3 entirely. Verified by running
+  the suite on a stashed clean tree. Diagnose separately; do not let them block a UI push.
