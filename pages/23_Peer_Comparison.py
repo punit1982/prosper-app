@@ -360,10 +360,10 @@ if tab_valuation:
         subset = val_data[val_data[metric].notna()].copy()
         if subset.empty:
             continue
-        colors = ["#FF9800" if t == selected_ticker else "#1E88E5" for t in subset["Ticker"]]
+        colors = ["#96590A" if t == selected_ticker else "#1E3A8A" for t in subset["Ticker"]]
         fig = px.bar(
             subset, x="Ticker", y=metric, title=metric,
-            color_discrete_sequence=["#1E88E5"],
+            color_discrete_sequence=["#1E3A8A"],
         )
         fig.update_traces(marker_color=colors)
         fig.update_layout(
@@ -375,7 +375,7 @@ if tab_valuation:
         peer_vals = subset[subset["Ticker"] != selected_ticker][metric].dropna()
         if not peer_vals.empty:
             median_val = peer_vals.median()
-            fig.add_hline(y=median_val, line_dash="dash", line_color="rgba(255,255,255,0.5)",
+            fig.add_hline(y=median_val, line_dash="dash", line_color="rgba(128,128,128,0.5)",
                           annotation_text=f"Peer Median: {median_val:.1f}")
         show_chart(fig)
 
@@ -431,14 +431,14 @@ if tab_quality:
             theta=cat_labels + [cat_labels[0]],
             fill="toself",
             name=selected_ticker,
-            line_color="#FF9800",
+            line_color="#96590A",
         ))
         fig_radar.add_trace(go.Scatterpolar(
             r=peer_values + [peer_values[0]],
             theta=cat_labels + [cat_labels[0]],
             fill="toself",
             name="Peer Median",
-            line_color="#1E88E5",
+            line_color="#1E3A8A",
             opacity=0.5,
         ))
         fig_radar.update_layout(
@@ -455,7 +455,7 @@ if tab_quality:
         if subset.empty:
             continue
         subset[f"{metric}_pct"] = subset[metric] * 100 if metric != "Current Ratio" else subset[metric]
-        colors = ["#FF9800" if t == selected_ticker else "#1E88E5" for t in subset["Ticker"]]
+        colors = ["#96590A" if t == selected_ticker else "#1E3A8A" for t in subset["Ticker"]]
         fig = px.bar(subset, x="Ticker", y=f"{metric}_pct", title=label)
         fig.update_traces(marker_color=colors)
         fig.update_layout(
@@ -479,10 +479,10 @@ if tab_growth:
         if subset.empty:
             continue
         subset[f"{metric}_pct"] = subset[metric] * 100
-        colors = ["#FF9800" if t == selected_ticker else "#4CAF50" for t in subset["Ticker"]]
+        colors = ["#96590A" if t == selected_ticker else "#047857" for t in subset["Ticker"]]
         fig = px.bar(subset, x="Ticker", y=f"{metric}_pct", title=label)
         fig.update_traces(marker_color=colors)
-        fig.add_hline(y=0, line_color="rgba(255,255,255,0.3)")
+        fig.add_hline(y=0, line_color="rgba(128,128,128,0.3)")
         fig.update_layout(
             height=300, margin=dict(t=35, l=40, r=10, b=20),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -494,7 +494,7 @@ if tab_growth:
     peg_data = comp_df[comp_df["P/E (Fwd)"].notna() & comp_df["Earnings Growth"].notna()].copy()
     if not peg_data.empty:
         peg_data["eg_pct"] = peg_data["Earnings Growth"] * 100
-        colors = ["#FF9800" if t == selected_ticker else "#1E88E5" for t in peg_data["Ticker"]]
+        colors = ["#96590A" if t == selected_ticker else "#1E3A8A" for t in peg_data["Ticker"]]
 
         fig_peg = px.scatter(
             peg_data, x="eg_pct", y="P/E (Fwd)", text="Ticker",
@@ -520,13 +520,13 @@ if tab_risk:
         subset = comp_df[comp_df[metric].notna()].copy()
         if subset.empty:
             continue
-        colors = ["#FF9800" if t == selected_ticker else "#1E88E5" for t in subset["Ticker"]]
+        colors = ["#96590A" if t == selected_ticker else "#1E3A8A" for t in subset["Ticker"]]
         fig = px.bar(subset, x="Ticker", y=metric, title=label)
         fig.update_traces(marker_color=colors)
 
         # Reference lines
         if metric == "Beta":
-            fig.add_hline(y=1.0, line_dash="dash", line_color="rgba(255,255,255,0.5)",
+            fig.add_hline(y=1.0, line_dash="dash", line_color="rgba(128,128,128,0.5)",
                           annotation_text="Market Beta = 1.0")
         elif metric == "D/E":
             fig.add_hline(y=100, line_dash="dash", line_color="rgba(255,100,100,0.5)",

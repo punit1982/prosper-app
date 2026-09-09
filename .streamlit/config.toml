@@ -1,8 +1,15 @@
+# Values come from core/ledger_ui.TOKENS["light"] — the same dict the design
+# system's CSS is generated from, so Streamlit's own chrome and the components
+# cannot drift apart.
+#
+# THIS MOVES WITH TWO OTHER THINGS. ledger_ui.ACTIVE_THEME selects the token
+# set for both the CSS pin and the Plotly literals. Change one without the
+# others and half the app paints on the wrong ground.
 [theme]
-primaryColor = "#1E88E5"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#262730"
-textColor = "#FAFAFA"
+primaryColor = "#0F172A"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#E8ECF1"
+textColor = "#020617"
 font = "sans serif"
 
 [server]

@@ -338,7 +338,7 @@ if tab_calendar:
                     f"<div style='display:flex;align-items:center;gap:10px;padding:6px 0;"
                     f"border-bottom:1px solid rgba(128,128,128,0.15);font-size:0.92rem'>"
                     f"{chip}<b>{row['ticker']}</b>"
-                    f"<span style='color:#888'>{row['ex_dt'].strftime('%b %d, %Y')} {income_str}</span>"
+                    f"<span style='color:#475569'>{row['ex_dt'].strftime('%b %d, %Y')} {income_str}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )

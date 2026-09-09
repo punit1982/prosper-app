@@ -170,14 +170,14 @@ if not sdf.empty:
         x="Composite", y="Ticker", orientation="h",
         color="Composite",
         color_continuous_scale=[
-            [0.0,  "#DD2C00"],   # -100: deep bearish red
-            [0.2,  "#FF6D00"],   # -60:  bearish orange
-            [0.35, "#FFD600"],   # -30:  slightly bearish yellow
+            [0.0,  "#B91C1C"],   # -100: deep bearish red
+            [0.2,  "#B45309"],   # -60:  bearish orange
+            [0.35, "#96590A"],   # -30:  slightly bearish yellow
             [0.45, "#E0E0E0"],   # -10:  neutral zone start (grey)
             [0.55, "#E0E0E0"],   # +10:  neutral zone end (grey)
-            [0.65, "#FFD600"],   # +30:  slightly bullish yellow
-            [0.8,  "#64DD17"],   # +60:  bullish light green
-            [1.0,  "#00C853"],   # +100: deep bullish green
+            [0.65, "#96590A"],   # +30:  slightly bullish yellow
+            [0.8,  "#047857"],   # +60:  bullish light green
+            [1.0,  "#047857"],   # +100: deep bullish green
         ],
         range_color=[-100, 100],
         title="Sentiment Score — All Holdings (-100 to +100)",

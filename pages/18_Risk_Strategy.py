@@ -195,16 +195,16 @@ geo_simple = _GEO_SIMPLE.get(geo_tier, "Unknown")
 r_color = _rd.get("color", REGIME_COLORS.get(current_regime, "#888"))
 
 st.markdown(
-    f"<div style='display:flex;gap:20px;padding:12px 18px;background:rgba(255,255,255,0.03);"
-    f"border-radius:10px;border:1px solid rgba(255,255,255,0.08);margin-bottom:12px;flex-wrap:wrap;align-items:center'>"
-    f"<div><span style='color:#999;font-size:0.8rem'>Market Regime</span><br>"
+    f"<div style='display:flex;gap:20px;padding:12px 18px;background:rgba(128,128,128,0.03);"
+    f"border-radius:10px;border:1px solid rgba(128,128,128,0.08);margin-bottom:12px;flex-wrap:wrap;align-items:center'>"
+    f"<div><span style='color:#475569;font-size:0.8rem'>Market Regime</span><br>"
     f"<span style='background:{r_color};color:white;padding:3px 12px;border-radius:12px;"
     f"font-weight:700;font-size:0.95rem'>{simple_name}</span></div>"
-    f"<div><span style='color:#999;font-size:0.8rem'>World Risk</span><br>"
+    f"<div><span style='color:#475569;font-size:0.8rem'>World Risk</span><br>"
     f"<b style='font-size:0.95rem'>{geo_simple}</b></div>"
-    f"<div><span style='color:#999;font-size:0.8rem'>Holdings</span><br>"
+    f"<div><span style='color:#475569;font-size:0.8rem'>Holdings</span><br>"
     f"<b style='font-size:0.95rem'>{len(enriched)}</b></div>"
-    f"<div><span style='color:#999;font-size:0.8rem'>Cash</span><br>"
+    f"<div><span style='color:#475569;font-size:0.8rem'>Cash</span><br>"
     f"<b style='font-size:0.95rem'>{base_currency} {total_cash:,.0f} ({cash_pct:.0f}%)</b></div>"
     f"</div>",
     unsafe_allow_html=True,
@@ -228,12 +228,12 @@ _summary_text = _combined_summary.get((simple_name, geo_simple), simple_desc)
 # Show regime explanation + action clearly (user complained they can't see what regime means)
 st.markdown(
     f"<div style='margin:4px 0 12px 0;padding:12px 16px;border-radius:8px;"
-    f"background:rgba(255,255,255,0.03);border-left:4px solid {r_color}'>"
-    f"<div style='font-size:0.9rem;color:#ccc;margin-bottom:6px'>"
+    f"background:rgba(128,128,128,0.03);border-left:4px solid {r_color}'>"
+    f"<div style='font-size:0.9rem;color:#94a3b8;margin-bottom:6px'>"
     f"{_regime_icon} <b>{simple_name}</b> — {simple_desc}</div>"
-    f"<div style='font-size:0.85rem;color:#aaa;margin-bottom:6px'>"
+    f"<div style='font-size:0.85rem;color:#475569;margin-bottom:6px'>"
     f"<b>What to do:</b> {_regime_action}</div>"
-    f"<div style='font-size:0.85rem;color:#aaa'>"
+    f"<div style='font-size:0.85rem;color:#475569'>"
     f"<b>With current world risk ({geo_simple}):</b> {_summary_text}</div>"
     f"</div>",
     unsafe_allow_html=True,
@@ -323,7 +323,7 @@ if tab_health:
     # Big score + plain English assessment
     score = health["score"]
     total = health["total"]
-    score_color = "#1a9e5c" if score >= 8 else ("#f39c12" if score >= 5 else "#d63031")
+    score_color = "#047857" if score >= 8 else ("#96590a" if score >= 5 else "#b91c1c")
 
     # Track score over time in session state
     prev_score = st.session_state.get("_health_score_prev")
@@ -379,7 +379,7 @@ if tab_health:
         st.markdown(
             f"<div style='text-align:center;padding:15px'>"
             f"<div style='font-size:56px;font-weight:700;color:{score_color}'>{score}/{total}{score_change_text}</div>"
-            f"<div style='font-size:1.1rem;color:#ccc'>{health_label}</div>"
+            f"<div style='font-size:1.1rem;color:#94a3b8'>{health_label}</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -620,16 +620,16 @@ if tab_sizing:
     # ── Visual Action Summary (cards) ──
     regime_scalar = REGIME_SCALAR.get(effective_regime, 0.75)
     st.markdown(
-        f"<div style='padding:12px 16px;border-radius:10px;background:rgba(255,255,255,0.03);"
-        f"border:1px solid rgba(255,255,255,0.08);margin-bottom:12px'>"
-        f"<p style='margin:0 0 8px 0;color:#999;font-size:0.85rem'>"
+        f"<div style='padding:12px 16px;border-radius:10px;background:rgba(128,128,128,0.03);"
+        f"border:1px solid rgba(128,128,128,0.08);margin-bottom:12px'>"
+        f"<p style='margin:0 0 8px 0;color:#475569;font-size:0.85rem'>"
         f"Regime: <b>{simple_name}</b> — positions scaled to <b>{regime_scalar:.0%}</b> of normal. "
         f"Guidance is based on your Prosper AI score for each stock.</p>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
-    _action_colors = {"Hold": "#4CAF50", "Add": "#2196F3", "Trim": "#FF9800", "Sell": "#f44336"}
+    _action_colors = {"Hold": "#047857", "Add": "#1E3A8A", "Trim": "#96590A", "Sell": "#b91c1c"}
     _action_icons = {"Hold": "✅", "Add": "📈", "Trim": "✂️", "Sell": "🚫"}
     # Four counts. As st.columns(4) they became four stacked full-width cards
     # ~90px tall on a phone; as a grid they stay four across and shrink to two
@@ -669,7 +669,7 @@ if tab_sizing:
         max_val = max(sizing_df["Current %"].max(), sizing_df["Target %"].max(), 5)
         fig_guide.add_trace(go.Scatter(
             x=[0, max_val], y=[0, max_val], mode="lines",
-            line=dict(dash="dash", color="rgba(255,255,255,0.2)"),
+            line=dict(dash="dash", color="rgba(128,128,128,0.2)"),
             showlegend=False,
         ))
         fig_guide.update_layout(
@@ -691,8 +691,8 @@ if tab_sizing:
     display_sizing["Target %"] = display_sizing["Target %"].apply(lambda x: f"{x:.1f}%" if x > 0 else "Exit")
 
     def _color_action(val):
-        colors = {"Trim": "color:#ff9800;font-weight:600", "Add": "color:#2196f3;font-weight:600",
-                  "Sell": "color:#d63031;font-weight:700", "Hold": "color:#4caf50"}
+        colors = {"Trim": "color:#96590a;font-weight:600", "Add": "color:#1e3a8a;font-weight:600",
+                  "Sell": "color:#b91c1c;font-weight:700", "Hold": "color:#047857"}
         return colors.get(val, "")
 
     styled = display_sizing[["Ticker", "Name", "Score", "Confidence", "Current %", "Target %", "Action"]].style.map(
@@ -786,8 +786,8 @@ if tab_alloc:
         reb_df = pd.DataFrame(rebalance)
 
         fig_compare = go.Figure()
-        fig_compare.add_trace(go.Bar(name="Current", x=reb_df["category"], y=reb_df["current_pct"], marker_color="#1E88E5"))
-        fig_compare.add_trace(go.Bar(name=f"Target ({selected_model})", x=reb_df["category"], y=reb_df["target_pct"], marker_color="#FF9800"))
+        fig_compare.add_trace(go.Bar(name="Current", x=reb_df["category"], y=reb_df["current_pct"], marker_color="#1E3A8A"))
+        fig_compare.add_trace(go.Bar(name=f"Target ({selected_model})", x=reb_df["category"], y=reb_df["target_pct"], marker_color="#96590A"))
         fig_compare.update_layout(barmode="group", height=320, margin=dict(t=20, l=40, r=20, b=20),
                                   paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         show_chart(fig_compare)
@@ -809,7 +809,7 @@ if tab_alloc:
     weight_df = weight_df.sort_values("weight_pct", ascending=True).tail(15)
 
     fig_w = px.bar(weight_df, x="weight_pct", y="ticker", orientation="h",
-                   color="weight_pct", color_continuous_scale=["#1E88E5", "#FF9800", "#d32f2f"],
+                   color="weight_pct", color_continuous_scale=_lu.DIVERGING,
                    labels={"weight_pct": "Weight %", "ticker": ""})
     fig_w.add_vline(x=10, line_dash="dash", line_color="red", annotation_text="10% limit")
     fig_w.update_layout(height=380, margin=dict(t=10, l=10, r=10, b=10),
@@ -821,23 +821,23 @@ if tab_alloc:
         weights = enriched["market_value"] / total_mv
         hhi = (weights ** 2).sum() * 10000
         if hhi < 1000:
-            hhi_label, hhi_color, hhi_icon = "Highly Diversified", "#4CAF50", "🟢"
+            hhi_label, hhi_color, hhi_icon = "Highly Diversified", "#047857", "🟢"
         elif hhi < 1500:
-            hhi_label, hhi_color, hhi_icon = "Well Diversified", "#8BC34A", "🟢"
+            hhi_label, hhi_color, hhi_icon = "Well Diversified", "#047857", "🟢"
         elif hhi < 2500:
-            hhi_label, hhi_color, hhi_icon = "Moderately Concentrated", "#FF9800", "🟡"
+            hhi_label, hhi_color, hhi_icon = "Moderately Concentrated", "#96590A", "🟡"
         else:
-            hhi_label, hhi_color, hhi_icon = "Concentrated", "#f44336", "🔴"
+            hhi_label, hhi_color, hhi_icon = "Concentrated", "#b91c1c", "🔴"
         st.markdown(f"#### Diversification Score")
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:12px;padding:10px 16px;"
-            f"background:rgba(255,255,255,0.03);border-radius:10px;border:1px solid rgba(255,255,255,0.08)'>"
+            f"background:rgba(128,128,128,0.03);border-radius:10px;border:1px solid rgba(128,128,128,0.08)'>"
             f"<span style='font-size:2rem;font-weight:700;color:{hhi_color}'>{hhi:.0f}</span>"
             f"<div><b>{hhi_icon} {hhi_label}</b><br>"
-            f"<span style='font-size:0.8rem;color:#999'>HHI Scale: "
-            f"<span style='color:#4CAF50'>0-1500 Diversified</span> · "
-            f"<span style='color:#FF9800'>1500-2500 Moderate</span> · "
-            f"<span style='color:#f44336'>2500+ Concentrated</span></span></div>"
+            f"<span style='font-size:0.8rem;color:#475569'>HHI Scale: "
+            f"<span style='color:#047857'>0-1500 Diversified</span> · "
+            f"<span style='color:#96590A'>1500-2500 Moderate</span> · "
+            f"<span style='color:#b91c1c'>2500+ Concentrated</span></span></div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -908,12 +908,12 @@ if tab_advanced:
                     cp = current_pts[0]
                     fig_ef.add_trace(go.Scatter(
                         x=[cp["risk"]*100], y=[cp["return_"]*100], mode="markers",
-                        marker=dict(size=16, color="#FF9800", symbol="circle", line=dict(width=2, color="white")),
+                        marker=dict(size=16, color="#96590A", symbol="circle", line=dict(width=2, color="white")),
                         name=f"Your Portfolio (Sharpe: {cp['sharpe']:.2f})"))
                 if optimal and optimal.get("risk"):
                     fig_ef.add_trace(go.Scatter(
                         x=[optimal["risk"]*100], y=[optimal["return_"]*100], mode="markers",
-                        marker=dict(size=18, color="#00E676", symbol="star", line=dict(width=2, color="white")),
+                        marker=dict(size=18, color="#047857", symbol="star", line=dict(width=2, color="white")),
                         name=f"Optimal (Sharpe: {optimal['sharpe']:.2f})"))
 
                 fig_ef.update_layout(
@@ -976,7 +976,7 @@ if tab_advanced:
                 fig_radar = go.Figure(go.Scatterpolar(
                     r=f_vals + [f_vals[0]], theta=f_names + [f_names[0]],
                     fill="toself", fillcolor="rgba(30,136,229,0.15)",
-                    line=dict(color="#1E88E5", width=2),
+                    line=dict(color="#1E3A8A", width=2),
                 ))
                 fig_radar.update_layout(
                     polar=dict(radialaxis=dict(visible=True, range=[0, max(f_vals) * 1.2])),

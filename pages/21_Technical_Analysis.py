@@ -15,6 +15,7 @@ from plotly.subplots import make_subplots
 from core.database import get_all_holdings
 from core.data_engine import get_history, get_ticker_info_batch
 from core.settings import enriched_cache_key
+import core.ledger_ui as _lu
 
 page_header('Technical Analysis', 'Moving averages, RSI, Bollinger Bands and volume')
 
@@ -230,12 +231,14 @@ fig = make_subplots(
 fig.add_trace(go.Candlestick(
     x=df.index, open=df["open"], high=df["high"],
     low=df["low"], close=df["close"], name="OHLC",
-    increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+    increasing_line_color="#047857", decreasing_line_color="#b91c1c",
 ), row=1, col=1)
 
 # Moving Averages
 if show_sma:
-    for ma, color, dash in [("SMA_20", "#ffa726", "dot"), ("SMA_50", "#42a5f5", "solid"), ("SMA_200", "#ab47bc", "solid")]:
+    for ma, color, dash in [("SMA_20", _lu.CHART_SEQUENCE[2], "dot"),
+                            ("SMA_50", _lu.CHART_SEQUENCE[3], "solid"),
+                            ("SMA_200", _lu.CHART_SEQUENCE[4], "solid")]:
         if ma in df.columns:
             fig.add_trace(go.Scatter(
                 x=df.index, y=df[ma], name=ma,
@@ -258,7 +261,7 @@ current_row = 2
 
 # Volume
 if show_volume and "volume" in df.columns:
-    colors = ["#26a69a" if c >= o else "#ef5350"
+    colors = ["#047857" if c >= o else "#b91c1c"
               for c, o in zip(df["close"], df["open"])]
     fig.add_trace(go.Bar(
         x=df.index, y=df["volume"], name="Volume",
@@ -281,13 +284,13 @@ if show_rsi:
 if show_macd:
     fig.add_trace(go.Scatter(
         x=df.index, y=df["MACD"], name="MACD",
-        line=dict(color="#2196f3", width=1.5),
+        line=dict(color="#1e3a8a", width=1.5),
     ), row=current_row, col=1)
     fig.add_trace(go.Scatter(
         x=df.index, y=df["MACD_signal"], name="Signal",
-        line=dict(color="#ff9800", width=1.5),
+        line=dict(color="#96590a", width=1.5),
     ), row=current_row, col=1)
-    macd_colors = ["#26a69a" if v >= 0 else "#ef5350" for v in df["MACD_hist"].fillna(0)]
+    macd_colors = ["#047857" if v >= 0 else "#b91c1c" for v in df["MACD_hist"].fillna(0)]
     fig.add_trace(go.Bar(
         x=df.index, y=df["MACD_hist"], name="MACD Hist",
         marker_color=macd_colors, opacity=0.5,
@@ -342,19 +345,19 @@ else:
 
 # Determine action
 if score >= 70:
-    action, action_color, action_icon = "BUY / ADD", "#4CAF50", "🟢"
+    action, action_color, action_icon = "BUY / ADD", "#047857", "🟢"
     action_desc = "Technical indicators are predominantly bullish. Consider building a position."
 elif score >= 55:
-    action, action_color, action_icon = "LEAN BULLISH", "#8BC34A", "🟢"
+    action, action_color, action_icon = "LEAN BULLISH", "#047857", "🟢"
     action_desc = "Slight bullish edge. Hold existing positions, small adds on dips."
 elif score >= 45:
-    action, action_color, action_icon = "HOLD / NEUTRAL", "#FF9800", "🟡"
+    action, action_color, action_icon = "HOLD / NEUTRAL", "#96590A", "🟡"
     action_desc = "Mixed signals. Hold positions but avoid adding. Wait for clarity."
 elif score >= 30:
-    action, action_color, action_icon = "LEAN BEARISH", "#FF5722", "🟠"
+    action, action_color, action_icon = "LEAN BEARISH", "#B91C1C", "🟠"
     action_desc = "Slight bearish edge. Tighten stops, consider trimming."
 else:
-    action, action_color, action_icon = "SELL / REDUCE", "#f44336", "🔴"
+    action, action_color, action_icon = "SELL / REDUCE", "#b91c1c", "🔴"
     action_desc = "Technical indicators are predominantly bearish. Consider reducing exposure."
 
 # Calculate key levels
@@ -397,13 +400,13 @@ take_profit_2 = current_price + 3 * atr_val if atr_val > 0 else None
 # Display action card
 st.markdown(
     f"<div style='padding:16px 20px;border-radius:12px;border:2px solid {action_color};"
-    f"background:rgba(255,255,255,0.03);margin-bottom:16px'>"
+    f"background:rgba(128,128,128,0.03);margin-bottom:16px'>"
     f"<div style='display:flex;align-items:center;gap:12px;margin-bottom:8px'>"
     f"<span style='font-size:1.8rem'>{action_icon}</span>"
     f"<span style='font-size:1.4rem;font-weight:700;color:{action_color}'>{action}</span>"
-    f"<span style='font-size:0.9rem;color:#999;margin-left:auto'>"
+    f"<span style='font-size:0.9rem;color:#475569;margin-left:auto'>"
     f"Signal Score: {score:.0f}/100 ({bullish}B / {bearish}S)</span></div>"
-    f"<p style='margin:0;color:#ccc;font-size:0.95rem'>{action_desc}</p>"
+    f"<p style='margin:0;color:#94a3b8;font-size:0.95rem'>{action_desc}</p>"
     f"</div>",
     unsafe_allow_html=True,
 )

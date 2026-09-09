@@ -35,7 +35,7 @@ if current_step == 1:
     st.markdown(
         "<div style='text-align:center;margin-top:2rem'>"
         "<h1 style='font-size:3rem;margin-bottom:0;letter-spacing:-1px'>Prosper</h1>"
-        "<p style='color:#888;font-size:1.2rem;margin-top:4px'>"
+        "<p style='color:#475569;font-size:1.2rem;margin-top:4px'>"
         "The AI-Native Investment Operating System</p>"
         "</div>",
         unsafe_allow_html=True,
@@ -183,7 +183,7 @@ elif current_step == 3:
     # ── Option 3: Add Manually Later ─────────────────────────────────────────
     else:
         st.markdown(
-            "<div style='padding:16px;border-radius:12px;border:1px solid #333;color:#888'>"
+            "<div style='padding:16px;border-radius:12px;border:1px solid #333;color:#475569'>"
             "No worries! You can add holdings anytime from the <strong>Upload Portal</strong> "
             "or <strong>IBKR Sync</strong> page in the sidebar."
             "</div>",
@@ -219,7 +219,7 @@ elif current_step == 4:
             "<div style='padding:20px;border-radius:12px;border:1px solid #333;min-height:140px'>"
             "<div style='font-size:2rem'>&#127968;</div>"
             "<div style='font-weight:700;font-size:1.1rem;margin:8px 0'>Command Center</div>"
-            "<div style='color:#888;font-size:0.9rem'>Your portfolio at a glance with AI briefing</div>"
+            "<div style='color:#475569;font-size:0.9rem'>Your portfolio at a glance with AI briefing</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -227,9 +227,9 @@ elif current_step == 4:
     with row1_c2:
         st.markdown(
             "<div style='padding:20px;border-radius:12px;border:1px solid #333;min-height:140px'>"
-            "<div style='font-size:2rem'>&#128300;</div>"
+            "<div style='font-size:2rem'>&#047857;</div>"
             "<div style='font-weight:700;font-size:1.1rem;margin:8px 0'>Equity Deep Dive</div>"
-            "<div style='color:#888;font-size:0.9rem'>14-section PROSPER analysis for any stock</div>"
+            "<div style='color:#475569;font-size:0.9rem'>14-section PROSPER analysis for any stock</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -241,7 +241,7 @@ elif current_step == 4:
             "<div style='padding:20px;border-radius:12px;border:1px solid #333;min-height:140px'>"
             "<div style='font-size:2rem'>&#127984;</div>"
             "<div style='font-weight:700;font-size:1.1rem;margin:8px 0'>Risk & Strategy</div>"
-            "<div style='color:#888;font-size:0.9rem'>FORTRESS risk engine with position guidance</div>"
+            "<div style='color:#475569;font-size:0.9rem'>FORTRESS risk engine with position guidance</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -251,7 +251,7 @@ elif current_step == 4:
             "<div style='padding:20px;border-radius:12px;border:1px solid #333;min-height:140px'>"
             "<div style='font-size:2rem'>&#128172;</div>"
             "<div style='font-weight:700;font-size:1.1rem;margin:8px 0'>Ask Prosper</div>"
-            "<div style='color:#888;font-size:0.9rem'>Chat with AI about your portfolio</div>"
+            "<div style='color:#475569;font-size:0.9rem'>Chat with AI about your portfolio</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -275,7 +275,7 @@ elif current_step == 5:
     st.markdown(
         "<div style='text-align:center;margin-top:3rem'>"
         "<h1 style='font-size:2.5rem;margin-bottom:0'>You're All Set!</h1>"
-        "<p style='color:#888;font-size:1.1rem;margin-top:8px'>"
+        "<p style='color:#475569;font-size:1.1rem;margin-top:8px'>"
         "Prosper is ready to help you manage your investments like a CIO.</p>"
         "</div>",
         unsafe_allow_html=True,

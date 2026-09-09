@@ -23,6 +23,7 @@ from core.data_engine import (
 from core.grow_engine import run_grow, GROW_TIERS
 from core.settings import SETTINGS, enriched_cache_key
 from core.ui_errors import fetch_failed, empty_state
+import core.ledger_ui as _lu
 
 from core.ui_components import (page_header, hero_metric, stat_grid,
                                 fmt_compact, render_responsive_table)
@@ -184,8 +185,8 @@ _COUNTRY_FLAGS = {
 }
 
 _RATING_COLORS = {
-    "STRONG BUY": "#00C853", "BUY": "#1a9e5c", "HOLD": "#f39c12",
-    "SELL": "#FF6D00", "STRONG SELL": "#DD2C00",
+    "STRONG BUY": "#047857", "BUY": "#047857", "HOLD": "#96590a",
+    "SELL": "#B45309", "STRONG SELL": "#B91C1C",
 }
 
 
@@ -274,7 +275,7 @@ if hi52 and lo52 and price:
     range_span = hi52 - lo52
     if range_span > 0:
         pct = max(0, min(100, ((price - lo52) / range_span) * 100))
-        color = "#1a9e5c" if pct > 60 else "#a6741a" if pct > 30 else "#d63031"
+        color = "#047857" if pct > 60 else "#96590a" if pct > 30 else "#b91c1c"
         st.markdown(
             '<div style="margin:2px 0 12px">'
             '<div style="font-size:0.63rem;letter-spacing:0.05em;text-transform:uppercase;'
@@ -422,14 +423,14 @@ if tab_chart:
             # Price line
             close_col = "Close" if "Close" in hist.columns else hist.columns[0]
             fig.add_trace(
-                go.Scatter(x=hist.index, y=hist[close_col], name=ticker, line=dict(color="#1a9e5c", width=2),
+                go.Scatter(x=hist.index, y=hist[close_col], name=ticker, line=dict(color="#047857", width=2),
                            hovertemplate="%{x|%b %d, %Y}<br>Price: %{y:,.2f}<extra>" + ticker + "</extra>"),
                 row=1, col=1,
             )
 
             # Volume bars
             if "Volume" in hist.columns:
-                colors = ["#1a9e5c" if c >= o else "#d63031"
+                colors = ["#047857" if c >= o else "#b91c1c"
                           for c, o in zip(hist.get("Close", hist[close_col]), hist.get("Open", hist[close_col]))]
                 fig.add_trace(
                     go.Bar(x=hist.index, y=hist["Volume"], name="Volume", marker_color=colors, opacity=0.4),
@@ -466,7 +467,6 @@ if tab_chart:
                 xaxis2_title="",
                 yaxis_title="Price" if not show_bench else "Indexed (100)",
                 yaxis2_title="Volume",
-                template="plotly_dark",
                 showlegend=True,
             )
             fig.update_xaxes(rangeslider_visible=False)
@@ -693,16 +693,16 @@ if tab_analyst:
                     gauge={
                         "axis": {"range": [target_low * 0.9 if target_low else price * 0.7,
                                             target_high * 1.1 if target_high else price * 1.3]},
-                        "bar": {"color": "#1a9e5c"},
+                        "bar": {"color": "#047857"},
                         "steps": [
-                            {"range": [target_low * 0.9 if target_low else price * 0.7, target_low or price * 0.85], "color": "#DD2C00"},
-                            {"range": [target_low or price * 0.85, target_mean or price], "color": "#f39c12"},
-                            {"range": [target_mean or price, target_high or price * 1.15], "color": "#1a9e5c"},
+                            {"range": [target_low * 0.9 if target_low else price * 0.7, target_low or price * 0.85], "color": "#B91C1C"},
+                            {"range": [target_low or price * 0.85, target_mean or price], "color": "#96590a"},
+                            {"range": [target_mean or price, target_high or price * 1.15], "color": "#047857"},
                         ],
-                        "threshold": {"line": {"color": "white", "width": 2}, "value": target_mean},
+                        "threshold": {"line": {"color": _lu.c("ink"), "width": 2}, "value": target_mean},
                     },
                 ))
-                fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=10), template="plotly_dark")
+                fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=10))
                 show_chart(fig_gauge)
 
             with info_col:
@@ -755,7 +755,7 @@ if tab_analyst:
             if total_h > 0:
                 # Score display — convert to -100..+100 scale
                 score_100 = round(score * 100)
-                score_color = "#00C853" if score > 0.1 else "#DD2C00" if score < -0.1 else "#f39c12"
+                score_color = "#047857" if score > 0.1 else "#B91C1C" if score < -0.1 else "#96590a"
                 stat_grid([
                     ("Sentiment", f"{score_100:+d}", label, score),
                     ("Headlines", str(total_h)),
@@ -858,7 +858,6 @@ if tab_ownership:
             # split without a chart bundle, and st.columns([2,3]) stacked into
             # two full-width rows below ~640px anyway, so the side-by-side the
             # pie was placed in never existed on a phone.
-            import core.ledger_ui as _lu
             st.markdown(_lu.ranked_bars([
                 {"name": "Institutions", "pct": float(inst_v), "meta": "funds and mandates"},
                 {"name": "Insiders", "pct": float(ins_v), "meta": "management and board"},
@@ -936,11 +935,11 @@ if tab_technical:
                     _signals.append(("SMA 200", f"{ccy} {_sma200_val:,.2f}", "Above" if above200 else "Below", "#00C853" if above200 else "#DD2C00"))
                     if _sma50_val is not None:
                         cross = "Golden Cross" if _sma50_val > _sma200_val else "Death Cross"
-                        _signals.append(("SMA Cross", cross, "", "#00C853" if "Golden" in cross else "#DD2C00"))
+                        _signals.append(("SMA Cross", cross, "", "#047857" if "Golden" in cross else "#B91C1C"))
             _rsi_val_f = _sf(_rsi_val)
             if _rsi_val_f is not None:
                 rsi_label = "Overbought" if _rsi_val_f > 70 else "Oversold" if _rsi_val_f < 30 else "Neutral"
-                rsi_color = "#DD2C00" if _rsi_val_f > 70 else "#00C853" if _rsi_val_f < 30 else "#f39c12"
+                rsi_color = "#B91C1C" if _rsi_val_f > 70 else "#047857" if _rsi_val_f < 30 else "#96590a"
                 _signals.append(("RSI 14", f"{_rsi_val_f:.1f}", rsi_label, rsi_color))
 
             # Display signal cards
@@ -969,15 +968,15 @@ if tab_technical:
 
             # Mini chart with overlays
             _fig_tech = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-            _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_closes, name="Price", line=dict(color="#1a9e5c", width=2)), row=1, col=1)
-            _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_sma50, name="SMA 50", line=dict(color="#FFA726", width=1, dash="dash")), row=1, col=1)
+            _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_closes, name="Price", line=dict(color=_lu.CHART_SEQUENCE[0], width=2)), row=1, col=1)
+            _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_sma50, name="SMA 50", line=dict(color=_lu.CHART_SEQUENCE[2], width=1, dash="dash")), row=1, col=1)
             if _sma200 is not None:
-                _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_sma200, name="SMA 200", line=dict(color="#42A5F5", width=1, dash="dot")), row=1, col=1)
+                _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_sma200, name="SMA 200", line=dict(color=_lu.CHART_SEQUENCE[3], width=1, dash="dot")), row=1, col=1)
             if _rsi is not None:
-                _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_rsi, name="RSI", line=dict(color="#AB47BC", width=1.5)), row=2, col=1)
-                _fig_tech.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=2, col=1)
-                _fig_tech.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=2, col=1)
-            _fig_tech.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
+                _fig_tech.add_trace(go.Scatter(x=_tech_hist.index, y=_rsi, name="RSI", line=dict(color=_lu.CHART_SEQUENCE[4], width=1.5)), row=2, col=1)
+                _fig_tech.add_hline(y=70, line_dash="dash", line_color=_lu.c("down"), opacity=0.5, row=2, col=1)
+                _fig_tech.add_hline(y=30, line_dash="dash", line_color=_lu.c("up"), opacity=0.5, row=2, col=1)
+            _fig_tech.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0),
                                     legend=dict(orientation="h", y=1.02), yaxis2_title="RSI")
             show_chart(_fig_tech)
         else:
@@ -1067,7 +1066,7 @@ if tab_ai:
                     f'<div style="text-align:center; padding:30px; background:rgba(26,158,92,0.05); '
                     f'border:1px dashed rgba(26,158,92,0.3); border-radius:12px; margin:16px 0;">'
                     f'<div style="font-size:1.2em; font-weight:600; margin-bottom:8px;">No GROW analysis yet</div>'
-                    f'<div style="color:#999;">Run GROW on <strong>{ticker}</strong> for the two verdicts: Durability (is it worth owning) '
+                    f'<div style="color:#475569;">Run GROW on <strong>{ticker}</strong> for the two verdicts: Durability (is it worth owning) '
                     f'and Entry (is it worth buying at today\'s price) with the full price ladder.</div></div>',
                     unsafe_allow_html=True,
                 )

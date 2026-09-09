@@ -12,11 +12,11 @@ from typing import Optional
 import streamlit as st
 
 ENTRY_COLORS = {
-    "STRONG BUY": "#00C853",
-    "BUY": "#1a9e5c",
-    "HOLD": "#f39c12",
-    "SELL": "#FF6D00",
-    "STRONG SELL": "#DD2C00",
+    "STRONG BUY": "#047857",
+    "BUY": "#047857",
+    "HOLD": "#96590a",
+    "SELL": "#B45309",
+    "STRONG SELL": "#B91C1C",
 }
 
 
@@ -25,11 +25,11 @@ def durability_color(score) -> str:
         s = float(score)
     except (TypeError, ValueError):
         return "#888"
-    if s >= 85: return "#00C853"
-    if s >= 70: return "#1a9e5c"
-    if s >= 55: return "#f39c12"
-    if s >= 40: return "#FF6D00"
-    return "#DD2C00"
+    if s >= 85: return "#047857"
+    if s >= 70: return "#047857"
+    if s >= 55: return "#96590a"
+    if s >= 40: return "#B45309"
+    return "#B91C1C"
 
 
 def durability_band(score) -> str:
@@ -117,18 +117,18 @@ def verdict_block_html(analysis: dict, ccy: str = "") -> str:
     elif price is not None:
         ret_line = f"Today {_money(price, ccy)}."
     return (
-        f'<div style="border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px 22px;margin:8px 0 14px 0;'
+        f'<div style="border:1px solid rgba(128,128,128,0.1);border-radius:12px;padding:18px 22px;margin:8px 0 14px 0;'
         f'background:linear-gradient(135deg, rgba(26,158,92,0.07), rgba(0,0,0,0))">'
         f'<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:center">'
-        f'<div><div style="font-size:0.75rem;color:#999;letter-spacing:0.5px">DURABILITY · is this worth owning</div>'
-        f'<div style="font-size:2.4rem;font-weight:800;color:{dc};line-height:1">{dur_txt}<span style="font-size:1rem;color:#888"> / 100</span> '
+        f'<div><div style="font-size:0.75rem;color:#475569;letter-spacing:0.5px">DURABILITY · is this worth owning</div>'
+        f'<div style="font-size:2.4rem;font-weight:800;color:{dc};line-height:1">{dur_txt}<span style="font-size:1rem;color:#475569"> / 100</span> '
         f'<span style="font-size:1rem;font-weight:600;color:{dc}">{band}</span></div></div>'
-        f'<div><div style="font-size:0.75rem;color:#999;letter-spacing:0.5px">ENTRY · is it worth buying today</div>'
+        f'<div><div style="font-size:0.75rem;color:#475569;letter-spacing:0.5px">ENTRY · is it worth buying today</div>'
         f'<div style="display:inline-block;background:{vc};color:white;padding:8px 20px;border-radius:8px;font-weight:800;font-size:1.4rem;margin-top:4px">{verdict}</div></div>'
         f'</div>'
         f'<div style="margin-top:12px;font-size:0.95rem">{ladder}</div>'
-        f'<div style="margin-top:6px;font-size:0.95rem;color:#ccc">{ret_line}</div>'
-        + (f'<div style="margin-top:6px;font-size:0.9rem;color:#aaa">Confidence: <i>{conf}</i></div>' if conf else "")
+        f'<div style="margin-top:6px;font-size:0.95rem;color:#94a3b8">{ret_line}</div>'
+        + (f'<div style="margin-top:6px;font-size:0.9rem;color:#475569">Confidence: <i>{conf}</i></div>' if conf else "")
         + f'</div>'
     )
 

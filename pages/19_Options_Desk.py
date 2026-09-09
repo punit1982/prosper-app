@@ -41,7 +41,7 @@ st.markdown("""
 .hv-card{border:1px solid rgba(128,128,128,0.22);border-left:3px solid #0f7a52;
          padding:11px 12px;margin-bottom:9px;border-radius:3px;}
 .hv-card.debit{border-left-color:#b3261e;}
-.hv-card.hedge{border-left-color:#0984e3;}
+.hv-card.hedge{border-left-color:#1e3a8a;}
 .hv-card.blocked{border-left-color:#9a5b06;opacity:0.72;}
 .hv-r1{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
 .hv-sym{font-weight:700;font-size:1.02rem;letter-spacing:-0.01em;}

@@ -19,6 +19,7 @@ from core.data_engine import (
 from core.settings import SETTINGS, enriched_cache_key
 
 from core.ui_components import page_header
+import core.ledger_ui as _lu
 page_header('Analyst Consensus', 'What the street thinks, across your holdings')
 holdings = get_all_holdings()
 if holdings.empty:
@@ -141,15 +142,15 @@ try:
             delta={"reference": target_mean, "relative": True, "valueformat": ".1%"},
             gauge={
                 "axis": {"range": [target_low * 0.8, target_high * 1.1]},
-                "bar": {"color": "#2962FF"},
+                "bar": {"color": "#1E3A8A"},
                 "steps": [
                     {"range": [target_low * 0.8, target_low], "color": "#ffcdd2"},
                     {"range": [target_low, target_mean], "color": "#fff9c4"},
                     {"range": [target_mean, target_high], "color": "#c8e6c9"},
-                    {"range": [target_high, target_high * 1.1], "color": "#a5d6a7"},
+                    {"range": [target_high, target_high * 1.1], "color": "#047857"},
                 ],
                 "threshold": {
-                    "line": {"color": "black", "width": 2},
+                    "line": {"color": _lu.c("ink"), "width": 2},
                     "thickness": 0.8,
                     "value": target_mean,
                 },
@@ -218,11 +219,11 @@ try:
                 }
                 sdf_melted["Rating"] = sdf_melted["Rating"].map(lambda x: label_map.get(x, x))
                 color_map = {
-                    "5 — Strong Buy": "#00C853",
-                    "4 — Buy": "#64DD17",
-                    "3 — Hold": "#FFD600",
-                    "2 — Sell": "#FF6D00",
-                    "1 — Strong Sell": "#DD2C00",
+                    "5 — Strong Buy": "#047857",
+                    "4 — Buy": "#047857",
+                    "3 — Hold": "#96590A",
+                    "2 — Sell": "#B45309",
+                    "1 — Strong Sell": "#B91C1C",
                 }
                 # Order categories from Strong Buy (top) to Strong Sell (bottom)
                 cat_order = ["5 — Strong Buy", "4 — Buy", "3 — Hold", "2 — Sell", "1 — Strong Sell"]
@@ -232,8 +233,8 @@ try:
                              title="Recommendation Breakdown by Period")
                 fig.update_layout(height=350, margin=dict(t=50, b=20),
                                   plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                                  font=dict(color="#FAFAFA"),
-                                  legend=dict(font=dict(color="#FAFAFA")))
+                                  font=dict(color=_lu.c("ink-2")),
+                                  legend=dict(font=dict(color=_lu.c("ink-2"))))
                 show_chart(fig)
         except Exception:
             pass

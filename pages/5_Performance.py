@@ -19,6 +19,7 @@ from core.data_engine import get_benchmark_history, BENCHMARKS, calc_cagr
 from core.settings import SETTINGS, save_user_settings
 
 from core.ui_components import page_header
+import core.ledger_ui as _lu
 page_header('Performance', 'How the portfolio has actually done')
 holdings = get_all_holdings()
 if holdings.empty:
@@ -126,9 +127,9 @@ try:
         if not portfolio_return.empty:
             fig.add_trace(go.Scatter(
                 x=portfolio_return.index, y=portfolio_return.values,
-                name="📈 Your Portfolio", line=dict(color="#2962FF", width=3),
+                name="📈 Your Portfolio", line=dict(color="#1E3A8A", width=3),
             ))
-        colors = ["#FF6D00", "#00C853", "#AA00FF", "#DD2C00", "#00BFA5", "#6200EA", "#FFD600", "#304FFE"]
+        colors = _lu.CHART_SEQUENCE  # one qualitative sequence, shared app-wide
         for i, (name, series) in enumerate(bench_histories.items()):
             norm = (series / series.iloc[0]) * 100
             fig.add_trace(go.Scatter(
@@ -224,7 +225,7 @@ try:
         nav_fig = go.Figure()
         nav_fig.add_trace(go.Scatter(
             x=nav_data["date"], y=nav_data["total_value"],
-            name="Portfolio Value", line=dict(color="#2962FF", width=2.5),
+            name="Portfolio Value", line=dict(color="#1E3A8A", width=2.5),
             fill="tozeroy", fillcolor="rgba(41, 98, 255, 0.1)",
         ))
 
@@ -232,7 +233,7 @@ try:
         if "total_cost" in nav_data.columns and nav_data["total_cost"].notna().any():
             nav_fig.add_trace(go.Scatter(
                 x=nav_data["date"], y=nav_data["total_cost"],
-                name="Cost Basis", line=dict(color="#FF6D00", width=2, dash="dash"),
+                name="Cost Basis", line=dict(color="#B45309", width=2, dash="dash"),
             ))
 
         nav_fig.update_layout(

@@ -415,9 +415,9 @@ def color_signed(val, sym=""):
     try:
         v = float(stripped)
         if v > 0:
-            return "color: #1a9e5c; font-weight: 600"
+            return "color: #047857; font-weight: 600"
         elif v < 0:
-            return "color: #d63031; font-weight: 600"
+            return "color: #b91c1c; font-weight: 600"
     except ValueError:
         pass
     return ""
@@ -434,11 +434,11 @@ def _rating_color_from_label(label):
     """Return CSS style for a consensus rating label."""
     l = str(label).strip().lower()
     if l in ("strong buy", "buy"):
-        return "color: #1a9e5c; font-weight: 600"
+        return "color: #047857; font-weight: 600"
     elif l in ("sell", "strong sell", "underperform"):
-        return "color: #d63031; font-weight: 600"
+        return "color: #b91c1c; font-weight: 600"
     elif l == "hold":
-        return "color: #f39c12; font-weight: 600"
+        return "color: #96590a; font-weight: 600"
     return ""
 
 def _is_fund(qt):
@@ -638,11 +638,11 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
             def _ai_rating_color(val):
                 v = str(val).strip().upper()
                 if v in ("STRONG BUY", "BUY"):
-                    return "color: #1a9e5c; font-weight: 600"
+                    return "color: #047857; font-weight: 600"
                 elif v in ("SELL", "STRONG SELL"):
-                    return "color: #d63031; font-weight: 600"
+                    return "color: #b91c1c; font-weight: 600"
                 elif v == "HOLD":
-                    return "color: #f39c12; font-weight: 600"
+                    return "color: #96590a; font-weight: 600"
                 return ""
             styled = styled.map(_ai_rating_color, subset=ai_rating_cols)
         if durability_cols:

@@ -28,6 +28,7 @@ from core.cio_engine import enrich_portfolio
 from core.data_engine import fmt_large
 from core.ui_components import fmt_age
 from core.ui_errors import safe_message
+import core.ledger_ui as _lu
 
 # ── Page Header ──────────────────────────────────────────────────────────────
 # Rendered after the data loads, so the date, the base currency and the
@@ -453,7 +454,7 @@ with col_hm:
                     path=path_cols,
                     values="market_value",
                     color="day_change_pct",
-                    color_continuous_scale=["#d32f2f", "#ff9800", "#424242", "#66bb6a", "#2e7d32"],
+                    color_continuous_scale=_ui.DIVERGING,
                     color_continuous_midpoint=0,
                 )
                 fig.update_layout(
@@ -462,12 +463,12 @@ with col_hm:
                     coloraxis_colorbar=dict(title="Day %", len=0.5),
                     paper_bgcolor="rgba(0,0,0,0)",
                 )
-                fig.update_traces(textfont=dict(size=13, color="white"), textposition="middle center")
+                fig.update_traces(textfont=dict(size=13), textposition="middle center")
                 show_chart(fig, key="cmd_heatmap")
             except Exception:
                 # Fallback: simple bar chart if treemap fails
                 hm_df = hm_df.sort_values("market_value", ascending=True).tail(15)
-                colors = ["#26a69a" if v >= 0 else "#ef5350" for v in hm_df["day_change_pct"]]
+                colors = ["#047857" if v >= 0 else "#b91c1c" for v in hm_df["day_change_pct"]]
                 fig = go.Figure(go.Bar(
                     x=hm_df["market_value"], y=hm_df["ticker"],
                     orientation="h", marker_color=colors,
@@ -745,7 +746,7 @@ if not nav_history.empty and len(nav_history) > 1:
         x=nav_history["date"],
         y=nav_history["total_value"],
         mode="lines",
-        line=dict(color="#1E88E5", width=2.5),
+        line=dict(color="#1E3A8A", width=2.5),
         fill="tozeroy",
         fillcolor="rgba(30,136,229,0.08)",
     ))

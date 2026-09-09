@@ -127,13 +127,13 @@ def _close_popup_html(result_json: str, delay_ms: int = 800, success: bool = Tru
     body{{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
     .fallback{{display:none;text-align:center;padding:1.5rem;}}
     .fallback button{{margin-top:1rem;padding:10px 20px;border-radius:8px;border:none;
-      background:#1E88E5;color:#fff;font-weight:600;font-size:0.95rem;cursor:pointer;}}
+      background:#1E3A8A;color:#fff;font-weight:600;font-size:0.95rem;cursor:pointer;}}
     </style></head>
     <body>
     <div class="fallback" id="fallback">
         <div style="font-size:2rem">{fallback_icon}</div>
         <h3 style="font-weight:500">{fallback_title}</h3>
-        <p style="color:#888">{fallback_body}</p>
+        <p style="color:#475569">{fallback_body}</p>
         <button onclick="window.close()">Close this window</button>
     </div>
     <script>
@@ -181,7 +181,7 @@ if error:
     <div style='text-align:center;padding:2rem'>
         <div style='font-size:2rem'>❌</div>
         <h3>Sign-in cancelled</h3>
-        <p style='color:#888'>Closing this window...</p>
+        <p style='color:#475569'>Closing this window...</p>
     </div>
     """, unsafe_allow_html=True)
     _components.html(
@@ -197,7 +197,7 @@ elif code and state:
         <div style='text-align:center;padding:2rem'>
             <div style='font-size:2rem'>🔒</div>
             <h3>Security check failed</h3>
-            <p style='color:#888'>The request could not be verified. Please try again.</p>
+            <p style='color:#475569'>The request could not be verified. Please try again.</p>
         </div>
         """, unsafe_allow_html=True)
         _components.html(
@@ -212,7 +212,7 @@ elif code and state:
     <div style='text-align:center;padding:3rem'>
         <div style='font-size:2rem'>⏳</div>
         <h3 style='font-weight:500'>Signing you in...</h3>
-        <p style='color:#888;font-size:0.9rem'>Please wait, do not close this window.</p>
+        <p style='color:#475569;font-size:0.9rem'>Please wait, do not close this window.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -262,7 +262,7 @@ elif code and state:
                         <div style='text-align:center;padding:3rem'>
                             <div style='font-size:2.5rem'>✅</div>
                             <h3 style='font-weight:500'>Signed in!</h3>
-                            <p style='color:#888'>Closing this window...</p>
+                            <p style='color:#475569'>Closing this window...</p>
                         </div>
                         """, unsafe_allow_html=True)
                         # v6.5 FIX: st.components.v1.html() — localStorage works here
@@ -291,7 +291,7 @@ elif code and state:
         <div style='text-align:center;padding:2rem'>
             <div style='font-size:2rem'>⚠️</div>
             <h3>Sign-in failed</h3>
-            <p style='color:#888'>Could not complete Google authentication.<br>
+            <p style='color:#475569'>Could not complete Google authentication.<br>
             <small>{err_detail}</small></p>
         </div>
         """, unsafe_allow_html=True)
@@ -315,7 +315,7 @@ else:
     st.markdown("""
     <div style='text-align:center;padding:3rem'>
         <h2>Prosper</h2>
-        <p style='color:#888'>This page handles Google sign-in callbacks.</p>
+        <p style='color:#475569'>This page handles Google sign-in callbacks.</p>
         <p><a href='/'>← Back to Prosper</a></p>
     </div>
     """, unsafe_allow_html=True)

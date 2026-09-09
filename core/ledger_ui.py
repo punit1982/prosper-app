@@ -434,6 +434,87 @@ CSS = f"""<style>
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# CHART COLOURS
+# ══════════════════════════════════════════════════════════════════════════
+# Plotly cannot read CSS custom properties — it needs literals baked into the
+# figure at render time. These expose the token values so charts and CSS stay
+# the same colours instead of drifting apart, which is how the app ended up
+# with 11 greens and 16 reds.
+#
+# ACTIVE_THEME is the single place the app's ground is declared. Flip it and
+# .streamlit/config.toml together; see design_shell().
+ACTIVE_THEME = "light"
+
+
+def c(name: str) -> str:
+    """One token value, as a literal, for a Plotly figure."""
+    return TOKENS[ACTIVE_THEME][name]
+
+
+# A qualitative sequence for categorical charts, ordered so adjacent entries
+# stay distinguishable. Semantic tokens deliberately excluded: green and red
+# mean gain and loss everywhere else in the app, and a category that happens
+# to land on one would read as a verdict.
+CHART_SEQUENCE = ["#1E7A66", "#5D6B80", "#96590A", "#2F6F8F", "#7A5C99",
+                  "#0F766E", "#8A6D3B", "#4B5563", "#1E3A8A", "#6B7280"]
+
+
+# A five-step semantic ramp for verdicts and actions — strong-positive through
+# strong-negative. Every step clears 4.5:1 on the light ground, which the old
+# material-palette values did not: #00C853 measured 1.9:1 and #4CAF50 2.7:1,
+# i.e. effectively invisible as text on white.
+VERDICT_RAMP = {
+    "strong_positive": "#065F46",
+    "positive":        "#047857",
+    "neutral":         "#475569",
+    "negative":        "#B45309",
+    "strong_negative": "#B91C1C",
+}
+
+# Diverging scale for heat maps and treemaps: loss through neutral to gain.
+# Ends are darker than the material originals so a tile label stays legible.
+DIVERGING = ["#B91C1C", "#D97706", "#94A3B8", "#059669", "#065F46"]
+
+
+def verdict(word: str) -> str:
+    """Colour for a rating, action or verdict word. One ramp, so BUY on the
+    Deep Dive and Add on the Risk page are the same green."""
+    w = (word or "").strip().upper()
+    if w in ("STRONG BUY", "STRONG_BUY", "ADD", "ACCUMULATE"):
+        return VERDICT_RAMP["strong_positive"]
+    if w in ("BUY", "HOLD+", "OVERWEIGHT"):
+        return VERDICT_RAMP["positive"]
+    if w in ("SELL", "TRIM", "REDUCE", "UNDERWEIGHT"):
+        return VERDICT_RAMP["negative"]
+    if w in ("STRONG SELL", "STRONG_SELL", "EXIT"):
+        return VERDICT_RAMP["strong_negative"]
+    return VERDICT_RAMP["neutral"]
+
+
+def chart_theme(fig, *, height: int | None = None, grid: bool = True):
+    """Apply the token palette to a Plotly figure, on either ground.
+
+    Replaces `template="plotly_dark"`, which hard-codes a dark background and
+    white tick labels and so renders unreadable the moment the app is light.
+    Backgrounds stay transparent so the figure sits on whatever surface the
+    page provides.
+    """
+    line = "rgba(128,128,128,0.28)"          # reads on either ground — §4 rule 2
+    fig.update_layout(
+        template="plotly_white" if ACTIVE_THEME == "light" else "plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=c("ink-2"), size=11),
+        legend=dict(font=dict(color=c("ink-2"), size=10)),
+        **({"height": height} if height else {}),
+    )
+    fig.update_xaxes(gridcolor=line, zerolinecolor=line, linecolor=line,
+                     showgrid=grid, tickfont=dict(color=c("ink-3")))
+    fig.update_yaxes(gridcolor=line, zerolinecolor=line, linecolor=line,
+                     showgrid=grid, tickfont=dict(color=c("ink-3")))
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════
 def _e(v) -> str:
@@ -790,15 +871,12 @@ def nav(active: str = "today") -> str:
 # ══════════════════════════════════════════════════════════════════════════
 # STREAMLIT WRAPPERS
 # ══════════════════════════════════════════════════════════════════════════
-# Streamlit's own theme is forced dark in .streamlit/config.toml
-# (backgroundColor #0E1117, textColor #FAFAFA), so prefers-color-scheme cannot
-# be trusted here: a phone set to light would resolve this sheet's light tokens
-# and paint them onto Streamlit's dark chrome. Until the token sweep replaces
-# the 47 hard-coded hexes in pages/ (many of which assume a dark ground —
-# rgba(255,255,255,0.03) fills, #FAFAFA text), the design system is pinned to
-# its dark variant to match. Going light-first is then two lines: flip
-# config.toml and drop this stamp.
-_THEME_PIN = '<style>:root{' + _vars("dark") + '}</style>'
+# Streamlit's own theme is declared in .streamlit/config.toml, which cannot
+# read prefers-color-scheme. So the app pins ONE ground and this sheet matches
+# it, rather than letting the OS pick a palette Streamlit's chrome will not
+# follow. ACTIVE_THEME, config.toml and this pin move together — changing one
+# alone leaves half the app painting on the wrong surface.
+_THEME_PIN = '<style>:root{' + _vars(ACTIVE_THEME) + '}</style>' 
 
 
 def design_shell() -> None:

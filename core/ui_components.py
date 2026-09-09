@@ -15,9 +15,9 @@ rather than a one-shot rewrite of every status indicator in the app.
 # from the app's own accent color (used for the floating chat button etc.);
 # semantic color is not the same thing as brand color.
 _CHIP_COLORS = {
-    "critical": ("#d63031", "#fbe4e3"),  # matches core/fortress.py REGIME_COLORS red
-    "warn":     ("#a6741a", "#f7eedb"),
-    "good":     ("#1a9e5c", "#e6f4ec"),  # matches core/fortress.py REGIME_COLORS green
+    "critical": ("#b91c1c", "#fbe4e3"),  # matches core/fortress.py REGIME_COLORS red
+    "warn":     ("#96590a", "#f7eedb"),
+    "good":     ("#047857", "#e6f4ec"),  # matches core/fortress.py REGIME_COLORS green
     "neutral":  ("#666666", "#ececec"),
 }
 
@@ -162,10 +162,10 @@ def status_chip(label: str, level: str = "neutral") -> str:
 # colors, one radius scale. Every value below is used somewhere in this file —
 # if a token stops being referenced, delete it rather than leaving it to rot.
 MOBILE_TOKENS = {
-    "up":        "#1a9e5c",
-    "down":      "#d63031",
-    "flat":      "#8a8f98",
-    "accent":    "#0984e3",
+    "up":        "#047857",
+    "down":      "#b91c1c",
+    "flat":      "#475569",
+    "accent":    "#1e3a8a",
     "radius":    "10px",
     "row_min_h": "44px",   # minimum tap target
 }
@@ -173,7 +173,7 @@ MOBILE_TOKENS = {
 _MOBILE_CSS = """
 <style>
 :root{
-  --p-up:#1a9e5c; --p-down:#d63031; --p-flat:#8a8f98; --p-accent:#0984e3;
+  --p-up:#047857; --p-down:#b91c1c; --p-flat:#475569; --p-accent:#1e3a8a;
   --p-line:rgba(128,128,128,0.22);
   --p-surface:rgba(128,128,128,0.06);
 }
@@ -793,7 +793,7 @@ _BOTTOM_NAV_CSS = """
     position:fixed;left:0;right:0;bottom:0;z-index:999;
     display:grid !important;grid-template-columns:repeat(5,1fr) !important;
     gap:0 !important;margin:0 !important;padding-bottom:env(safe-area-inset-bottom,0);
-    background:var(--background-color,#0e1117);
+    background:var(--p-sheet,#ffffff);
     border-top:1px solid rgba(128,128,128,0.28);
   }
   [data-testid="stElementContainer"]:has(.p-navmark) + [data-testid="stHorizontalBlock"]

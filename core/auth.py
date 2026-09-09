@@ -137,7 +137,7 @@ _HEADER_HTML = (
     "background:linear-gradient(135deg,#5aa9ff 0%,#3d7de0 50%,#2c6fd6 100%);"
     "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
     "background-clip:text'>Prosper</div>"
-    "<p style='color:#8a8f98;margin-top:6px;font-size:0.95rem;letter-spacing:0.3px'>"
+    "<p style='color:#475569;margin-top:6px;font-size:0.95rem;letter-spacing:0.3px'>"
     "AI-Native Investment Operating System</p>"
     "</div>"
 )
@@ -756,7 +756,7 @@ def _show_registration_form(is_first_user: bool = False) -> bool:
     label = "Create your Prosper account" if is_first_user else "Create Account"
     st.markdown(f"##### {label}")
     st.markdown(
-        "<p style='color:#888;font-size:0.85rem'>"
+        "<p style='color:#475569;font-size:0.85rem'>"
         "Password: min 8 chars, 1 uppercase, 1 number</p>",
         unsafe_allow_html=True,
     )
@@ -1015,7 +1015,7 @@ def run_auth() -> Dict[str, Any]:
                 st.rerun()
             st.markdown(
                 "<div style='text-align:center;margin:1rem 0'>"
-                "<span style='color:#aaa;font-size:0.9rem'>─── or ───</span></div>",
+                "<span style='color:#475569;font-size:0.9rem'>─── or ───</span></div>",
                 unsafe_allow_html=True,
             )
             _show_registration_form(is_first_user=True)
@@ -1120,7 +1120,7 @@ def run_auth() -> Dict[str, Any]:
 
         st.markdown(
             "<div style='text-align:center;margin:0.8rem 0'>"
-            "<span style='color:#aaa;font-size:0.9rem'>─── or sign in with email ───</span></div>",
+            "<span style='color:#475569;font-size:0.9rem'>─── or sign in with email ───</span></div>",
             unsafe_allow_html=True,
         )
 
