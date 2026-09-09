@@ -771,7 +771,7 @@ def segment(options: Sequence[str], active: str) -> str:
 NAV = (("today", "Today", "pages/00_Command_Center.py"),
        ("holdings", "Holdings", "pages/2_Portfolio_Dashboard.py"),
        ("ask", "Ask", "pages/24_AI_Chat.py"),
-       ("activity", "Activity", "pages/3_Portfolio_News.py"),
+       ("activity", "Activity", "pages/9_Activity.py"),
        ("more", "More", "pages/0_Settings.py"))
 
 

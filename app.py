@@ -273,7 +273,6 @@ pg = st.navigation({
         st.Page("pages/5_Performance.py", title="Performance", icon="📈"),
         st.Page("pages/18_Risk_Strategy.py", title="Risk & Strategy", icon="🏰"),
         st.Page("pages/22_Dividend_Dashboard.py", title="Dividends", icon="💰"),
-        st.Page("pages/20_Earnings_Calendar.py", title="Earnings Calendar", icon="📅"),
     ],
     # Split by what the page is FOR, not by what it is made of.
     #
@@ -312,10 +311,13 @@ pg = st.navigation({
         st.Page("pages/23_Peer_Comparison.py", title="Peer Comparison", icon="🔍"),
         st.Page("pages/21_Technical_Analysis.py", title="Technical Analysis", icon="📉"),
     ],
-    "News & Activity": [
-        st.Page("pages/3_Portfolio_News.py", title="Portfolio News", icon="📰"),
-        st.Page("pages/6_Market_News.py", title="Market News", icon="🌍"),
-        st.Page("pages/12_Transaction_Log.py", title="Transactions", icon="📝"),
+    # Portfolio News, Market News, Earnings and Transactions were four
+    # destinations answering one question — what happened, and does it touch
+    # me? They are one page now, sliced by a segmented control. Portfolio News
+    # used to carry a caption pointing at Market News for fund coverage, which
+    # was the product admitting the split was arbitrary.
+    "Activity": [
+        st.Page("pages/9_Activity.py", title="Activity", icon="📰"),
     ],
     "Settings": [
         st.Page("pages/0_Settings.py", title="Settings", icon="⚙️"),
