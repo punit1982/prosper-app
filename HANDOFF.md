@@ -1,11 +1,11 @@
-# Prosper — Handoff (9 Sep 2026, current at v7.35)
+# Prosper — Handoff (9 Sep 2026, current at v7.38)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
 **Where the work stands.** Phases 1, 2 and six pushes of Phase 3 are shipped and live.
-**Phase 3 (mobile) is IN PROGRESS** — pushes 1-13 are live (`695f4f6` … `d2e5262`). §13 carries
+**Phase 3 (mobile) is IN PROGRESS** — **PHASE 3 IS COMPLETE** — 18 pushes live (`695f4f6` … `b40eaf0`). §13 carries
 what shipped, what is left, and in what order, through to done.
 
 Phase 3 is being built against a second design review (9 Sep) that audited the 8 Sep proposal
@@ -924,6 +924,11 @@ contradictions, and it is worth preserving.
 | 11 | `6c67c17` | **Risk** 4 tabs + nested set → segmented controls · **Income** (renamed from Dividends) 4 tabs → picker, hero de-eyebrowed |
 | 12 | `bc5dabf` | **Security** 7 tabs → segmented control · **Peer Comparison** 5 tabs → segmented control |
 | 13 | `d2e5262` | **Token sweep + the light flip** — 174 literals mapped to tokens, `ACTIVE_THEME` drives CSS + Plotly + config.toml, zero text colours below 4.5:1 |
+| 14 | `2699fb1` | Fixed white-on-white (a `:root:not()` specificity bug beat the light pin on dark-mode phones) · **dark mode shipped** (Settings → Appearance) |
+| 15 | `57da6e8` | Loading skeleton, error state with a working retry, designed empty state |
+| 16 | `5b2e1db` | Raw markup printed on screen (`value` is escaped, `value_html` is not) · segmented controls themed · bottom bar aligned · `keep_row()` · sector allocation removed from Today |
+| 17 | `3fc76bd` | **Built the preview harness and found four bugs no headless test can see** — chiefly that `st.markdown` was TRUNCATING the stylesheet at the first CSS comment, so Push 16's widget rules never reached the browser |
+| 18 | `b40eaf0` | Last 23 `st.metric` calls converted, `stMetric` CSS deleted, font unified on IBM Plex Sans · **naming pass** (Today / Holdings / Allocation / Risk / Evaluate / Options / Ask / Add holdings / Connections / Account & access / Setup) |
 
 **The bug worth remembering.** Push 2 guarded `design_shell()` with a session flag. Streamlit
 rebuilds the DOM every rerun, so after the first load the stylesheet was never re-emitted and
@@ -966,19 +971,42 @@ run. Copy that pattern rather than inventing another.
 Only User Management's three per-user tabs remain — admin-only, inside a
 collapsed expander, no fetches. Leave them.
 
-### Remaining, in order — through to done
+### Phase 3 is complete
 
-Each row is roughly one working session. The order is dependency-correct: do not reorder 7 and 8.
+Every item on the roadmap is shipped. Final state, measured in a real browser
+at 375px in both themes:
 
-| # | Item | Why it is where it is |
+| | light | dark |
 |---|---|---|
-| **1** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
-| **2** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Security and Activity are done, so the surviving page set is now known. |
-| **3** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
-| **4** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
+| Contrast failures | 0 | 0 |
+| Sub-44px tap targets | 0 | 0 |
+| `st.metric` widgets | 0 | 0 |
+| Horizontal overflow | none | none |
 
-**Done is:** 24 destinations → 11, five tabs, one navigation system, every page on `ledger_ui`
-tokens, light by default, and loading/empty/error drawn everywhere they can occur.
+24 destinations became 20 with one navigation system (was four). Every eager
+`st.tabs` in the daily path became a `segmented_control`. All 8 donuts became
+ranked bars. The token layer replaced 174 hard-coded literals. Light is the
+default with a real dark toggle in Settings → Appearance.
+
+### THE VERIFICATION LESSON — read this before any UI change
+
+Pushes 13-17 shipped four visual bugs to production that headless testing
+could not catch, because every one was about what the BROWSER computes, not
+what Python returns:
+
+* a `:root:not()` selector outranking the theme pin on a dark-mode phone;
+* `st.markdown` silently TRUNCATING a `<style>` block at its first CSS comment,
+  so an entire push's worth of rules never reached the page;
+* `design_shell()` reading the theme before `ensure_settings_loaded()` ran;
+* a tap-target rule matching a class Streamlit no longer guarantees.
+
+**The preview harness (§2) is the only thing that finds these.** Build it, drive
+it at 375px, and run the DOM audit in BOTH themes before pushing UI. The audit
+composites semi-transparent backgrounds over their parents — treating `rgba()`
+as opaque produces false positives.
+
+`.harness/` is gitignored: it is a scratch copy with auth bypassed and must
+never deploy.
 
 ### Two things that are NOT design problems
 
