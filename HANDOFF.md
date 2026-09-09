@@ -1,12 +1,12 @@
-# Prosper — Handoff (9 Sep 2026, current at v7.25)
+# Prosper — Handoff (9 Sep 2026, current at v7.29)
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
 need to know *why* something looks the way it does.
 
-**Where the work stands.** Phases 1, 2 and the first two pushes of Phase 3 are shipped and live.
-**Phase 3 (mobile) is now IN PROGRESS, not waiting** — two pushes are live (v7.24 `695f4f6`,
-v7.25 `6a7da75`); the remainder is §13.
+**Where the work stands.** Phases 1, 2 and six pushes of Phase 3 are shipped and live.
+**Phase 3 (mobile) is IN PROGRESS** — pushes 1-6 are live (`695f4f6` … `d2cedae`). §13 carries
+what shipped, what is left, and in what order, through to done.
 
 Phase 3 is being built against a second design review (9 Sep) that audited the 8 Sep proposal
 itself and scored it 9/20 technical, 23/40 Nielsen. That review, the token system and eight
@@ -903,29 +903,43 @@ Every screen calls the real components and reads one shared `BOOK` dict, so the 
 drift from the code and two screens cannot disagree. That constraint is the fix for the v1
 contradictions, and it is worth preserving.
 
-### Remaining, in order
+### Shipped in Phase 3 so far
 
-1. **Token sweep.** Replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the
-   tokens. Mechanical and greppable. **This is the prerequisite for everything below.**
-2. **Flip to light.** `.streamlit/config.toml` → light, delete `_THEME_PIN`. Only after (1).
-   The whole reason for light-first is the use scene: this is read outdoors in Gulf daylight,
-   where a dark ground stops emitting and the dimmest token disappears first.
-3. **Convert Command Center fully** — hero, provenance strip, movers with money as well as
-   percent. The alert queue is already done.
-4. **The three missing states** — loading (on a spun-down free tier this is genuinely the
-   most-seen screen in the product), empty/healthy Today (true ~340 days a year), and error.
-   `skeleton()` and `empty()` exist and are unused.
-5. **Merge the five research pages into Security** (D8) — Deep Dive already has the tabs. This
-   removes the most code of anything remaining.
-6. **Merge the news and event pages into Activity** (D9).
-7. **`ranked_bars()` for the 8 donuts** — five on Summary, one each on Risk, Deep Dive, Dividends.
-8. **Holdings rows carry quantity and average cost** (P3-6b) — `ledger_row()` takes them already.
-9. **`st.metric` → `stat_grid`** (P3-11, 23 calls), then the `[data-testid="stMetric*"]` block in
-   `app.py` can finally go.
-10. **Naming** — Today / Holdings / Ask / Activity / More, Security, Evaluate, Risk, Income,
-    Options, Add holdings, Connections. Confirmed by the owner on 9 Sep with no changes.
-11. **`history_cache`** (P3-10) — still needed by Summary's risk section, Technical, Deep Dive and
-    `portfolio_optimizer`.
+| Push | Commit | What landed |
+|---|---|---|
+| 1 | `695f4f6` | FAB deleted · Quick Navigation deleted · Summary's 1,638-call returns block deleted · `stat_grid` drops empty cells · Deep Dive defaults to the largest holding · `fmt_compact` sub-1000 rounding fixed |
+| 2 | `6a7da75` | `core/ledger_ui.py` shipped · `design_shell()` wired · Command Center alert queue → ruled rows, severity-sorted · `render_ledger_proof.py` |
+| 3 | `347d3da` | **Fixed the CSS-never-reinjected bug** (see below) · hero eyebrow deleted · stat grids → one ruled block · Top Movers → ledger rows with money at full weight · header band reclaimed |
+| 4 | `12eedb6` | Holdings rows carry **position, average cost, day in money + %, unrealised in money + %, dividend yield, ex-date** — four markdown lines inside one tappable button · `ex_dividend_date` mapped · `stat_row` orphan-cell fix |
+| 5 | `4c98e0b` | Holdings **Find + Sort** (Value / Today % / Today worst / Unrealized % / Name) · Dashboard hero de-duped (P3-3) · `holdings_rows(presorted=)` |
+| 6 | `d2cedae` | P&L attribution chart → ranked rows (**fixes the label clipping**) · Allocation by Sector → `ranked_bars` |
+
+**The bug worth remembering.** Push 2 guarded `design_shell()` with a session flag. Streamlit
+rebuilds the DOM every rerun, so after the first load the stylesheet was never re-emitted and
+every component rendered as unstyled divs. `mobile_shell()`'s own docstring warns about exactly
+this. **Never guard a CSS injection by session state.**
+
+### Remaining, in order — through to done
+
+Each row is roughly one working session. The order is dependency-correct: do not reorder 7 and 8.
+
+| # | Item | Why it is where it is |
+|---|---|---|
+| **1** | **Security page** — merge Equity Deep Dive + Analyst Consensus + Sentiment + Peer Comparison + Technical Analysis into one page with 5 tabs | Biggest single code removal in the plan. Deep Dive already has the tabs; the four standalone pages restate them. Retires D8 and P3-8 together. |
+| **2** | **Activity page** — merge Portfolio News + Market News + Earnings Calendar + Transactions, ranked by exposure | Retires D9. Portfolio News currently tells the user to go to Market News for funds, which is the product admitting the split is arbitrary. |
+| **3** | **CIO briefing** — structured "What changed / Why it matters / What to do", three lines by default, expandable | Last big block on Command Center. Content is good; the packaging is a wall of editorial on a phone. |
+| **4** | **Remaining donuts → `ranked_bars`** — 5 on Portfolio Summary, 1 each on Risk, Deep Dive, Dividends | Mechanical once the Security merge settles which pages survive. |
+| **5** | **Risk** — flatten 4 eager tabs + 1 nested tab set into one scroll of pass/fail guardrails | Streamlit tabs are eager: every hidden tab is built and shipped on every render. |
+| **6** | **Income** (rename from Dividends) — widen to coupons and option premium, monthly shape strip | The owner's tax position makes the *mix* the interesting number, not the total. |
+| **7** | **Token sweep** — replace the 47 hard-coded hexes and 41 font sizes in `pages/*.py` with the `ledger_ui` tokens | **Prerequisite for 8.** Mechanical and greppable. |
+| **8** | **Flip to light** — `.streamlit/config.toml` → light, delete `_THEME_PIN` | Only after 7. The whole point of light-first is the use scene: read outdoors in Gulf daylight, where a dark ground stops emitting and the dimmest token disappears first. **Flipping without 7 paints half the app light-on-light.** |
+| **9** | **The three missing states** — loading (on a spun-down free tier this is the most-seen screen in the product), empty/healthy Today (~340 days a year), error | `skeleton()` and `empty()` exist in `ledger_ui` and are still unused. |
+| **10** | **`st.metric` → `stat_grid`** (23 calls in Sentiment, Analyst, Performance, `grow_render`), then delete the `[data-testid="stMetric*"]` block in `app.py` | P3-11, then P2-9 properly. Blocked until 1 settles which pages survive. |
+| **11** | **Naming** — Today / Holdings / Ask / Activity / More; Security, Evaluate, Risk, Income, Options, Add holdings, Connections | Confirmed by the owner 9 Sep with no changes. Do it last: it touches every nav label and page title, so it is cheapest once the page set is final. |
+| **12** | **`history_cache`** (P3-10) | Still needed by Summary's risk section, Technical, Deep Dive and `portfolio_optimizer`. Untestable without Turso creds — ship it with the user watching. |
+
+**Done is:** 24 destinations → 11, five tabs, one navigation system, every page on `ledger_ui`
+tokens, light by default, and loading/empty/error drawn everywhere they can occur.
 
 ### Two things that are NOT design problems
 
