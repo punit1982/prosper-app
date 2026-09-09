@@ -182,6 +182,19 @@ CSS = f"""<style>
    carry their own ground; the sweep flips the app's later. */
 .p-scope{{color:var(--p-ink);}}
 
+/* Reclaim the empty band above the page title. Streamlit's header reserves
+   ~3.75rem for a toolbar whose only occupant here is the sidebar toggle and
+   the overflow menu, and the app view adds its own top padding underneath it.
+   Measured on a 393pt phone: ~130pt from the top of the webview to the first
+   character of the page title, of which about half is nothing. The toggle and
+   menu stay tappable — the band just stops reserving space it does not use. */
+@media (max-width:767px){{
+  [data-testid="stHeader"]{{height:2.6rem!important;min-height:2.6rem!important;
+    background:transparent!important;}}
+  [data-testid="stMain"] .block-container{{padding-top:0!important;}}
+  [data-testid="stAppViewBlockContainer"]{{padding-top:0!important;}}
+}}
+
 /* Browser surfaces. These ship with defaults belonging to no design system,
    and theming them is the cheapest signal a page was built, not assembled. */
 ::selection{{background:var(--p-focus);color:#fff;}}
@@ -750,13 +763,18 @@ _THEME_PIN = '<style>:root{' + _vars("dark") + '}</style>'
 
 
 def design_shell() -> None:
-    """Inject the token + component sheet once, globally, from app.py —
-    BEFORE pg.run(), because 21 of the 24 pages call st.stop() and anything
-    after pg.run() never renders on exactly those pages."""
+    """Inject the token + component sheet, globally, from app.py — BEFORE
+    pg.run(), because 21 of the 24 pages call st.stop() and anything after
+    pg.run() never renders on exactly those pages.
+
+    Injected UNCONDITIONALLY. Streamlit rebuilds the DOM from scratch on every
+    rerun, so there is no previous run to "already have" the stylesheet from;
+    a session-scoped guard skips the injection on every rerun after the first
+    and leaves the components rendering as unstyled divs. This function had
+    exactly that bug in v7.25 — mobile_shell's own docstring warns about it,
+    and it shipped anyway. Do not add a guard here.
+    """
     import streamlit as st
-    if st.session_state.get("_p_shell"):
-        return
-    st.session_state["_p_shell"] = True
     st.markdown(CSS + _THEME_PIN, unsafe_allow_html=True)
 
 

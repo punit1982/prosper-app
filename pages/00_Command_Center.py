@@ -173,31 +173,34 @@ _regime_action = _rd.get("action", "")
 # context second, and the KPI rows use ui_components.stat_grid rather than
 # st.columns(), which stacks below ~640px with no opt-out and turned each
 # three-KPI row into three separate ~70px rows.
-from core.ui_components import mobile_shell, hero_metric, stat_grid, fmt_compact
+from core.ui_components import mobile_shell, fmt_compact
+import core.ledger_ui as _ui
 mobile_shell()
 
-hero_metric(
-    "Net Portfolio Value",
+# Phase 3: the label moves BELOW the figure. A kicker above a heading is the
+# single most recognisable generated-UI tell, and here it also pushed the one
+# number the page exists for further down the opening screen.
+_ui.write(_ui.hero(
     fmt_compact(net_portfolio, base_currency),
     delta=f"{day_gain:+,.0f} ({day_pct:+.2f}%) today",
     delta_value=day_gain,
-    sub=f"{holdings_count} holdings · {base_currency}",
+    sub=f"Net portfolio value · {holdings_count} holdings · {base_currency}",
     title=f"{base_currency} {net_portfolio:,.2f}",
-)
+))
 
-stat_grid([
-    ("Today", fmt_compact(day_gain, base_currency), f"{day_pct:+.2f}%", day_gain),
-    ("Unrealized", fmt_compact(unrealized_pnl, base_currency), f"{unrealized_pct:+.1f}%", unrealized_pnl),
-    ("Realized", fmt_compact(realized_pnl, base_currency) if realized_pnl else "—", "", realized_pnl),
-], columns=3)
-
+# Two 3-cell carded grids become one ruled block. stat_row drops cells with no
+# value before laying out, so "Realized —" and "Div / yr —" stop occupying a
+# slot each instead of rendering as holes.
 _div_cache_key = f"cmd_div_income_{base_currency}"
 div_income_est = st.session_state.get(_div_cache_key, 0)
-stat_grid([
-    ("Cash", fmt_compact(total_cash, base_currency)),
+_ui.write(_ui.stat_row([
+    ("Today", fmt_compact(day_gain, base_currency), f"{day_pct:+.2f}%", day_gain),
+    ("Unrealized", fmt_compact(unrealized_pnl, base_currency), f"{unrealized_pct:+.1f}%", unrealized_pnl),
+    ("Realized", fmt_compact(realized_pnl, base_currency) if realized_pnl else "", "", realized_pnl),
+    ("Cash", fmt_compact(total_cash, base_currency) if total_cash else ""),
     ("Currencies", str(len(enriched["currency"].unique()) if "currency" in enriched.columns else 1)),
-    ("Div / yr", fmt_compact(div_income_est, base_currency) if div_income_est > 0 else "—"),
-], columns=3)
+    ("Div / yr", fmt_compact(div_income_est, base_currency) if div_income_est > 0 else ""),
+], columns=3))
 
 # Market regime — one line, with the guidance behind a tap rather than a
 # permanently-open 173px block of chips. The regime still reads at a glance;
@@ -243,28 +246,28 @@ with col_movers:
             gainers = movers_df.nlargest(3, "day_change_pct")
             losers = movers_df.nsmallest(3, "day_change_pct")
 
-            for _, row in gainers.iterrows():
-                pct = row["day_change_pct"]
-                gain = row.get("day_gain", 0)
-                gain_str = f" (+{gain:,.0f})" if pd.notna(gain) and gain > 0 else ""
-                st.markdown(
-                    f"<div style='padding:5px 10px;margin:3px 0;border-radius:6px;"
-                    f"background:rgba(0,200,83,0.08);border-left:3px solid #00c853'>"
-                    f"<b>{row['ticker']}</b> <span style='color:#00c853'>{pct:+.1f}%</span>"
-                    f"<span style='color:#666;font-size:0.85em'>{gain_str}</span></div>",
-                    unsafe_allow_html=True,
-                )
-            for _, row in losers.iterrows():
-                pct = row["day_change_pct"]
-                loss = row.get("day_gain", 0)
-                loss_str = f" ({loss:,.0f})" if pd.notna(loss) and loss < 0 else ""
-                st.markdown(
-                    f"<div style='padding:5px 10px;margin:3px 0;border-radius:6px;"
-                    f"background:rgba(255,23,68,0.08);border-left:3px solid #ff1744'>"
-                    f"<b>{row['ticker']}</b> <span style='color:#ff1744'>{pct:+.1f}%</span>"
-                    f"<span style='color:#666;font-size:0.85em'>{loss_str}</span></div>",
-                    unsafe_allow_html=True,
-                )
+            # Phase 3: tinted cards with a 3px coloured border-left become
+            # ruled rows. Two substantive changes, not just styling:
+            #   * the MONEY is now the same size and weight as the percent,
+            #     right-aligned with it. It was 0.85em in #666 — about 2.8:1
+            #     on this ground, which is below the AA floor and is why it
+            #     read as faint grey noise beside the number that matters.
+            #   * the position's market value leads the row, so a +11% on a
+            #     small line no longer looks like a +11% on a large one.
+            _rows = []
+            for _, row in pd.concat([gainers, losers]).iterrows():
+                pct = float(row["day_change_pct"])
+                amt = row.get("day_gain")
+                amt = float(amt) if pd.notna(amt) else None
+                _rows.append(_ui.ledger_row(
+                    str(row["ticker"]),
+                    str(row.get("name") or "")[:38],
+                    fmt_compact(row.get("market_value"), base_currency),
+                    change=_ui.money(amt, pct, base_currency) if amt is not None
+                           else f'<span class="{"up" if pct > 0 else "down"}">{pct:+.1f}%</span>',
+                    change_value=amt if amt is not None else pct,
+                ))
+            st.markdown("".join(_rows), unsafe_allow_html=True)
         else:
             st.caption("No price data available yet.")
     else:
