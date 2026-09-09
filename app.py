@@ -45,6 +45,14 @@ st.session_state.pop("_google_auth_rendered_this_rerun", None)
 from core.ui_components import mobile_shell as _mobile_shell
 _mobile_shell()
 
+# Phase 3 design system (core/ledger_ui.py): tokens + ruled components. Injected
+# here, beside mobile_shell and before pg.run(), for the same reason — 21 of the
+# 24 pages call st.stop(), so anything after pg.run() never renders on exactly
+# those pages. It adds tokens and component classes only; it does not repaint
+# Streamlit's chrome, so unconverted pages are untouched.
+from core.ledger_ui import design_shell as _design_shell
+_design_shell()
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');

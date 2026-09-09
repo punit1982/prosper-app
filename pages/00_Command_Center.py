@@ -383,22 +383,35 @@ with col_alerts:
         pass
 
     if alerts:
+        # Phase 3: the same alerts, rendered as ruled rows instead of eight
+        # tinted pills of one visual class. Severity now reads from a dot and
+        # the row's own words; the emoji, the status chip and the
+        # rgba(255,255,255,0.03) fill (which only works on a dark ground) are
+        # gone. Alert text and ordering are unchanged.
+        #
+        # Sorted so critical outranks warn outranks neutral — previously the
+        # first eight in generation order won, which is concentration-then-
+        # drops-then-earnings, not severity.
         import re as _re
-        from core.ui_components import status_chip
-        for level, icon, text in alerts[:8]:
-            chip = status_chip(level.upper(), level)
-            # Alert text is authored with Markdown emphasis ("**ADBE** down 6.7%"),
-            # but it is injected into a raw HTML row — Streamlit does not run the
-            # Markdown parser inside unsafe_allow_html output, so the asterisks
-            # rendered literally on screen. Convert the one construct used here.
-            safe = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-            st.markdown(
-                f"<div style='display:flex;align-items:center;gap:8px;"
-                f"padding:4px 8px;margin:2px 0;border-radius:6px;"
-                f"background:rgba(255,255,255,0.03);font-size:0.9rem'>"
-                f"<span>{icon}</span>{chip}<span>{safe}</span></div>",
-                unsafe_allow_html=True,
-            )
+        from core.ledger_ui import attention as _attention
+
+        _rank = {"critical": 0, "warn": 1, "neutral": 2}
+        _lvl = {"critical": "critical", "warn": "warn", "neutral": "info"}
+        _ordered = sorted(alerts, key=lambda a: _rank.get(a[0], 3))
+
+        _items = []
+        for level, _icon, text in _ordered:
+            # Alert text is authored with Markdown emphasis ("**ADBE** down
+            # 6.7%") and goes into raw HTML, where Streamlit does not run the
+            # Markdown parser. attention() escapes its inputs, so strip the
+            # emphasis markers rather than converting them to tags.
+            _items.append({
+                "level": _lvl.get(level, "info"),
+                "title": _re.sub(r"\*\*(.+?)\*\*", r"\1", text),
+                "why": "",
+                "source": "",
+            })
+        st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
     else:
         st.success("No alerts — portfolio looks healthy")
 
