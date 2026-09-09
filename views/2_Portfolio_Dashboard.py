@@ -650,7 +650,9 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
             styled = styled.map(lambda v: f"color: {_dcol(v)}; font-weight: 600" if str(v).strip() else "", subset=durability_cols)
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
-        st.caption(f"**{label}**")
+        # No caption here: position_rows prints the same count as its group
+        # header one line below, with the "top 25 by value" qualifier the
+        # caption lacked. Measured on the live app: 22px of exact duplication.
         # Phones get tappable IBKR-style rows; desktop keeps the full sortable
         # table. Tapping a row opens Equity Deep Dive on that holding.
         from core.ui_components import (position_rows, holdings_rows,
@@ -683,7 +685,7 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
         fund_styled = (fund_display.style.map(lambda v: color_signed(v, sym), subset=fund_signed)
                        if fund_signed else fund_display.style)
 
-        st.caption(f"**📊 Funds & ETFs — {len(funds_df)}**")
+        # Same duplication as the stocks block above — position_rows carries it.
         from core.ui_components import (position_rows, holdings_rows,
                                         open_deep_dive, mobile_only_start,
                                         mobile_only_end)
@@ -861,6 +863,8 @@ def portfolio_section():
     # 193 positions behind a "show all" checkbox is a list you scroll, not one
     # you use. Search answers "where is X", sort answers "what moved" and
     # "what is losing" — the two questions a positions list exists for.
+    # Side by side on a phone, not stacked: two 44px controls in one 44px row.
+    _ui.keep_row()
     _fc1, _fc2 = st.columns([3, 2])
     with _fc1:
         _q = st.text_input("Find", key="dash_find", placeholder="Ticker or name",

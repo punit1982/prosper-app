@@ -30,6 +30,7 @@ def portfolio_news() -> None:
     from core.settings import SETTINGS, save_user_settings, enriched_cache_key
 
     from core.ui_components import page_header
+    import core.ledger_ui as _ui
     holdings = get_all_holdings()
     if holdings.empty:
         st.info("Add holdings via **Add holdings** to see related news.")
@@ -122,7 +123,14 @@ def portfolio_news() -> None:
         st.divider()
 
         # ── News feed ──────────────────────────────────────────────────────────
-        for i, item in enumerate(news_items):
+        # Capped. Measured on the live app, this page was 10.13 phone screens —
+        # more than twice the next longest — because it rendered every headline
+        # it had, and each one costs a title, a caption, a link button and a
+        # summary button. Ten is a session's worth; the rest is one tap away.
+        _NEWS_PAGE = 10
+        _show_all_news = st.session_state.get("act_news_all", False)
+        _visible = news_items if _show_all_news else news_items[:_NEWS_PAGE]
+        for i, item in enumerate(_visible):
             title     = item.get("title", "Untitled")
             publisher = item.get("publisher", "Unknown")
             link      = item.get("link", "")
@@ -130,13 +138,17 @@ def portfolio_news() -> None:
             ts        = item.get("providerPublishTime", 0)
             date_str  = datetime.fromtimestamp(ts).strftime("%b %d, %Y · %I:%M %p") if ts else "—"
 
+            # Without keep_row the Read button drops to a full-width row of its
+            # own under every headline — 44px x every article on the page.
+            _ui.keep_row()
             col1, col2 = st.columns([5, 1])
             with col1:
                 st.markdown(f"**{title}**")
                 st.caption(f"🏷️ {ticker} · {publisher} · {date_str}")
             with col2:
                 if link:
-                    st.link_button("Read →", link, use_container_width=True)
+                    st.link_button("↗", link, use_container_width=True,
+                                   help="Open the article")
 
             summary_key = f"news_summary_{i}"
 
@@ -154,6 +166,9 @@ def portfolio_news() -> None:
                     st.info(f"🤖 **AI Summary:** {st.session_state[summary_key]}")
 
             st.divider()
+
+        if len(news_items) > len(_visible):
+            st.checkbox(f"Show all {len(news_items)} articles", key="act_news_all")
 
     # ── Load remaining tickers on demand ────────────────────────────────────────
     if rest_tickers:

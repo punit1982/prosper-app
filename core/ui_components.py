@@ -238,6 +238,23 @@ _MOBILE_CSS = """
   .stMain a[data-testid="stPageLink-NavLink"]{
     display:flex;align-items:center;
   }
+  /* A segmented control wraps its options onto as many rows as it needs. With
+     16 countries in the book that is a 140px filter standing between the page
+     header and the first holding — 0.8 of a screen of chrome before a single
+     position appears. One row that scrolls sideways, with the same edge fade
+     the tab strips use to say there is more. */
+  /* The flex row is the DIV inside stButtonGroup, not the testid element
+     itself — that one is display:block, so flex-wrap on it does nothing. */
+  .stMain [data-testid="stButtonGroup"] > div{
+    flex-wrap:nowrap !important;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+    mask-image:linear-gradient(to right,#000 92%,transparent 100%);
+  }
+  .stMain [data-testid="stButtonGroup"] > div::-webkit-scrollbar{display:none;}
+  .stMain [data-testid="stButtonGroup"] > div > *{flex:0 0 auto;}
+
   /* Tab strips scroll sideways with no sign that more exist — fade the edge. */
   .stMain [data-baseweb="tab-list"]{
     -webkit-overflow-scrolling:touch;

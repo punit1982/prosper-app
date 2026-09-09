@@ -99,14 +99,41 @@ h1, h2, h3, h4, h5, h6 {
 # is visible immediately rather than after a blank loading screen.
 from core.auth import run_auth as _run_auth
 
+# Every page file except the two the pre-auth navigation names explicitly.
+# Used only to keep a deep link's URL alive across the sign-in round trip.
+_ALL_VIEWS = (
+    "0_Settings.py", "1_Upload_Portal.py", "2_Portfolio_Dashboard.py",
+    "4_Portfolio_Summary.py", "5_Performance.py", "7_Analyst_Consensus.py",
+    "8_Sentiment.py", "9_Activity.py", "15_GROW_Analysis.py",
+    "17_User_Management.py", "18_Equity_Deep_Dive.py", "18_Risk_Strategy.py",
+    "19_Options_Desk.py", "21_Technical_Analysis.py", "22_Dividend_Dashboard.py",
+    "23_Peer_Comparison.py", "24_AI_Chat.py", "25_IBKR_Sync.py",
+    "26_Onboarding.py",
+)
+
 _is_authed = st.session_state.get("authentication_status") is True
 
 if not _is_authed:
     # v7.0.3 FIX: the Google popup lands on /OAuth_Callback, which was never registered
     # with st.navigation → "Page not found" and the sign-in could never complete.
+    #
+    # EVERY page is registered here, not just the Command Center.
+    #
+    # st.navigation rewrites the address bar to the default page whenever the
+    # requested url_path is not in the list it was given. The session cookie is
+    # only restored *below*, inside _run_auth(), so the first run of any request
+    # takes this branch — which meant a bookmark to /Portfolio_Dashboard was
+    # rewritten to "/" before the cookie ever proved the reader was signed in,
+    # and the rerun then landed on Today. Measured on the live app: every deep
+    # link, warm or cold, arrived at Today.
+    #
+    # Listing the pages costs nothing (none of them RUN here — only the OAuth
+    # callback does, and only when it is the one asked for), and the URL then
+    # survives the sign-in round trip.
     _oauth_page = st.Page("views/99_OAuth_Callback.py", title="Signing in…", url_path="OAuth_Callback")
     pg = st.navigation(
-        [st.Page("views/00_Command_Center.py", default=True), _oauth_page],
+        [st.Page("views/00_Command_Center.py", default=True), _oauth_page]
+        + [st.Page(f"views/{_f}") for _f in _ALL_VIEWS],
         position="hidden",
     )
     if getattr(pg, "url_path", "") == "OAuth_Callback":
