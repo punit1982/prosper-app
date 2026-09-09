@@ -48,10 +48,29 @@ cache_key = enriched_cache_key(base_currency)
 if cache_key in st.session_state and st.session_state[cache_key] is not None and not st.session_state[cache_key].empty:
     enriched = st.session_state[cache_key]
 else:
-    with st.spinner("Loading portfolio data..."):
-        enriched = enrich_portfolio(holdings, base_currency)
-        st.session_state[cache_key] = enriched
-        st.session_state.setdefault("last_refresh_time", time.time())
+    # A skeleton shaped like the page, not a spinner. On the free tier this
+    # instance spins down when idle, so a cold visit waits 30-60s before any
+    # pixel of data — which makes this genuinely the most-seen screen in the
+    # product. Saying what is happening and roughly how long beats a spinner
+    # that could mean anything, and matching the row geometry stops the page
+    # jumping when the data lands.
+    import core.ledger_ui as _boot
+    _boot.write(_boot.CSS)
+    _ph = st.empty()
+    with _ph.container():
+        _boot.write(
+            '<div class="p-hero"><div class="p-sk" style="width:52%;height:34px"></div>'
+            '<div class="p-sk" style="width:36%;height:14px;margin-top:10px"></div></div>',
+            '<div class="p-prov"><span>Pricing '
+            f'{len(holdings)} holdings across every market. First load after an '
+            'idle period also has to wake the server — up to a minute.</span></div>',
+            _boot.section("Today's moves"),
+            _boot.skeleton(4),
+        )
+    enriched = enrich_portfolio(holdings, base_currency)
+    st.session_state[cache_key] = enriched
+    st.session_state.setdefault("last_refresh_time", time.time())
+    _ph.empty()
 
 # Data-freshness caption — this view reuses whatever was last fetched (here or
 # on Portfolio Dashboard) rather than re-fetching, so make that explicit
@@ -70,7 +89,23 @@ _page_header(
 )
 
 if enriched.empty:
-    st.warning("Could not load portfolio data. Try visiting the Portfolio Dashboard first.")
+    # An error state names what went wrong and what to do, and offers the
+    # action rather than describing it.
+    _ui.write(_ui.empty(
+        "No prices came back",
+        f"You hold {len(holdings)} positions, but the price layer returned "
+        "nothing for any of them. That is usually a provider being briefly "
+        "unreachable rather than anything wrong with your holdings — the "
+        "figures return on the next refresh.",
+    ))
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        if st.button("Try again", type="primary", use_container_width=True):
+            st.session_state.pop(cache_key, None)
+            st.rerun()
+    with _c2:
+        st.page_link("pages/0_Settings.py", label="Check data sources", icon="📡",
+                     use_container_width=True)
     st.stop()
 
 # ── Normalize column names ────────────────────────────────────────────────
@@ -419,7 +454,15 @@ with col_alerts:
             })
         st.markdown(_attention(_items, limit=4), unsafe_allow_html=True)
     else:
-        st.success("No alerts — portfolio looks healthy")
+        # The healthy state, designed. This is the modal condition — most days
+        # nothing has breached anything — so it should read as a finished
+        # answer, not as an absence of content.
+        st.markdown(_ui.empty(
+            "Nothing needs you today",
+            "No holding is outside its concentration limit, no position moved "
+            "more than 3%, and the market cycle has not changed. The next thing "
+            "that could need attention is an earnings date.",
+        ), unsafe_allow_html=True)
 
 st.divider()
 
