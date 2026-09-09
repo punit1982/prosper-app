@@ -551,7 +551,8 @@ def responsive_holdings(rows, *, group: str = "", limit: int = 25) -> int:
     return hidden
 
 
-def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
+def holdings_rows(sub_df, symbol: str, *, name_col: str = "name",
+                  presorted: bool = False):
     """Turn an enriched holdings slice into row data, biggest position first.
 
     Carries what a decision needs, on the phone, without opening anything:
@@ -565,7 +566,9 @@ def holdings_rows(sub_df, symbol: str, *, name_col: str = "name"):
     import pandas as pd
     # Biggest positions first — a phone shows a couple of dozen rows before the
     # user gives up scrolling, so they should be the ones that move the total.
-    if "market_value" in sub_df.columns:
+    # `presorted` hands that decision to the caller, so a Sort control on the
+    # page is not silently overridden here.
+    if not presorted and "market_value" in sub_df.columns:
         sub_df = sub_df.assign(
             _mv=pd.to_numeric(sub_df["market_value"], errors="coerce")
         ).sort_values("_mv", ascending=False, na_position="last")

@@ -594,13 +594,19 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
     _base_v = (cur_value - cur_day_gain) if (cur_value and cur_day_gain is not None) else None
     _d_pct = (cur_day_gain / _base_v * 100) if _base_v else None
     _u_pct = (cur_unrealized / cur_cost * 100) if (cur_unrealized is not None and cur_cost) else None
-    _sg([
-        (f"{currency_label} value", _fc(cur_value, sym) if cur_value else "—"),
-        ("Today", _fc(cur_day_gain, sym) if cur_day_gain is not None else "—",
-         f"{_d_pct:+.1f}%" if _d_pct is not None else "", cur_day_gain),
-        ("Unrealized", _fc(cur_unrealized, sym) if cur_unrealized is not None else "—",
-         f"{_u_pct:+.1f}%" if _u_pct is not None else "", cur_unrealized),
-    ], columns=3)
+    # P3-3: for the "All" slice these three figures ARE the page hero, three
+    # inches further down the same screen. Show the section total only when it
+    # is a subset the hero does not already state.
+    import core.ledger_ui as _lu
+    _cells = []
+    if currency_label != "All":
+        _cells.append((f"{currency_label} value", _fc(cur_value, sym) if cur_value else ""))
+        _cells.append(("Today", _fc(cur_day_gain, sym) if cur_day_gain is not None else "",
+                       f"{_d_pct:+.1f}%" if _d_pct is not None else "", cur_day_gain))
+        _cells.append(("Unrealized", _fc(cur_unrealized, sym) if cur_unrealized is not None else "",
+                       f"{_u_pct:+.1f}%" if _u_pct is not None else "", cur_unrealized))
+    if _cells:
+        _lu.write(_lu.stat_row(_cells, columns=3))
 
     # Split into stocks vs funds/ETFs
     has_type_info = "quote_type" in currency_df.columns
@@ -655,7 +661,7 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
         _show_key = f"{tab_key}_show_all_stocks"
         mobile_only_start()
         _clicked, _hidden = position_rows(
-            holdings_rows(stocks_df, sym),
+            holdings_rows(stocks_df, sym, presorted=True),
             key_prefix=f"{tab_key}_stk",
             group=label.replace("📈 ", ""),
             limit=None if st.session_state.get(_show_key) else 25,
@@ -682,7 +688,7 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
                                         open_deep_dive, mobile_only_start,
                                         mobile_only_end)
         mobile_only_start()
-        _fclicked, _ = position_rows(holdings_rows(funds_df, sym),
+        _fclicked, _ = position_rows(holdings_rows(funds_df, sym, presorted=True),
                                      key_prefix=f"{tab_key}_fnd",
                                      group=f"Funds & ETFs — {len(funds_df)}",
                                      limit=25)
@@ -797,43 +803,82 @@ def portfolio_section():
     # st.caption + st.columns(3) rows, which stack below ~640px: six metrics
     # became six full-width rows ~70px tall, so the Performance cluster began
     # below the fold on a phone. stat_grid stays a grid at 375px.
-    from core.ui_components import mobile_shell, hero_metric, stat_grid, fmt_compact
+    from core.ui_components import mobile_shell, fmt_compact
+    import core.ledger_ui as _ui
     mobile_shell()
 
+    _df_all = df
     _live = int(pd.to_numeric(df.get("current_price", pd.Series(dtype=float)), errors="coerce").notna().sum())
     _base_for_pct = (total_value - total_day_gain) if (total_value and total_day_gain is not None) else None
     _day_pct = (total_day_gain / _base_for_pct * 100) if _base_for_pct else 0
     _unreal_pct = (total_unrealized / total_cost * 100) if (total_unrealized is not None and total_cost) else None
 
+    # Label below the figure, not above it. Data freshness is stated as a
+    # count rather than left implicit — the price layer already classifies
+    # every quote, so "N priced live" is free and it is the first thing that
+    # explains a total that looks wrong.
     if total_value is not None:
-        hero_metric(
-            "Total Portfolio Value",
+        _ui.write(_ui.hero(
             fmt_compact(net_portfolio_value, sym),
             delta=(f"{total_day_gain:+,.0f} ({_day_pct:+.2f}%) today"
                    if total_day_gain is not None else ""),
             delta_value=total_day_gain,
-            sub=f"{len(df)} holdings · {_live} priced live"
+            sub=f"Total portfolio value · {len(df)} holdings · {_live} priced live"
                 + (f" · cash {sym} {total_cash:,.0f}" if total_cash else ""),
             title=f"{sym} {net_portfolio_value:,.2f}",
-        )
+        ))
     else:
-        hero_metric("Total Portfolio Value", f"{len(df)} holdings")
+        _ui.write(_ui.hero(f"{len(df)} holdings", sub="Total portfolio value"))
 
-    stat_grid([
-        ("Today", fmt_compact(total_day_gain, sym) if total_day_gain is not None else "—",
+    # Two carded 3-cell grids become one ruled block. Valueless cells are
+    # dropped before layout rather than rendered as em-dash holes.
+    _ui.write(_ui.stat_row([
+        ("Today", fmt_compact(total_day_gain, sym) if total_day_gain is not None else "",
          f"{_day_pct:+.2f}%" if total_day_gain is not None else "", total_day_gain),
-        ("Unrealized", fmt_compact(total_unrealized, sym) if total_unrealized is not None else "—",
+        ("Unrealized", fmt_compact(total_unrealized, sym) if total_unrealized is not None else "",
          f"{_unreal_pct:+.1f}%" if _unreal_pct is not None else "", total_unrealized),
-        ("Realized", fmt_compact(total_realized, sym) if total_realized else "—", "", total_realized),
-    ], columns=3)
-
-    stat_grid([
-        ("Cash", fmt_compact(total_cash, sym) if total_cash else "—"),
-        ("Cash %", f"{(total_cash / net_portfolio_value * 100):.1f}%" if (total_cash and net_portfolio_value) else "—"),
-        ("Margin", fmt_compact(margin_debt, sym) if margin_debt else "—", "", margin_debt),
-    ], columns=3)
+        ("Realized", fmt_compact(total_realized, sym) if total_realized else "", "", total_realized),
+        ("Cash", fmt_compact(total_cash, sym) if total_cash else ""),
+        ("Cash %", f"{(total_cash / net_portfolio_value * 100):.1f}%" if (total_cash and net_portfolio_value) else ""),
+        ("Margin", fmt_compact(margin_debt, sym) if margin_debt else "", "", margin_debt),
+    ], columns=3))
 
     st.divider()
+
+    # ── Find and order ────────────────────────────────────────────────────
+    # 193 positions behind a "show all" checkbox is a list you scroll, not one
+    # you use. Search answers "where is X", sort answers "what moved" and
+    # "what is losing" — the two questions a positions list exists for.
+    _fc1, _fc2 = st.columns([3, 2])
+    with _fc1:
+        _q = st.text_input("Find", key="dash_find", placeholder="Ticker or name",
+                           label_visibility="collapsed")
+    with _fc2:
+        _SORTS = {
+            "Value":       ("market_value",      False),
+            "Today %":     ("change_pct",        False),
+            "Today worst": ("change_pct",        True),
+            "Unrealized %": ("unrealized_pnl_pct", False),
+            "Name":        ("ticker",            True),
+        }
+        _sort = st.selectbox("Sort", list(_SORTS), key="dash_sort",
+                             label_visibility="collapsed")
+
+    if _q:
+        _needle = _q.strip().lower()
+        _hay = (df["ticker"].fillna("").astype(str).str.lower()
+                + " " + df.get("name", pd.Series("", index=df.index)).fillna("").astype(str).str.lower())
+        df = df[_hay.str.contains(_needle, regex=False)]
+        if df.empty:
+            st.info(f"No holding matches “{_q}”.")
+            st.stop()
+        st.caption(f"{len(df)} of {len(_df_all)} holdings match “{_q}”")
+
+    _col, _asc = _SORTS[_sort]
+    if _col in df.columns:
+        _key = pd.to_numeric(df[_col], errors="coerce") if _col != "ticker" else df[_col].astype(str)
+        df = df.assign(_srt=_key).sort_values("_srt", ascending=_asc,
+                                              na_position="last").drop(columns=["_srt"])
 
     # ── Currency Tabs — with "All" tab, country-friendly names ─────────────
     _CUR_COUNTRY = {
