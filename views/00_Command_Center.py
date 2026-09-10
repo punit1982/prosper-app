@@ -461,7 +461,13 @@ def _pulse_split(text: str) -> tuple[str, str]:
             break
     _head = _head.strip(" .")
     if len(_head) > 96:
-        _head, _rest = _head[:96].rstrip() + "…", (_head[96:] + " " + _rest).strip()
+        # Cut at a word boundary. Cutting at exactly 96 characters split a word
+        # in half on the live page: the label ended "broad-b…" and the body
+        # picked up with "ased, low-conviction…".
+        _cut = _head.rfind(" ", 0, 96)
+        if _cut < 40:
+            _cut = 96
+        _head, _rest = _head[:_cut].rstrip() + "…", (_head[_cut:] + " " + _rest).strip()
     return (_head or "Today's briefing"), _rest.strip()
 
 
@@ -492,18 +498,21 @@ def _render_briefing(text: str, meta: str = "") -> None:
         if _actions:
             st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
             st.markdown(_safe_md(_actions))
-        if _rest:
-            # NOT an expander. The whole briefing is already inside one, and
-            # Streamlit refuses to nest them — this raised on the live app the
-            # moment a briefing existed to render. AppTest never reached it
-            # because the harness has no briefing row, so the page took the
-            # "Generate" branch and returned clean.
-            st.markdown(_ui.section("Why it matters"), unsafe_allow_html=True)
+        if meta:
+            st.caption(meta)
+
+    # "Why it matters" is a SIBLING disclosure, not a nested one.
+    #
+    # Streamlit refuses to nest expanders — that raised on the live app the
+    # moment a briefing existed to render. Rendering it inline instead fixed
+    # the crash and cost 1,939px: on production the briefing block became 47%
+    # of the whole page, because the half a reader opens on purpose was now
+    # always open. Outside the parent it is legal AND closed again.
+    if _rest:
+        with st.expander("Why it matters — key moves and risk watch", expanded=False):
             for _title, _body in _rest:
                 st.markdown(f"**{_title}**")
                 st.markdown(_safe_md(_body))
-        if meta:
-            st.caption(meta)
 
 
 # Auto-show: check session → DB → offer generate button
