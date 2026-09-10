@@ -443,17 +443,26 @@ def _split_briefing(text: str) -> dict:
     return {k: "\n".join(v).strip() for k, v in parts.items() if "\n".join(v).strip()}
 
 
-def _briefing_headline(text: str) -> str:
-    """The first sentence of the pulse — what the whole briefing collapses to."""
+def _pulse_split(text: str) -> tuple[str, str]:
+    """First sentence of the pulse, and whatever follows it.
+
+    The first sentence becomes the disclosure's label. The body then renders
+    only the REST — printing the pulse again under a "What changed" heading
+    said the same sentence twice, one line apart, which is the duplication
+    this page was rebuilt to remove.
+    """
     _p = _split_briefing(text)
     _pulse = (_p.get("portfolio pulse") or text or "").strip()
-    _pulse = _pulse.replace("**", "").replace("\n", " ")
+    _pulse = _pulse.replace("**", "").replace("\n", " ").strip()
+    _head, _rest = _pulse, ""
     for _stop in (". ", "; "):
         if _stop in _pulse:
-            _pulse = _pulse.split(_stop, 1)[0]
+            _head, _rest = _pulse.split(_stop, 1)
             break
-    _pulse = _pulse.strip(" .")
-    return (_pulse[:96] + "…") if len(_pulse) > 96 else (_pulse or "Today's briefing")
+    _head = _head.strip(" .")
+    if len(_head) > 96:
+        _head, _rest = _head[:96].rstrip() + "…", (_head[96:] + " " + _rest).strip()
+    return (_head or "Today's briefing"), _rest.strip()
 
 
 def _render_briefing(text: str, meta: str = "") -> None:
@@ -470,24 +479,29 @@ def _render_briefing(text: str, meta: str = "") -> None:
     _rest = [(k.title(), v) for k, v in _p.items()
              if k not in ("portfolio pulse", "action items")]
 
-    with st.expander(_briefing_headline(text), expanded=True):
+    _head, _tail = _pulse_split(text)
+    with st.expander(_head, expanded=True):
         if not _pulse and not _actions:
             st.markdown(_safe_md(text))        # unrecognised shape — show it all
             if meta:
                 st.caption(meta)
             return
 
-        if _pulse:
-            st.markdown(_ui.read(f"<b>What changed.</b> {_html.escape(_pulse)}"),
-                        unsafe_allow_html=True)
+        if _tail:
+            st.markdown(_ui.read(_html.escape(_tail)), unsafe_allow_html=True)
         if _actions:
             st.markdown(_ui.section("What to do"), unsafe_allow_html=True)
             st.markdown(_safe_md(_actions))
         if _rest:
-            with st.expander("Why it matters — key moves and risk watch", expanded=False):
-                for _title, _body in _rest:
-                    st.markdown(f"**{_title}**")
-                    st.markdown(_safe_md(_body))
+            # NOT an expander. The whole briefing is already inside one, and
+            # Streamlit refuses to nest them — this raised on the live app the
+            # moment a briefing existed to render. AppTest never reached it
+            # because the harness has no briefing row, so the page took the
+            # "Generate" branch and returned clean.
+            st.markdown(_ui.section("Why it matters"), unsafe_allow_html=True)
+            for _title, _body in _rest:
+                st.markdown(f"**{_title}**")
+                st.markdown(_safe_md(_body))
         if meta:
             st.caption(meta)
 
