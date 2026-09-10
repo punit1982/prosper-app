@@ -1087,7 +1087,24 @@ def run_auth() -> Dict[str, Any]:
     # back in the app instead of flashing the login page first.
     if st.session_state.get("authentication_status") is not True:
         try:
-            authenticator.login(location="unrendered", sleep_time=0)
+            # sleep_time was 0. The cookie is read through a Streamlit COMPONENT
+            # (extra_streamlit_components' CookieManager), which cannot answer
+            # inside the same script run it mounts in — it needs one round trip
+            # to the browser. With no wait, the first run of a fresh connection
+            # always reads "no cookie", falls through, and renders the sign-in
+            # page even though a valid 30-day cookie is sitting in the browser.
+            #
+            # That is exactly the shape of the symptom: signing out happens on a
+            # DEPLOY or a wake from sleep and never in normal use, because those
+            # are the moments the browser reconnects with an empty session_state
+            # and this precheck is the only thing standing between the reader
+            # and the login form. PROSPER_COOKIE_SECRET is set; the value was
+            # never the problem, the timing was.
+            #
+            # Belt and braces: a short wait, and if that still comes back empty,
+            # one guarded rerun to give the component its round trip. The flag
+            # makes it a single retry, never a loop.
+            authenticator.login(location="unrendered", sleep_time=0.4)
         except Exception as _pc_err:
             # e.g. a cookie for a username no longer in the DB → drop the cookie
             # so it stops failing on every load.
@@ -1097,6 +1114,16 @@ def run_auth() -> Dict[str, Any]:
             except Exception:
                 pass
             st.session_state["authentication_status"] = None
+
+        # The retry lives OUTSIDE the try on purpose: st.rerun() raises
+        # RerunException, which subclasses Exception, so inside the block above
+        # it would have been caught as "precheck failed" and DELETED the very
+        # cookie it was waiting for.
+        if (st.session_state.get("authentication_status") is not True
+                and not st.session_state.get("_cookie_retry_done")):
+            st.session_state["_cookie_retry_done"] = True
+            st.rerun()
+
         if st.session_state.get("authentication_status") is True:
             _u = st.session_state.get("username", "")
             _ud = auth_config.get("credentials", {}).get("usernames", {}).get(_u, {})
