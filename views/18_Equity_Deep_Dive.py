@@ -20,7 +20,8 @@ from core.data_engine import (
     get_analyst_price_targets, get_upgrade_downgrade,
     fmt_large, clean_nan, summarize_news_with_ai,
 )
-from core.grow_engine import run_grow, GROW_TIERS
+from core.prosper_engine import run_prosper, PROSPER_TIERS
+from core.framework_version import FRAMEWORK_VERSION, is_current
 from core.settings import SETTINGS, enriched_cache_key
 from core.ui_errors import fetch_failed, empty_state
 import core.ledger_ui as _lu
@@ -310,10 +311,10 @@ st.divider()
 # pull, an analyst call and a peer batch — for a visit that usually reads one
 # of them. A segmented control renders exactly the one asked for.
 #
-# GROW stays last and stays on-demand; it is the only section that spends
+# PROSPER stays last and stays on-demand; it is the only section that spends
 # model tokens.
 _SEC_TABS = ["Price & Chart", "Fundamentals", "Analyst & Sentiment", "Peers",
-             "Ownership", "Technical Signals", "GROW"]
+             "Ownership", "Technical Signals", "PROSPER"]
 _sec_pick = st.segmented_control(
     "Section", _SEC_TABS, key="dd_section", default=_SEC_TABS[0],
     label_visibility="collapsed",
@@ -336,7 +337,7 @@ tab_analyst      = _Section("Analyst & Sentiment")
 tab_peers        = _Section("Peers")
 tab_ownership    = _Section("Ownership")
 tab_technical    = _Section("Technical Signals")
-tab_ai           = _Section("GROW")
+tab_ai           = _Section("PROSPER")
 
 if tab_peers:
     st.caption("A snapshot of sector peers. The full side-by-side is one tap away.")
@@ -1038,7 +1039,7 @@ if tab_ai:
                     st.divider()
 
         # ═══════════════════════════════════════════════════════════════════
-        # GROW v5.1 ANALYSIS — two verdicts: Durability (own?) · Entry (buy today?)
+        # PROSPER v5.13.1 — the PROSPER CARD (§B13, nine sections)
         # ═══════════════════════════════════════════════════════════════════
         analysis = get_prosper_analysis(ticker)
         if not analysis and ticker in _resolve_map.values():
@@ -1047,12 +1048,12 @@ if tab_ai:
                 analysis = get_prosper_analysis(_orig)
 
         if analysis:
-            from core.grow_render import render_grow_analysis, is_grow
+            from core.prosper_render import render_prosper_analysis, is_prosper
             _ccy = str((info or {}).get("currency") or "")
-            render_grow_analysis(analysis, ticker, _ccy)
+            render_prosper_analysis(analysis, ticker, _ccy)
             _rerun_col, _ = st.columns([1, 3])
             with _rerun_col:
-                _btn_label = "Run GROW" if not is_grow(analysis) else "Re-run GROW (update)"
+                _btn_label = "Run PROSPER" if not is_prosper(analysis) else "Re-run PROSPER (update)"
                 if st.button(_btn_label, use_container_width=True, key="dd_rerun_btn"):
                     st.session_state["_dd_force_rerun"] = True
                     st.rerun()
@@ -1069,44 +1070,49 @@ if tab_ai:
                 st.markdown(
                     f'<div style="text-align:center; padding:30px; background:rgba(26,158,92,0.05); '
                     f'border:1px dashed rgba(26,158,92,0.3); border-radius:12px; margin:16px 0;">'
-                    f'<div style="font-size:1.2em; font-weight:600; margin-bottom:8px;">No GROW analysis yet</div>'
-                    f'<div style="color:var(--p-ink-3);">Run GROW on <strong>{ticker}</strong> for the two verdicts: Durability (is it worth owning) '
-                    f'and Entry (is it worth buying at today\'s price) with the full price ladder.</div></div>',
+                    f'<div style="font-size:1.2em; font-weight:600; margin-bottom:8px;">No PROSPER card yet</div>'
+                    f'<div style="color:var(--p-ink-3);">Run {FRAMEWORK_VERSION} on <strong>{ticker}</strong> for the card: a score out of 100, '
+                    f'the call, bear / base / bull over three years, the reward-to-risk ratio and the price that makes it a buy.</div></div>',
                     unsafe_allow_html=True,
                 )
 
             tier_col, btn_col = st.columns([2, 1])
+            _has_prior = bool(analysis) and is_current(analysis.get("framework"))
+            _tiers = [t for t in PROSPER_TIERS if t != "delta" or _has_prior]
             with tier_col:
                 run_tier = st.selectbox(
                     "Run type",
-                    list(GROW_TIERS.keys()),
-                    format_func=lambda t: f"{GROW_TIERS[t]['label']} — {GROW_TIERS[t]['description']}",
-                    index=1,
+                    _tiers,
+                    format_func=lambda t: f"{PROSPER_TIERS[t]['label']} — {PROSPER_TIERS[t]['description']}",
+                    index=_tiers.index("delta" if _has_prior else "standard"),
                     key="dd_run_tier",
                 )
             with btn_col:
                 st.markdown("<br>", unsafe_allow_html=True)
-                run_btn = st.button("Run GROW", type="primary", use_container_width=True, key="dd_run_btn")
+                run_btn = st.button("Run PROSPER", type="primary", use_container_width=True, key="dd_run_btn")
 
             if run_btn:
-                _wait = "this retrieves filings via web search and can take 2–5 minutes" if GROW_TIERS[run_tier]["web"] else "about 30 seconds"
-                with st.spinner(f"Running {GROW_TIERS[run_tier]['label']} on **{ticker}** — {_wait}…"):
-                    # Position-blind (GROW rule 13): holdings are NOT passed to the engine.
-                    _prior = analysis if (analysis and str(analysis.get("framework") or "").startswith("GROW")) else None
+                _wait = ("this searches filings, IR and news on the web and can take several minutes"
+                         if PROSPER_TIERS[run_tier]["web"] else "about 30 seconds")
+                with st.spinner(f"Running PROSPER {PROSPER_TIERS[run_tier]['label']} on **{ticker}** — {_wait}…"):
+                    # Portfolio-blind (P1): holdings are NOT passed to the engine. The saved row is
+                    # passed as the prior; the engine uses it only if PROSPER v5.13.1 wrote it (P9).
                     _pq = None
                     try:
                         from core.database import get_price_cache as _gpc
                         _pq = (_gpc([ticker]) or {}).get(ticker)
                     except Exception:
                         pass
-                    result, error = run_grow(ticker, tier=run_tier, info=info, price_quote=_pq, prior=_prior)
+                    result, error = run_prosper(ticker, tier=run_tier, info=info, price_quote=_pq, prior=analysis)
 
                 if error:
                     st.error(error)
                 elif result:
                     save_prosper_analysis(ticker, result)
+                    _rr = result.get("reward_risk")
                     st.success(
-                        f"GROW complete — Durability {result.get('durability', 0):.0f}/100 · Entry {result.get('entry_verdict')} · "
+                        f"PROSPER complete — {result.get('q_score', 0):.1f}/100 · {result.get('entry_verdict')} · "
+                        f"reward:risk {('%.2f×' % _rr) if _rr is not None and _rr < 999 else '—'} · "
                         f"buy below {result.get('buy_below') or '—'} · cost USD {result.get('cost_estimate', 0):.3f}"
                     )
                     st.rerun()

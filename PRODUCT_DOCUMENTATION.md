@@ -174,21 +174,21 @@ Single-stock 360-degree research view. The most comprehensive per-stock page.
 6. **Sentiment** — News sentiment indicators.
 7. **Ownership** — Insider transactions (recent buys/sells), institutional holders, major holders breakdown.
 8. **Portfolio Position** — If the stock is in the user's portfolio: quantity, average cost, market value, unrealized P&L.
-9. **PROSPER AI Analysis (On-Demand)** — Runs the full PROSPER analysis for the selected stock. Tier selector (Quick/Standard/Full CIO). Displays archetype, score, fair value targets, thesis, risks, catalysts.
+9. **PROSPER card (On-Demand)** — Runs PROSPER v5.13.1 on the selected stock (Screen / Delta / Standard / Full + memo) and shows the 9-section PROSPER CARD: score, call, bear/base/bull, the printed reward:risk formula, dated catalysts, action prices, what would prove it wrong. Rows written by the retired GROW v5.1 / PROSPER v3.0 engines are shown as superseded, never as a current call.
 
-### 3.7 Prosper AI Analysis (Batch)
+### 3.7 Evaluate — PROSPER v5.13.1 across the portfolio
 
-**File:** `pages/15_Prosper_AI_Analysis.py`
+**File:** `views/15_Evaluate.py`
 
-Batch PROSPER analysis for the entire portfolio.
+Batch PROSPER runs for every holding, and the rated list.
 
 **Features:**
-- **Tier Selector** — Quick ($0.008/stock, Haiku), Standard ($0.04/stock, Sonnet), Full CIO ($0.04+search, Sonnet).
-- **Cost Estimator** — Shows estimated API cost before running.
-- **Skip Logic** — Automatically skips tickers with recent analysis of equal or higher tier (within 7 days).
-- **Progress Bar** — Real-time progress with ticker name and count.
-- **Results Dashboard** — Sortable table with rating badges, score bars, archetype, conviction, fair value, upside, thesis, risks, catalysts. Color-coded ratings (Strong Buy green through Strong Sell red).
-- **Persistence** — All analyses are saved to the `prosper_analysis` database table and available across sessions.
+- **Run types** — Screen (~$0.10, no web), Delta (~$0.50, ≤6 searches against the last card), Standard (~$1.00; in a batch ≤6 searches a name). Full + memo is a single-name run on Security.
+- **One regime scan per batch** — the first web-tier result's regime of record is reused for every later name (§A search budgets).
+- **Skip logic** — skips names with a PROSPER card of equal or deeper tier in the last 7 days.
+- **Rated names** — score, call, reward:risk, buy-below, price at run, probability-weighted 3-year return, market mood, confidence, valid-until.
+- **Cards file download** — `PROSPER v5.13.1 CARDS BOOK <date>.md`: master table, regime, anchor log and every card (P7).
+- **Verdict log** — the append-only M11 calibration record: date · price · score · call · ratio · re-entry.
 
 ### 3.8 Technical Analysis
 
@@ -357,83 +357,42 @@ User account management for authenticated deployments.
 
 ---
 
-## 4. PROSPER Analysis Framework
+## 4. PROSPER Analysis Framework (v5.13.1)
 
-**File:** `core/prosper_analysis.py`
+**Framework:** `prosper_framework/PROSPER v5.13.1 MODEL-AGNOSTIC.md` (sent to Claude as a cached system block)
+**Engine:** `core/prosper_engine.py` · **Card view:** `core/prosper_render.py` · **Verifier:** `prosper_framework/prosper_verify.py`
 
-### Overview
+Adopted 25-Sep-2026, replacing GROW v5.1 (archived in `docs/archive/grow_v5_1/`). Earlier verdicts are superseded, never mapped.
 
-PROSPER v3.0 is a CIO-level equity analysis engine that classifies stocks into archetypes, scores them on 7 dimensions, estimates fair value, and produces investment ratings. It is powered by Claude AI with multi-source data enrichment.
+### How a run works
 
-### The 8 Archetypes
+Claude supplies the judgement — five dimension scores, bear/base/bull cases with weights and anchors, the integrity classification, the AI class, dated catalysts. Python (`resolve_card`) then recomputes every number a decision reads and overrides the model's arithmetic:
 
-Each stock is classified into one archetype, which determines how the 7 scoring dimensions are weighted:
+- **Score (Q)** = [(D1×.25)+(D2×.25)+(D3×.20)+(D4×.15)+(D5×.15)] × 10 (Income lens adds D6 dividend durability and D7 local cycle; Microcap and Distressed lenses use their own pillars). Bands compared unrounded: ≥80 STRONG BUY · ≥65 BUY · ≥50 HOLD · ≥35 TRIM · else SELL.
+- **Reward:risk (P3)** = (bull − spot) ÷ (spot − stressed bear), printed with the numbers. D5 is clamped into the band that ratio implies.
+- **Hard caps, down only** — a buy needs ≥2× (else ACCUMULATE ON DIPS, released at (bull + 2 × bear) ÷ 3); STRONG BUY needs ≥3×; D5 <3 → HOLD; accounting-integrity problems (F-INT) → SELL; conduct matters → HOLD with no adds and a ≥10% break case as the downside (SELL if that ratio is <1×); conservative restatements dock the capital score instead (P11); AI-X / weak moat with AI-V/X → HOLD; blow-offs → HOLD; microcap kill-switch → AVOID.
+- **Chronic dilution (P4)** — >10%/yr fully-diluted share growth caps D4 at 4.
+- **Anchor lock (P9)** — case values move only on named company facts; the app flags any that moved without one and prints the entry-line change.
+- **Portfolio-blind (P1)** — holdings are never passed to the engine.
 
-| Code | Archetype | Key Weight Emphasis |
-|------|-----------|-------------------|
-| **A** | FCF Compounder | Margins (20%), Moat/IP (20%), Balance Sheet (15%), Valuation (15%) |
-| **B** | Scaling Platform | Revenue Growth (25%), Moat/IP (15%), Execution (15%) |
-| **C** | Pre-Revenue Innovator | Moat/IP (25%), Execution (20%), Risk-Adj Upside (20%) |
-| **D** | Biotech / Clinical | Moat/IP (30%), Balance Sheet (20%), Risk-Adj Upside (20%) |
-| **E** | Cyclical / Commodity | Balance Sheet (20%), Valuation (20%), Risk-Adj Upside (15%) |
-| **F** | Turnaround | Balance Sheet (20%), Execution (20%), Valuation (15%), Risk-Adj Upside (15%) |
-| **G** | High-Beta Growth | Revenue Growth (20%), Risk-Adj Upside (20%), Moat/IP (15%) |
-| **H** | Deep-Tech / Frontier | Moat/IP (30%), Execution (20%), Risk-Adj Upside (20%) |
+### Run types
 
-### The 7 Scoring Dimensions
+| Tier | Model | Searches | Output | Cost/stock |
+|------|-------|----------|--------|-----------|
+| **Screen** | Sonnet 5 | 0 | provisional card, Low confidence | ~$0.10 |
+| **Delta** | Sonnet 5 | ≤6 | card + change table vs the last card | ~$0.50 |
+| **Standard** | Sonnet 5 | ≤12 (≤6 in a batch) | full 9-section card | ~$1.00 |
+| **Full + memo** | Opus 5 | ≤12 | card + dense memo + scorecard | ~$3.50 |
 
-Each dimension is scored 1-10 by Claude AI:
+SEC EDGAR XBRL figures (with accession numbers) are supplied for US filers so searches go to what filings cannot carry: IR earnings dates, litigation, estimate revisions, guidance.
 
-1. **Revenue Growth** — Top-line growth trajectory and sustainability
-2. **Margins** — Profit margins, operating margins, margin expansion trend
-3. **Moat / IP** — Competitive advantages, intellectual property, network effects
-4. **Balance Sheet** — Debt levels, cash position, financial health
-5. **Valuation** — Current valuation relative to intrinsic value and peers
-6. **Execution** — Management quality, capital allocation, strategic decisions
-7. **Risk-Adjusted Upside** — Potential reward relative to downside risk
+### What other pages read
 
-The weighted score (0-100) determines the rating:
-- **STRONG BUY:** Score > 80
-- **BUY:** Score 65-79
-- **HOLD:** Score 50-64
-- **SELL:** Score 35-49
-- **STRONG SELL:** Score < 35
+`buy_below` = the lower of the card's buy-zone top and the 2× line; `fair_high` = the first take-profit price (else base case). The Options Desk (HARVEST R1) writes puts only at or below `buy_below` and calls only at or above `fair_high`, and never writes a put on a card that blocks adding. Dashboard, Risk, Command Center and Ask read only current-framework rows (`get_current_analyses()`).
 
-### 3 Model Tiers
+### Chat-window runs (no API cost)
 
-| Tier | Model | Max Tokens | Data Sources | Cost/Stock |
-|------|-------|-----------|--------------|-----------|
-| **Quick** | Claude 3.5 Haiku | 1,200 | yfinance + Finnhub (pre-fetched) | ~$0.008 |
-| **Standard** | Claude 3.5 Sonnet | 2,000 | + Serper web search + Google News | ~$0.04 |
-| **Full CIO** | Claude 3.5 Sonnet | 2,500 | All sources + deep web search | ~$0.04 + search |
-
-### Fair Value Methodology
-
-Claude generates three price targets with probability weights:
-- **Bear Case** — Worst-case scenario price with probability (e.g., 20%)
-- **Base Case** — Most likely outcome with probability (e.g., 55%)
-- **Bull Case** — Best-case scenario price with probability (e.g., 25%)
-
-Probabilities must sum to 100%. The probability-weighted fair value = (bear x prob_bear) + (base x prob_base) + (bull x prob_bull). Upside/downside is calculated from current price to probability-weighted fair value.
-
-### Multi-Source Data Enrichment
-
-The context builder (`build_analysis_context`) aggregates data from:
-
-1. **yfinance** — Price, market cap, ratios (P/E, P/B, P/S, PEG, EV/EBITDA), growth (revenue, earnings), margins, balance sheet, EPS, 52W range, beta, analyst targets, business summary.
-2. **Finnhub** — Analyst consensus (buy/hold/sell counts), recommendation trends (3-month comparison), recent upgrade/downgrade history (firm, action, grade, date).
-3. **Serper (Google Search)** — Recent web articles and analysis about the stock (Standard and Full tiers only).
-4. **Google News RSS** — Latest 5 headlines for real-time sentiment context (Standard and Full tiers only).
-5. **Portfolio Data** — User's holdings (quantity, avg cost, market value, unrealized P&L) for position context.
-6. **India Market Context** — For .NS/.BO tickers: promoter holding, institutional holding, NIFTY 50 membership.
-
-Data confidence is rated HIGH (15+ data points), MEDIUM (8-14), or LOW (<8). Low confidence triggers a note in the analysis and reduces conviction.
-
-### Conviction Levels
-
-- **HIGH** — >80% data coverage and analyst consensus aligns with scoring
-- **MEDIUM** — 50-80% data coverage or mixed signals across sources
-- **LOW** — <50% data coverage; analysis should be treated as directional only
+`scripts/prosper_prompt.py` builds a brief; paste it into a conversation with the framework attached; `scripts/prosper_import.py` imports the reply through the same resolver.
 
 ---
 
@@ -851,7 +810,8 @@ prosper/
 |   |-- db_connector.py             # Database connection abstraction: Turso HTTP API or local SQLite
 |   |-- cio_engine.py               # Portfolio enrichment: parallel price fetching, FX conversion, P&L calculation
 |   |-- data_engine.py              # Central data hub: ticker resolution, info/news/analyst/history fetching, caching
-|   |-- prosper_analysis.py         # PROSPER AI analysis framework: archetypes, scoring, multi-source context, Claude integration
+|   |-- prosper_engine.py           # PROSPER v5.13.1 engine: prompt, data snapshot, deterministic resolver (resolve_card)
+|   |-- prosper_render.py           # the 9-section PROSPER CARD view
 |   |-- fortress.py                 # FORTRESS risk framework: 9 modules (regime, exposure, sizing, factors, rebalancing, breakers, health)
 |   |-- portfolio_optimizer.py      # Portfolio optimization: model portfolios, allocation analysis, MPT efficient frontier
 |   |-- screenshot_parser.py        # Claude Vision screenshot/PDF parsing with parse cache
@@ -873,7 +833,7 @@ prosper/
 |   |-- 7_Analyst_Consensus.py      # Per-stock analyst ratings, targets, upgrade/downgrade history
 |   |-- 8_Sentiment.py              # Social and news sentiment
 |   |-- 12_Transaction_Log.py       # Buy/sell transaction recording and realized P&L
-|   |-- 15_Prosper_AI_Analysis.py   # Batch PROSPER analysis for all holdings
+|   |-- 15_Evaluate.py              # Batch PROSPER v5.13.1 runs + rated list + cards file
 |   |-- 17_User_Management.py       # User account management
 |   |-- 18_Equity_Deep_Dive.py      # Single-stock 360-degree research view
 |   |-- 18_FORTRESS_Dashboard.py    # Standalone FORTRESS dashboard (legacy, superseded by Risk & Strategy)

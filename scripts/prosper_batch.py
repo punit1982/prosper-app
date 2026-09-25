@@ -1,43 +1,34 @@
 #!/usr/bin/env python3
 """
-GROW — batch runner
-===================
-Runs the GROW engine over many tickers in one process and writes each result to
-prosper_analysis, so the Options Desk's Rule 1 has verdicts to work with and the
-Dashboard shows a Durability score per holding.
+PROSPER v5.13.1 — batch runner
+==============================
+Runs the PROSPER engine over many tickers in one process and writes each card to
+prosper_analysis, so the Options Desk's Rule 1 has a buy-below and take-profit to work with and
+the Dashboard shows a score and a call per holding.
 
-WHY THIS EXISTS — the cost is not what it looks like
-----------------------------------------------------
-The fear is "hundreds of dollars of Claude tokens". Measured, that is only true of the
-`full` tier used indiscriminately:
+The framework's own budget for a batch (§A): ONE macro/regime scan, then ≤6 searches a name.
+This script does exactly that — the first web-tier result's regime of record is handed to every
+later name so the market-mood scan is not paid for again.
 
-    tier       model      searches  content   per name   50 names   182 holdings
-    screen     Sonnet 5      0          -      $0.073*      $4          $13
-    standard   Sonnet 5     12        40k      ~$1.20      $60         $219
-    full_lean  Sonnet 5     25        18k      ~$1.36      $68         $248
-    full       Opus 5       25        40k      ~$5.78     $289       $1,052
-
-    * measured on a real NKE run, not estimated.
-
-The framework is 36,053 tokens and, cached, costs $0.018 a call — it is NOT the cost
-driver. web_fetch is: 25 fetches x 40,000 tokens of page content is ~1M input tokens per
-name. full_lean keeps all 25 sources (breadth of evidence is the point of the full tier)
-and trims the boilerplate pulled from each, which is where the 76% saving comes from.
-
-Batching matters because prompt caching only pays off while the cache is warm, which
-needs the calls close together in one process rather than clicked one at a time in the UI.
+COST (rough; the framework file is ~11k tokens and is sent as a cached block)
+    tier       model      searches   per name   50 names
+    screen     Sonnet 5      0        ~$0.10       $5
+    delta      Sonnet 5     ≤6        ~$0.50      $25
+    standard   Sonnet 5     ≤6*       ~$0.70      $35      (* ≤12 when run singly)
+    full       Opus 5       ≤6*       ~$3.50     $175      (card + memo)
 
 RECOMMENDED USE
----------------
-    # every name the Options Desk needs a Rule 1 verdict for — a couple of dollars
-    python3 scripts/grow_batch.py --universe --tier screen
+    # every name the Options Desk needs a Rule 1 card for
+    python3 scripts/prosper_batch.py --universe --tier screen
 
-    # depth where it changes a decision — full retrieval breadth, a quarter of the price
-    python3 scripts/grow_batch.py --holdings --top 20 --tier full_lean
+    # depth where it changes a decision
+    python3 scripts/prosper_batch.py --holdings --top 20 --tier standard
 
-Screen tier produces the Durability score and the full price ladder (buy_below,
-fair_high) — everything Rule 1 needs. It does no filings retrieval, so it is marked
-provisional by the engine itself and should not be mistaken for a researched memo.
+    # re-run names that already carry a PROSPER card against it (P9 change table)
+    python3 scripts/prosper_batch.py --holdings --top 20 --tier delta --skip-fresh 0
+
+A screen card carries the full ladder (buy_below, take-profit) but no live searches, so the
+engine marks it provisional and Low confidence — it is not a researched card.
 """
 
 import argparse
@@ -54,7 +45,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-_log = logging.getLogger("grow.batch")
+_log = logging.getLogger("prosper.batch")
 
 
 def _resolve_targets(args) -> list:
@@ -96,7 +87,7 @@ def _resolve_targets(args) -> list:
                     _dropped = df[[not m for m in _mask]]["ticker"].tolist()
                     df = df[_mask]
                     if _dropped:
-                        _log.info("skipping %d fund/ETF/bond line(s) — GROW scores businesses, "
+                        _log.info("skipping %d fund/ETF/bond line(s) — PROSPER scores businesses, "
                                   "not wrappers (--include-funds to override): %s",
                                   len(_dropped), ", ".join(_dropped[:12]))
                 if args.top:
@@ -113,8 +104,8 @@ def _resolve_targets(args) -> list:
     return out[:args.top] if args.top else out
 
 
-# GROW scores the durability of a BUSINESS — market pull, moat, margin room, operator
-# credibility. None of that is meaningful for a Treasury ETF, a covered-call income fund or a
+# PROSPER scores a BUSINESS — megatrend fit, moat, forward opportunity, founder and capital,
+# asymmetry. None of that is meaningful for a Treasury ETF, a covered-call income fund or a
 # closed-end bond fund, and at full_lean prices each one is $1.40 spent to produce a memo about
 # a wrapper rather than a company. holdings.asset_category is NULL for all 116 rows here, so the
 # instrument name is the only signal available.
@@ -187,13 +178,14 @@ def _already_done(ticker: str, max_age_days: int) -> bool:
         if not d:
             return False
         age = (datetime.now() - datetime.strptime(d, "%Y-%m-%d")).days
-        return age <= max_age_days and bool(row.get("framework"))
+        from core.framework_version import is_current
+        return age <= max_age_days and is_current(row.get("framework"))
     except Exception:
         return False
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Run GROW over many tickers and store the results")
+    ap = argparse.ArgumentParser(description="Run PROSPER v5.13.1 over many tickers and store the cards")
     src = ap.add_argument_group("what to run")
     src.add_argument("--tickers", help="comma-separated list")
     src.add_argument("--universe", action="store_true",
@@ -205,9 +197,9 @@ def main():
                      help="don't skip ETFs / bond funds / income wrappers")
 
     ap.add_argument("--tier", default="screen",
-                    choices=["screen", "standard", "full", "full_lean"],
-                    help="screen is enough for the Options Desk's Rule 1 (default). full_lean is "
-                         "full-tier retrieval breadth at ~a quarter of full's price")
+                    choices=["screen", "delta", "standard", "full"],
+                    help="screen is enough for the Options Desk's Rule 1 (default). delta re-runs "
+                         "against the last card (names without one get a first run)")
     ap.add_argument("--skip-fresh", type=int, default=30, metavar="DAYS",
                     help="skip names already analysed within N days (0 = re-run everything)")
     ap.add_argument("--budget", type=float, default=0.0, metavar="USD",
@@ -223,12 +215,12 @@ def main():
     if args.stub_yfinance:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_stub"))
         _log.info("--stub-yfinance: aggregator financial statements omitted from the Tier-5 "
-                  "snapshot (GROW treats them as confirmation-only under 6.2)")
+                  "snapshot (PROSPER treats aggregator data as confirmation only)")
 
     if not (args.tickers or args.universe or args.holdings):
         ap.error("pick at least one of --tickers / --universe / --holdings")
 
-    from core import grow_engine as ge
+    from core import prosper_engine as pe
 
     targets = _resolve_targets(args)
     if args.skip_fresh:
@@ -236,7 +228,7 @@ def main():
         targets = [t for t in targets if not _already_done(t, args.skip_fresh)]
         _log.info("skipping %d name(s) analysed within %d days", before - len(targets), args.skip_fresh)
 
-    est = ge.GROW_TIERS[args.tier]["est_cost"]
+    est = pe.PROSPER_TIERS[args.tier]["est_cost"]
     _log.info("%d name(s), tier=%s, rough estimate $%.2f total ($%.2f each)",
               len(targets), args.tier, est * len(targets), est)
 
@@ -247,26 +239,30 @@ def main():
         _log.info("nothing to run.")
         return 0
 
-    from core.database import save_prosper_analysis, init_db
+    from core.database import save_prosper_analysis, init_db, get_prosper_analysis
     try:
         init_db()
     except Exception as e:
         _log.error("database not ready: %s", e)
         return 1
 
-    spent, ok, failed = 0.0, 0, []
+    spent, ok, failed, regime = 0.0, 0, [], None
     t0 = time.time()
     for i, t in enumerate(targets, 1):
         if args.budget and spent >= args.budget:
             _log.warning("budget of $%.2f reached after %d name(s) — stopping.", args.budget, i - 1)
             break
-        _log.info("[%d/%d] GROW %s (%s)…", i, len(targets), t, args.tier)
-        # GROW needs a price. run_grow() will not fetch one for itself, and without it the
-        # Entry verdict has nothing to solve against — the first version of this script omitted
-        # it and every run came back "no Durability score (rule 20) — run rejected".
+        _log.info("[%d/%d] PROSPER %s (%s)…", i, len(targets), t, args.tier)
+        # PROSPER needs a price (step 1). run_prosper() will not fetch one for itself — the GROW
+        # version of this script once omitted it and every run was rejected.
         info, quote = _snapshot_inputs(t)
         try:
-            res, err = ge.run_grow(t, tier=args.tier, info=info, price_quote=quote)
+            prior = get_prosper_analysis(t)
+        except Exception:
+            prior = None
+        try:
+            res, err = pe.run_prosper(t, tier=args.tier, info=info, price_quote=quote, prior=prior,
+                                      max_searches=pe.BATCH_MAX_SEARCHES, regime_hint=regime)
         except Exception as e:
             res, err = None, f"{type(e).__name__}: {e}"
         if not res:
@@ -278,14 +274,17 @@ def main():
             _log.warning("   %s failed (≈$%.2f still spent): %s", t, est, str(err)[:160])
             continue
         spent += res.get("cost_estimate") or 0.0
+        if regime is None and args.tier != "screen" and res.get("regime_state"):
+            regime = ((res.get("full_response") or {}).get("prosper_json") or {}).get("regime")
         try:
             save_prosper_analysis(t, res)
         except Exception as e:
             _log.warning("   %s computed but not saved: %s", t, e)
         ok += 1
-        _log.info("   %s Durability %.0f (%s) · Entry %s · buy below %s · $%.4f",
-                  t, res.get("durability") or 0, res.get("durability_band") or "?",
-                  res.get("entry_verdict"), res.get("buy_below"), res.get("cost_estimate") or 0)
+        _log.info("   %s score %.1f · %s · reward:risk %s · buy below %s · $%.4f",
+                  t, res.get("q_score") or 0, res.get("entry_verdict"),
+                  (res.get("resolved") or {}).get("ratio_text"), res.get("buy_below"),
+                  res.get("cost_estimate") or 0)
 
     _log.info("done: %d ok, %d failed, $%.2f spent, %.1f min",
               ok, len(failed), spent, (time.time() - t0) / 60)

@@ -117,7 +117,7 @@ def _fetch_finnhub_analyst(ticker: str) -> str:
     Finnhub has no coverage (common for non-US names) or on any failure.
 
     Moved here from core/prosper_analysis.py (retired PROSPER v3.0 engine);
-    core/grow_engine.py is the only caller.
+    core/prosper_engine.py is the only caller.
     """
     try:
         from datetime import datetime

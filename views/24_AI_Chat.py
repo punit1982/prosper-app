@@ -6,7 +6,7 @@ Query your portfolio, holdings, and market data using natural language.
 
 import streamlit as st
 import pandas as pd
-from core.database import get_all_holdings, get_all_prosper_analyses
+from core.database import get_all_holdings, get_current_analyses
 from core.settings import SETTINGS, get_api_key, enriched_cache_key
 from core.ui_errors import fetch_failed
 
@@ -50,11 +50,16 @@ if enriched is not None and not enriched.empty:
         _portfolio_summary += f"\n\nSector allocation:\n{_sec_str}"
 
 # Add Prosper analyses if available
-_analyses = get_all_prosper_analyses()
+_analyses = get_current_analyses()
 _analysis_context = ""
 if not _analyses.empty:
-    _an = _analyses[["ticker", "rating", "score", "archetype_name", "thesis"]].head(20)
-    _analysis_context = f"\n\nGROW analyses (rating = Entry verdict, score = Durability 0-100; thesis carries the buy-below price):\n{_an.to_string(index=False)}"
+    _cols = [c for c in ("ticker", "entry_verdict", "q_score", "reward_risk", "buy_below",
+                         "analysis_date", "thesis") if c in _analyses.columns]
+    _an = _analyses[_cols].head(20)
+    _analysis_context = ("\n\nPROSPER v5.13.1 cards (entry_verdict = the call, q_score = score 0-100, "
+                         "reward_risk = (bull - spot) / (spot - bear), buy_below = the price where that "
+                         "ratio reaches 2x; ratings never consider what the user holds):\n"
+                         f"{_an.to_string(index=False)}")
 
 
 # ── System prompt ──

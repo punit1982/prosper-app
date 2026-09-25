@@ -104,7 +104,7 @@ from core.auth import run_auth as _run_auth
 _ALL_VIEWS = (
     "0_Settings.py", "1_Upload_Portal.py", "2_Portfolio_Dashboard.py",
     "4_Portfolio_Summary.py", "5_Performance.py", "7_Analyst_Consensus.py",
-    "8_Sentiment.py", "9_Activity.py", "15_GROW_Analysis.py",
+    "8_Sentiment.py", "9_Activity.py", "15_Evaluate.py",
     "17_User_Management.py", "18_Equity_Deep_Dive.py", "18_Risk_Strategy.py",
     "19_Options_Desk.py", "21_Technical_Analysis.py", "22_Dividend_Dashboard.py",
     "23_Peer_Comparison.py", "24_AI_Chat.py", "25_IBKR_Sync.py",
@@ -306,17 +306,17 @@ pg = st.navigation({
     ],
     # Split by what the page is FOR, not by what it is made of.
     #
-    # "Decide" holds the four surfaces that produce an action: a Durability score and
-    # price ladder, an options ticket, a single-name workup, and the assistant.
+    # "Decide" holds the four surfaces that produce an action: a PROSPER card and its
+    # buy-below price, an options ticket, a single-name workup, and the assistant.
     #
-    # "Signals" holds the rest. GROW §6.2 is explicit that aggregator data — analyst
+    # "Signals" holds the rest. PROSPER (P2, §B10) is explicit that aggregator data — analyst
     # consensus, headline sentiment, screen-derived technicals, peer multiples — is
-    # Tier 5, confirmation only, and never price-setting. They sat beside GROW in one
+    # confirmation only, and never the quoted number. They sat beside the framework in one
     # undifferentiated "Research & AI" list of nine, which invites reading a sell-side
     # target as if it carried the same weight as the framework's own arithmetic. The
     # group name now says what they are.
     "Decide": [
-        st.Page("views/15_GROW_Analysis.py", title="Evaluate", icon="🌱"),
+        st.Page("views/15_Evaluate.py", title="Evaluate", icon="🌱"),
         st.Page("views/19_Options_Desk.py", title="Options", icon="🌾"),
         st.Page("views/18_Equity_Deep_Dive.py", title="Security", icon="🔬"),
         st.Page("views/24_AI_Chat.py", title="Ask", icon="💬"),

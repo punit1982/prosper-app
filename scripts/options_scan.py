@@ -104,8 +104,9 @@ def _positions_from_db() -> dict:
 
 def _grow_map_from_db() -> dict:
     try:
-        from core.database import get_all_prosper_analyses
-        df = get_all_prosper_analyses()
+        # Current framework only — a superseded GROW verdict is not a PROSPER card (P9).
+        from core.database import get_current_analyses
+        df = get_current_analyses()
         if df is None or df.empty:
             return {}
         return {str(r["ticker"]).upper(): dict(r) for _, r in df.iterrows()}

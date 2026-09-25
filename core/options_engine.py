@@ -3,10 +3,14 @@ HARVEST v1.0 — the Options Desk engine
 ======================================
 Turns option chains into at most five specific, tradeable orders a day.
 
-Architecture — the same split that makes GROW work
---------------------------------------------------
-GROW lets Claude reason about a business, then `resolve_entry()` recomputes the verdict and the
-price ladder in Python and **overrides the model's own arithmetic**. Harvest does the same:
+Architecture — the same split that makes PROSPER work
+-----------------------------------------------------
+PROSPER v5.13.1 lets Claude reason about a business, then `resolve_card()` recomputes the score,
+the call, the reward:risk ratio and the buy-below line in Python and **overrides the model's own
+arithmetic**. Harvest does the same:
+
+(Internally the analysis verdict is still carried under the key `grow` / `grow_map` — the name of
+the framework that preceded PROSPER v5.13.1. Only the contents changed; see `_grow_for`.)
 
     Layer 2  generate_candidates()  pure Python. Walks the chain, applies every doctrine gate,
                                     scores what survives. ~180,000 contracts -> ~20 finalists.
@@ -61,7 +65,7 @@ MIN_BID = 0.05                            # below this, commission eats the trad
 MIN_NET_CREDIT = 75.0                     # R: not worth the attention it costs
 
 CALL_WRITE_CAP = 0.50                     # R5 — never write against the whole position
-CALL_WRITE_CAP_HIGH_CONVICTION = 0.33     # R5 — GROW BUY or better
+CALL_WRITE_CAP_HIGH_CONVICTION = 0.33     # R5 — PROSPER BUY or better
 COLLATERAL_CAP = 0.60                     # R4 — share of the liquid ledger committed to short puts
 SECTOR_CONCENTRATION_CAP = 0.25           # R7
 
@@ -74,7 +78,16 @@ FUNDING_COST_PCT = 1.5                    # R0/R3 — CHF/JPY/SGD carry
 SELL_VRP_FLOOR = vm.SELL_VRP_FLOOR
 BUY_VRP_CEILING = vm.BUY_VRP_CEILING
 
-GROW_STALE_DAYS = 90                      # R1
+GROW_STALE_DAYS = 90                      # R1 — also PROSPER's own validity window (step 13)
+
+# PROSPER v5.13.1 call words, grouped by what they allow here.
+HIGH_CONVICTION_CALLS = ("BUY", "STRONG BUY")
+# Calls under which being assigned at or below buy_below is an outcome PROSPER already endorses:
+# ACCUMULATE ON DIPS is a BUY-band business held back only by price, and buy_below IS the price
+# that releases it ((bull + 2 x bear) / 3).
+PUT_WRITABLE_CALLS = ("BUY", "STRONG BUY", "ACCUMULATE ON DIPS")
+# Calls that say reduce or stay out. A short put is a conditional add, so these never get one.
+NO_ADD_CALLS = ("TRIM", "SELL", "AVOID", "STRONG SELL")
 PROFIT_TARGET_FRAC = 0.65                 # R8 — buy to close at 65% of max profit
 ROLL_DTE_TRIGGER = 14                     # R8
 
@@ -157,7 +170,13 @@ def _limit_price(bid: float, ask: float, *, selling: bool) -> float:
 
 
 def _grow_for(ticker: str, grow_map: dict) -> dict:
-    """GROW verdict for a name, with staleness marked (R1)."""
+    """The PROSPER v5.13.1 card for a name, with staleness marked (R1).
+
+    Callers pass only current-framework rows (core.database.get_current_analyses) — a
+    superseded GROW verdict is not a PROSPER one (P9) and must reach here as "no verdict".
+    `buy_below` is the lower of the card's buy-zone top and the 2x reward:risk line;
+    `fair_high` is the card's first take-profit price (else its base case).
+    """
     g = (grow_map or {}).get((ticker or "").upper()) or {}
     if not g:
         return {"has_verdict": False, "stale": False}
@@ -167,11 +186,14 @@ def _grow_for(ticker: str, grow_map: dict) -> dict:
         stale = (date.today() - d).days > GROW_STALE_DAYS
     except (ValueError, TypeError):
         stale = True
+    verdict = str(g.get("entry_verdict") or g.get("rating") or "").strip().upper()
+    no_adds = verdict in NO_ADD_CALLS or bool(_f(g.get("no_adds")))
     return {
         "has_verdict": True,
         "stale": stale,
-        "verdict": (g.get("entry_verdict") or g.get("rating") or "").upper(),
-        "durability": _f(g.get("durability")) or _f(g.get("score")),
+        "verdict": verdict,
+        "no_adds": no_adds,
+        "durability": _f(g.get("q_score")) or _f(g.get("durability")) or _f(g.get("score")),
         "buy_below": _f(g.get("buy_below")),
         "fair_high": _f(g.get("fair_high")) or _f(g.get("reduce_above")),
         "reduce_above": _f(g.get("reduce_above")),
@@ -216,7 +238,7 @@ def _covered_call_candidates(ctx: dict) -> List[dict]:
     # R5 feasibility, checked here rather than in the resolver. Writing 50% of a one-contract lot
     # is zero contracts, so the idea is not merely capped — it does not exist. Surfacing it to the
     # model wastes a shortlist slot and invites reasoning that assumes a trade which cannot happen.
-    _high_conviction = g["has_verdict"] and g["verdict"] in ("BUY", "STRONG BUY")
+    _high_conviction = g["has_verdict"] and g["verdict"] in HIGH_CONVICTION_CALLS
     _frac = CALL_WRITE_CAP_HIGH_CONVICTION if _high_conviction else CALL_WRITE_CAP
     if int(max_contracts * _frac) < 1:
         note("covered_call",
@@ -235,16 +257,16 @@ def _covered_call_candidates(ctx: dict) -> List[dict]:
     # R1 — do not cap the upside on a high-conviction name.
     floor_strike = 0.0
     if g["has_verdict"]:
-        if g["verdict"] in ("BUY", "STRONG BUY"):
+        if g["verdict"] in HIGH_CONVICTION_CALLS:
             fair = g.get("fair_high") or g.get("reduce_above")
             if fair:
                 floor_strike = fair       # only write at or above full value
             else:
                 note("covered_call",
-                     f"GROW rates it {g['verdict']} but carries no fair-high rung, so R1 cannot "
-                     f"be satisfied — standing aside rather than capping the upside")
+                     f"PROSPER rates it {g['verdict']} but the card carries no take-profit price, so "
+                     f"R1 cannot be satisfied — standing aside rather than capping the upside")
                 return out
-        elif g["verdict"] in ("SELL", "STRONG SELL"):
+        elif g["verdict"] in NO_ADD_CALLS:
             floor_strike = 0.0            # happy to be taken out at any sensible strike
         else:
             floor_strike = (g.get("fair_high") or g.get("reduce_above") or 0.0)
@@ -286,7 +308,7 @@ def _covered_call_candidates(ctx: dict) -> List[dict]:
         # strike satisfying it has a delta under 0.15. That is the doctrine working — it is
         # refusing to cap upside cheaply — but the user must be told, not left with a blank page.
         note("covered_call",
-             f"R1 requires a strike at or above ${floor_strike:,.2f} (GROW's fair-high) but spot "
+             f"R1 requires a strike at or above ${floor_strike:,.2f} (PROSPER's take-profit) but spot "
              f"is ${spot:,.2f}; every strike that far out prices below the {SHORT_DELTA_MIN:.2f} "
              f"delta floor. No call here is worth writing at a price you'd be happy to sell at.")
     elif not out:
@@ -297,15 +319,21 @@ def _covered_call_candidates(ctx: dict) -> List[dict]:
 def _cash_secured_put_candidates(ctx: dict) -> List[dict]:
     """Short puts secured against the Treasury/cash ledger (R3, R4).
 
-    Only on the assignment-grade universe, or on a held name GROW rates BUY or better — the test
-    is always "would being assigned here be an acceptable outcome", never "is the premium fat".
+    Only on the assignment-grade universe, or on a held name PROSPER rates BUY, STRONG BUY or
+    ACCUMULATE ON DIPS — the test is always "would being assigned here be an acceptable outcome",
+    never "is the premium fat". Never on a name PROSPER says to reduce or not add to.
     """
     out = []
     note = ctx["reject"]
     g, spot, metrics = ctx["grow"], ctx["spot"], ctx["metrics"]
 
     in_agu = agu.in_universe(ctx["ticker"]) and agu.put_writable(ctx["ticker"], spot)
-    grow_wants_it = g["has_verdict"] and g["verdict"] in ("BUY", "STRONG BUY")
+    if g["has_verdict"] and g.get("no_adds"):
+        note("cash_secured_put",
+             f"PROSPER's call is {g['verdict']} with no adds — a short put is a conditional add, "
+             f"so assignment would not be an acceptable outcome (R1/R4)")
+        return out
+    grow_wants_it = g["has_verdict"] and g["verdict"] in PUT_WRITABLE_CALLS
     if not (in_agu or grow_wants_it):
         if agu.in_universe(ctx["ticker"]):
             note("cash_secured_put",
@@ -313,7 +341,7 @@ def _cash_secured_put_candidates(ctx: dict) -> List[dict]:
                  f"per contract is too large to secure; spreads or covered calls only (R4)")
         else:
             note("cash_secured_put",
-                 "not in the assignment-grade universe and GROW does not rate it BUY — assignment "
+                 "not in the assignment-grade universe and PROSPER does not rate it a buy — assignment "
                  "would not be an acceptable outcome (R4)")
         return out
     if metrics.get("vrp_verdict") != "sell":            # R2
@@ -322,8 +350,8 @@ def _cash_secured_put_candidates(ctx: dict) -> List[dict]:
              f"= {metrics.get('vrp') or 0:.2f}, below the {SELL_VRP_FLOOR:.2f} floor (R2)")
         return out
 
-    # R1 applied to the put side: only agree to buy at or below GROW's buy_below rung. This binds
-    # whenever GROW has a view at all — membership of the assignment-grade universe says the name
+    # R1 applied to the put side: only agree to buy at or below PROSPER's buy_below line. This binds
+    # whenever PROSPER has a view at all — membership of the assignment-grade universe says the name
     # is sound, not that any price for it is acceptable.
     ceiling_strike = g.get("buy_below") if g["has_verdict"] else None
 
@@ -366,7 +394,7 @@ def _cash_secured_put_candidates(ctx: dict) -> List[dict]:
 
     if not out and ceiling_strike:
         note("cash_secured_put",
-             f"R1 caps the strike at GROW's buy-below of ${ceiling_strike:,.2f}; spot is "
+             f"R1 caps the strike at PROSPER's buy-below of ${ceiling_strike:,.2f}; spot is "
              f"${spot:,.2f}, so every put that far down prices below the "
              f"{SHORT_DELTA_MIN:.2f} delta floor or under the minimum credit")
     elif not out:
@@ -541,9 +569,9 @@ def _score(cand: dict, ctx: dict) -> float:
         grow_score = 8.0
     else:
         grow_score = 14.0
-        if cand["strategy"] == "covered_call" and g["verdict"] in ("HOLD", "SELL", "STRONG SELL"):
+        if cand["strategy"] == "covered_call" and g["verdict"] in ("HOLD",) + NO_ADD_CALLS:
             grow_score = 20.0                 # writing calls on what you'd happily sell is ideal
-        if cand["strategy"] == "cash_secured_put" and g["verdict"] in ("BUY", "STRONG BUY"):
+        if cand["strategy"] == "cash_secured_put" and g["verdict"] in PUT_WRITABLE_CALLS:
             grow_score = 20.0                 # getting paid to buy what you want is ideal
 
     ts = m.get("term_structure")
@@ -824,21 +852,21 @@ def resolve_order(cand: dict, *, collateral_available: float, collateral_committ
         + (f" ({cand['earnings']['hour']})" if cand["earnings"].get("hour") else "")
         if cand.get("earnings") else "no scheduled report before expiry on the Finnhub calendar")
 
-    # No "GROW" prefix here — the UI already labels this row "GROW", and the two together
-    # rendered as "GROW GROW BUY · Durability 78".
+    # No "PROSPER" prefix here — the UI already labels this row "PROSPER", and the two together
+    # rendered as "PROSPER PROSPER BUY · Score 72.5".
     if g.get("has_verdict"):
         ticket["grow_note"] = (
-            f"{g.get('verdict')} · Durability {g.get('durability'):.0f}"
+            f"{g.get('verdict')} · Score {g.get('durability'):.1f}"
             if g.get("durability") else str(g.get("verdict")))
         if g.get("fair_high"):
-            ticket["grow_note"] += f" · fair-high ${g['fair_high']:,.2f}"
+            ticket["grow_note"] += f" · take-profit ${g['fair_high']:,.2f}"
         if g.get("stale"):
             ticket["grow_note"] += f" · as of {g.get('analysis_date')}"
-            ticket["warnings"].append(f"GROW verdict is from {g.get('analysis_date')} — over "
+            ticket["warnings"].append(f"PROSPER card is from {g.get('analysis_date')} — over "
                                       f"{GROW_STALE_DAYS} days old (R1)")
     else:
         ticket["grow_note"] = "no verdict on file — R1 cannot be evaluated"
-        ticket["warnings"].append("PROVISIONAL: run GROW on this name before trading it (R1)")
+        ticket["warnings"].append("PROVISIONAL: run PROSPER on this name before trading it (R1)")
 
     if ticket["quotes_stale"]:
         ticket["warnings"].append(
@@ -897,15 +925,17 @@ def candidates_table(cands: List[dict]) -> str:
         return "(no candidates cleared the gates today)"
     head = (f"{'ID':<16}{'TICKER':<8}{'STRATEGY':<18}{'EXP':<11}{'STRIKE':>8}{'DTE':>4}"
             f"{'DELTA':>7}{'MID':>8}{'ANN%':>7}{'IV30':>7}{'HV20':>7}{'VRP':>6}"
-            f"{'OI':>8}{'SPRD%':>7}{'SCORE':>7}  GROW")
+            f"{'OI':>8}{'SPRD%':>7}{'SCORE':>7}  PROSPER")
     lines = [head, "-" * len(head)]
     for c in cands:
         ct = c["contract"]
         g = c.get("grow") or {}
         grow_txt = "none" if not g.get("has_verdict") else (
             f"{g.get('verdict','?')}"
-            + (f"/D{g['durability']:.0f}" if g.get("durability") else "")
-            + (f"/fair{g['fair_high']:.0f}" if g.get("fair_high") else "")
+            + (f"/Q{g['durability']:.0f}" if g.get("durability") else "")
+            + (f"/tp{g['fair_high']:.0f}" if g.get("fair_high") else "")
+            + (f"/bb{g['buy_below']:.0f}" if g.get("buy_below") else "")
+            + (" NO-ADDS" if g.get("no_adds") else "")
             + (" STALE" if g.get("stale") else ""))
         lines.append(
             f"{c['candidate_id']:<16}{c['ticker']:<8}{c['strategy']:<18}{ct['expiry']:<11}"

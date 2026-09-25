@@ -325,9 +325,29 @@ def init_db():
         ("fair_high", "REAL"), ("cagr_spot", "REAL"), ("required_return", "REAL"),
         ("confidence", "TEXT"), ("price_at_run", "REAL"), ("memo_md", "TEXT"),
         # §8.1/§8.2 Revision 2 (05-Sep-2026): the five-rung ladder and the two
-        # new inputs it needs. grow_render.py reads these as flat columns, not
+        # new inputs it needs. The retired grow_render.py read these as flat columns, not
         # from the full_response JSON blob, so they must be persisted here too.
         ("acceptable_below", "REAL"), ("cash_returned", "REAL"), ("base_cost_of_equity", "REAL"),
+    ]
+    # PROSPER v5.13.1 (25-Sep-2026) — the card's resolved numbers, as flat columns so every
+    # page reads them without parsing full_response. Additive only: the GROW columns above stay,
+    # so superseded GROW rows remain readable (and are shown as superseded, never mapped).
+    _PROSPER_ANALYSIS_COLUMNS = [
+        ("q_score", "REAL"), ("reward_risk", "REAL"), ("reentry_price", "REAL"),
+        ("bear_price", "REAL"), ("base_price", "REAL"), ("bull_price", "REAL"),
+        ("break_price", "REAL"), ("prob_weighted_return", "REAL"),
+        ("buy_zone_low", "REAL"), ("buy_zone_high", "REAL"), ("walk_away", "TEXT"),
+        ("do_this", "TEXT"), ("regime_state", "TEXT"), ("starter_pct", "REAL"),
+        ("valid_until", "TEXT"), ("card_md", "TEXT"),
+        # 1 when the card blocks adding (Conduct Treatment, or a TRIM/SELL/AVOID call) —
+        # the Options Desk reads it so a short put, which is a conditional add, is never offered.
+        ("no_adds", "REAL"),
+    ]
+    # M11 calibration log: date · price · Q · rating · ratio · re-entry. The table keeps its
+    # GROW-era name — renaming a live Turso table buys nothing and risks the history.
+    _VERDICT_LOG_COLUMNS = [
+        ("q_score", "REAL"), ("reward_risk", "REAL"), ("reentry_price", "REAL"),
+        ("regime_state", "TEXT"), ("valid_until", "TEXT"),
     ]
 
     # ── Performance indexes on frequently queried columns ──
@@ -438,9 +458,15 @@ def init_db():
             except Exception:
                 pass  # Column already exists
         # GROW v5.1 engine columns
-        for _col, _type in _GROW_ANALYSIS_COLUMNS:
+        for _col, _type in _GROW_ANALYSIS_COLUMNS + _PROSPER_ANALYSIS_COLUMNS:
             try:
                 conn2.execute(f"ALTER TABLE prosper_analysis ADD COLUMN {_col} {_type}")
+                conn2.commit()
+            except Exception:
+                pass  # Column already exists
+        for _col, _type in _VERDICT_LOG_COLUMNS:
+            try:
+                conn2.execute(f"ALTER TABLE grow_verdict_log ADD COLUMN {_col} {_type}")
                 conn2.commit()
             except Exception:
                 pass  # Column already exists
@@ -2167,75 +2193,60 @@ def _num_or_none(v):
         return None
 
 
+# prosper_analysis columns written on every save, in order. JSON-typed ones are serialised.
+_ANALYSIS_TEXT = ("model_used", "rating", "archetype", "archetype_name", "conviction", "thesis",
+                  "env_net", "framework", "entry_verdict", "confidence", "memo_md",
+                  "walk_away", "do_this", "regime_state", "valid_until", "card_md")
+_ANALYSIS_JSON = ("score_breakdown", "key_risks", "key_catalysts", "full_response")
+_ANALYSIS_REAL = ("score", "fair_value_base", "fair_value_bear", "fair_value_bull", "upside_pct",
+                  "cost_estimate", "durability", "buy_below", "strong_buy_below", "reduce_above",
+                  "fair_high", "cagr_spot", "required_return", "price_at_run", "acceptable_below",
+                  "cash_returned", "base_cost_of_equity",
+                  # PROSPER v5.13.1
+                  "q_score", "reward_risk", "reentry_price", "bear_price", "base_price",
+                  "bull_price", "break_price", "prob_weighted_return", "buy_zone_low",
+                  "buy_zone_high", "starter_pct", "no_adds")
+
+
 def save_prosper_analysis(ticker: str, data: dict):
     """Save or update the latest analysis for a ticker (one row per ticker).
 
-    Works for both legacy PROSPER results and GROW v5.1 results — GROW rows also
-    fill the `framework`, `durability`, `entry_verdict`, price-ladder, `confidence`
-    and `memo_md` columns, and append a row to grow_verdict_log (§12.3).
+    PROSPER v5.13.1 rows fill the card columns (q_score, reward_risk, reentry_price, the three
+    case prices, buy zone, regime, card_md) as well as the shared ones other pages read
+    (rating, score, thesis, buy_below, fair_high). Every framework-tagged save also appends a
+    row to the calibration log (M11: date · price · Q · rating · ratio · re-entry).
     """
     ticker = ticker.strip().upper()
     run_date = data.get("analysis_date", datetime.now().strftime("%Y-%m-%d"))
+    cols = ["ticker", "analysis_date", "updated_at"]
+    vals = [ticker, run_date, datetime.now().isoformat()]
+    for c in _ANALYSIS_TEXT:
+        cols.append(c)
+        v = data.get(c)
+        vals.append(("sonnet" if v is None else v) if c == "model_used" else v)
+    for c in _ANALYSIS_JSON:
+        cols.append(c)
+        vals.append(json.dumps(data.get(c), default=str) if data.get(c) else None)
+    for c in _ANALYSIS_REAL:
+        cols.append(c)
+        vals.append(_num_or_none(data.get(c)))
     conn = _get_connection()
     try:
         conn.execute(
-            """INSERT OR REPLACE INTO prosper_analysis
-               (ticker, analysis_date, model_used, rating, score, archetype,
-                archetype_name, fair_value_base, fair_value_bear, fair_value_bull,
-                upside_pct, conviction, thesis, env_net, score_breakdown,
-                key_risks, key_catalysts, full_response, cost_estimate, updated_at,
-                framework, durability, entry_verdict, buy_below, strong_buy_below,
-                reduce_above, fair_high, cagr_spot, required_return, confidence,
-                price_at_run, memo_md, acceptable_below, cash_returned, base_cost_of_equity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                ticker,
-                run_date,
-                data.get("model_used", "sonnet"),
-                data.get("rating"),
-                _num_or_none(data.get("score")),
-                data.get("archetype"),
-                data.get("archetype_name"),
-                _num_or_none(data.get("fair_value_base")),
-                _num_or_none(data.get("fair_value_bear")),
-                _num_or_none(data.get("fair_value_bull")),
-                _num_or_none(data.get("upside_pct")),
-                data.get("conviction"),
-                data.get("thesis"),
-                data.get("env_net"),
-                json.dumps(data.get("score_breakdown"), default=str) if data.get("score_breakdown") else None,
-                json.dumps(data.get("key_risks"), default=str) if data.get("key_risks") else None,
-                json.dumps(data.get("key_catalysts"), default=str) if data.get("key_catalysts") else None,
-                json.dumps(data.get("full_response"), default=str) if data.get("full_response") else None,
-                _num_or_none(data.get("cost_estimate")),
-                datetime.now().isoformat(),
-                data.get("framework"),
-                _num_or_none(data.get("durability")),
-                data.get("entry_verdict"),
-                _num_or_none(data.get("buy_below")),
-                _num_or_none(data.get("strong_buy_below")),
-                _num_or_none(data.get("reduce_above")),
-                _num_or_none(data.get("fair_high")),
-                _num_or_none(data.get("cagr_spot")),
-                _num_or_none(data.get("required_return")),
-                data.get("confidence"),
-                _num_or_none(data.get("price_at_run")),
-                data.get("memo_md"),
-                _num_or_none(data.get("acceptable_below")),
-                _num_or_none(data.get("cash_returned")),
-                _num_or_none(data.get("base_cost_of_equity")),
-            ),
+            f"INSERT OR REPLACE INTO prosper_analysis ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' * len(cols))})",
+            tuple(vals),
         )
-        # Append-only calibration log for GROW runs
+        # Append-only calibration log
         if data.get("framework"):
             try:
                 conn.execute(
                     """INSERT INTO grow_verdict_log
                        (ticker, run_date, framework, tier, durability, entry_verdict, price_at_run,
                         buy_below, strong_buy_below, reduce_above, cagr_spot, required_return,
-                        confidence, user_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        confidence, user_id, q_score, reward_risk, reentry_price, regime_state,
+                        valid_until)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         ticker, run_date, data.get("framework"), data.get("model_used"),
                         _num_or_none(data.get("durability")), data.get("entry_verdict"),
@@ -2243,6 +2254,9 @@ def save_prosper_analysis(ticker: str, data: dict):
                         _num_or_none(data.get("strong_buy_below")), _num_or_none(data.get("reduce_above")),
                         _num_or_none(data.get("cagr_spot")), _num_or_none(data.get("required_return")),
                         data.get("confidence"), _current_user_id(),
+                        _num_or_none(data.get("q_score")), _num_or_none(data.get("reward_risk")),
+                        _num_or_none(data.get("reentry_price")), data.get("regime_state"),
+                        data.get("valid_until"),
                     ),
                 )
             except Exception:
@@ -2256,8 +2270,8 @@ def save_prosper_analysis(ticker: str, data: dict):
         pass
 
 
-def get_grow_verdict_log(ticker: str = None, limit: int = 500) -> pd.DataFrame:
-    """Return the append-only GROW verdict log (newest first), optionally for one ticker."""
+def get_verdict_log(ticker: str = None, limit: int = 500) -> pd.DataFrame:
+    """Return the append-only verdict log (newest first), optionally for one ticker."""
     conn = _get_connection()
     try:
         if ticker:
@@ -2272,6 +2286,9 @@ def get_grow_verdict_log(ticker: str = None, limit: int = 500) -> pd.DataFrame:
     finally:
         conn.close()
     return df
+
+
+get_grow_verdict_log = get_verdict_log   # the GROW-era name, kept for any caller not yet moved
 
 
 def get_prosper_analysis(ticker: str) -> Optional[Dict]:
@@ -2295,8 +2312,35 @@ def get_prosper_analysis(ticker: str) -> Optional[Dict]:
     return result
 
 
+_ANALYSES_SELECTS = (
+    # current schema
+    "SELECT ticker, analysis_date, rating, score, archetype, archetype_name, "
+    "fair_value_base, upside_pct, conviction, thesis, env_net, model_used, "
+    "framework, durability, entry_verdict, buy_below, strong_buy_below, "
+    "reduce_above, fair_high, cagr_spot, required_return, confidence, price_at_run, "
+    "q_score, reward_risk, reentry_price, bear_price, base_price, bull_price, "
+    "break_price, prob_weighted_return, buy_zone_low, buy_zone_high, walk_away, "
+    "do_this, regime_state, starter_pct, valid_until, no_adds "
+    "FROM prosper_analysis ORDER BY score DESC",
+    # pre-migration: PROSPER v5.13.1 columns not yet added
+    "SELECT ticker, analysis_date, rating, score, archetype, archetype_name, "
+    "fair_value_base, upside_pct, conviction, thesis, env_net, model_used, "
+    "framework, durability, entry_verdict, buy_below, strong_buy_below, "
+    "reduce_above, cagr_spot, required_return, confidence, price_at_run "
+    "FROM prosper_analysis ORDER BY score DESC",
+    # pre-migration: GROW columns not yet added
+    "SELECT ticker, analysis_date, rating, score, archetype_name, "
+    "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
+    "FROM prosper_analysis ORDER BY score DESC",
+)
+
+
 def get_all_prosper_analyses() -> pd.DataFrame:
-    """Retrieve all Prosper analyses as a DataFrame. Session-cached."""
+    """Retrieve all saved analyses (every framework) as a DataFrame. Session-cached.
+
+    Pages that act on a verdict want get_current_analyses() instead — this one also returns
+    rows written by retired frameworks (GROW v5.1, PROSPER v3.0).
+    """
     try:
         cached = st.session_state.get(_ANALYSES_CACHE_KEY)
         if cached is not None:
@@ -2305,23 +2349,15 @@ def get_all_prosper_analyses() -> pd.DataFrame:
         pass
 
     conn = _get_connection()
+    df = pd.DataFrame()
     try:
-        df = _read_sql(
-            "SELECT ticker, analysis_date, rating, score, archetype, archetype_name, "
-            "fair_value_base, upside_pct, conviction, thesis, env_net, model_used, "
-            "framework, durability, entry_verdict, buy_below, strong_buy_below, "
-            "reduce_above, cagr_spot, required_return, confidence, price_at_run "
-            "FROM prosper_analysis ORDER BY score DESC",
-            conn,
-        )
-    except Exception:
-        # Pre-migration schema (GROW columns not yet added)
-        df = _read_sql(
-            "SELECT ticker, analysis_date, rating, score, archetype_name, "
-            "fair_value_base, upside_pct, conviction, thesis, env_net, model_used "
-            "FROM prosper_analysis ORDER BY score DESC",
-            conn,
-        )
+        for i, sql in enumerate(_ANALYSES_SELECTS):
+            try:
+                df = _read_sql(sql, conn)
+                break
+            except Exception:
+                if i == len(_ANALYSES_SELECTS) - 1:
+                    raise
     finally:
         conn.close()
 
@@ -2330,6 +2366,19 @@ def get_all_prosper_analyses() -> pd.DataFrame:
     except Exception:
         pass
     return df
+
+
+def get_current_analyses() -> pd.DataFrame:
+    """Only the rows written by the current framework (core.framework_version).
+
+    P9: a different framework's levels are context, not a verdict — so a GROW Durability score
+    or buy-below never appears on a page as if PROSPER v5.13.1 had issued it.
+    """
+    from core.framework_version import FRAMEWORK_VERSION
+    df = get_all_prosper_analyses()
+    if df is None or df.empty or "framework" not in df.columns:
+        return pd.DataFrame(columns=list(df.columns) if df is not None else [])
+    return df[df["framework"].fillna("").astype(str).str.strip() == FRAMEWORK_VERSION].copy()
 
 
 def delete_prosper_analysis(ticker: str):

@@ -1,5 +1,31 @@
 # Prosper Release Notes
 
+## PROSPER v5.13.1 replaces GROW v5.1 (September 25, 2026)
+
+- **The analysis framework is now PROSPER v5.13.1** (model-agnostic edition, P1–P11), in
+  `prosper_framework/`. GROW v5.1 is archived under `docs/archive/grow_v5_1/`.
+- **The deliverable is the PROSPER CARD** — nine sections in plain English: what they do; score and
+  call with one "do this" line; why; bear/base/bull over 3 years; the reward:risk formula printed
+  with numbers; dated catalysts; action prices; what would prove it wrong; what couldn't be verified.
+- **Python still owns the arithmetic.** `resolve_card()` recomputes the score, the call, the ratio
+  `(bull − spot) ÷ (spot − stressed bear)`, every hard cap (buy needs ≥2× — else ACCUMULATE ON DIPS
+  with the release price `(bull + 2 × bear) ÷ 3`; F-INT → SELL; Conduct Treatment → HOLD, no adds;
+  P11 reporting-control flag; P4 dilution cap; AI-class ceilings) and overrides the model's words.
+- **Run types:** Screen · Delta (≤6 searches vs the last card) · Standard (≤12) · Full + memo (Opus).
+  Batches do one regime scan and ≤6 searches a name.
+- **Every page reads only current-framework rows.** Holdings, Evaluate, Security, Risk, Today and
+  Ask no longer show GROW Durability/Entry; a GROW row is flagged as superseded. **All names are
+  unrated until re-run.**
+- **Options Desk (HARVEST R1):** puts only at or below the card's `buy_below` (lower of buy-zone top
+  and the 2× line); calls only at or above its first take-profit. New: ACCUMULATE ON DIPS names may
+  get puts (strike ≤ buy_below); cards that say TRIM/SELL/AVOID or "no adds" never get a put.
+- **Evaluate** downloads the P7 cards file (master table, regime, anchor log, all cards); the
+  verdict log now records score, ratio, re-entry and regime (M11).
+- Scripts renamed: `prosper_batch.py`, `prosper_prompt.py`, `prosper_import.py`.
+- Tests: `tests/test_prosper_engine.py` (34) + `prosper_framework/prosper_verify.py`.
+
+---
+
 ## v7.1 — Google sign-in completes, real broker files import, find-my-data (September 5, 2026)
 
 - **Google sign-in "Page not found"**: the OAuth callback page (`/OAuth_Callback`) was never

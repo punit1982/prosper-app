@@ -108,7 +108,7 @@ def _rebuild_slate():
     from core import options_data as _od
     from core.database import (
         get_chain_snapshots as _gcs, get_all_holdings as _gah,
-        get_all_prosper_analyses as _gapa, get_open_harvest_positions as _gohp,
+        get_current_analyses as _gapa, get_open_harvest_positions as _gohp,
         save_harvest_slate as _shs, log_harvest_recommendations as _lhr,
     )
 
@@ -300,7 +300,7 @@ else:
                 ("Roll", t.get("roll_trigger") or "—"),
                 ("Volatility", f"IV30 {(t.get('iv30') or 0):.1f} vs realised {(t.get('hv20') or 0):.1f} "
                                f"= {(t.get('vrp') or 0):.2f}×"),
-                ("GROW", t.get("grow_note") or "—"),
+                ("PROSPER", t.get("grow_note") or "—"),
                 ("Earnings", t.get("earnings_note") or "—"),
             ]
             if t.get("max_loss") is not None:

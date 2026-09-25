@@ -42,7 +42,7 @@ with st.sidebar:
     show_unrealized = st.checkbox("Unrealized P&L",   value=SETTINGS.get("pref_dash_show_unrealized", True))
     show_extended   = st.checkbox("Extended Metrics (52W, FWD PE, Target)", value=SETTINGS.get("pref_dash_show_extended", False))
     show_growth     = st.checkbox("Growth & Financials", value=SETTINGS.get("pref_dash_show_growth", False))
-    show_prosper     = st.checkbox("GROW verdicts (Durability · Entry · Buy below)", value=SETTINGS.get("pref_dash_show_prosper", False))
+    show_prosper     = st.checkbox("PROSPER cards (Score · Call · Buy below)", value=SETTINGS.get("pref_dash_show_prosper", False))
     show_broker     = st.checkbox("Broker", value=SETTINGS.get("pref_dash_show_broker", False))
 
     # Auto-persist preferences when changed
@@ -503,20 +503,18 @@ def _build_stock_table(sub_df, sym):
             display["ROE"] = sub_df["roe"].apply(fmt_pct_plain).values
 
     if show_prosper:
-        # GROW rule 20: a verdict never travels without its Durability score and buy-below price.
-        # Legacy PROSPER rows (no framework tag) are superseded (rule 22) and shown blank.
-        from core.database import get_all_prosper_analyses
-        prosper_df = get_all_prosper_analyses()
+        # A call never travels without its score and buy-below price. Rows written by a retired
+        # framework (GROW v5.1, PROSPER v3.0) are superseded — shown blank, never mapped (P9).
+        from core.database import get_current_analyses
+        prosper_df = get_current_analyses()
         if not prosper_df.empty:
-            if "framework" in prosper_df.columns:
-                prosper_df = prosper_df[prosper_df["framework"].fillna("").str.startswith("GROW")]
-            prosper_map = prosper_df.set_index("ticker").to_dict("index") if not prosper_df.empty else {}
+            prosper_map = prosper_df.set_index("ticker").to_dict("index")
             tickers = sub_df["ticker"].values
-            display["Durability"] = [
-                f"{prosper_map[t]['durability']:.0f}" if t in prosper_map and pd.notna(prosper_map[t].get("durability")) else ""
+            display["Score"] = [
+                f"{prosper_map[t]['q_score']:.1f}" if t in prosper_map and pd.notna(prosper_map[t].get("q_score")) else ""
                 for t in tickers
             ]
-            display["GROW Entry"] = [prosper_map.get(t, {}).get("entry_verdict") or "" for t in tickers]
+            display["PROSPER Call"] = [prosper_map.get(t, {}).get("entry_verdict") or "" for t in tickers]
             display["Buy below"] = [
                 f"{prosper_map[t]['buy_below']:,.2f}" if t in prosper_map and pd.notna(prosper_map[t].get("buy_below")) else ""
                 for t in tickers
@@ -626,8 +624,8 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
         signed_cols = [c for c in stock_display.columns
                        if any(kw in c for kw in ["Day P&L", "Day %", "P&L (", "Return %", "Upside %"])]
         rating_cols = [c for c in stock_display.columns if c == "Rating"]
-        ai_rating_cols = [c for c in stock_display.columns if c == "GROW Entry"]
-        durability_cols = [c for c in stock_display.columns if c == "Durability"]
+        ai_rating_cols = [c for c in stock_display.columns if c == "PROSPER Call"]
+        score_cols = [c for c in stock_display.columns if c == "Score"]
 
         styled = stock_display.style
         if signed_cols:
@@ -635,19 +633,12 @@ def _render_currency_section(currency_df, sym, currency_label, tab_key):
         if rating_cols:
             styled = styled.map(_rating_color_from_label, subset=rating_cols)
         if ai_rating_cols:
-            def _ai_rating_color(val):
-                v = str(val).strip().upper()
-                if v in ("STRONG BUY", "BUY"):
-                    return "color: #047857; font-weight: 600"
-                elif v in ("SELL", "STRONG SELL"):
-                    return "color: #b91c1c; font-weight: 600"
-                elif v == "HOLD":
-                    return "color: #96590a; font-weight: 600"
-                return ""
-            styled = styled.map(_ai_rating_color, subset=ai_rating_cols)
-        if durability_cols:
-            from core.grow_render import durability_color as _dcol
-            styled = styled.map(lambda v: f"color: {_dcol(v)}; font-weight: 600" if str(v).strip() else "", subset=durability_cols)
+            from core.prosper_render import call_color as _ccol
+            styled = styled.map(lambda v: f"color: {_ccol(v)}; font-weight: 600" if str(v).strip() else "",
+                                subset=ai_rating_cols)
+        if score_cols:
+            from core.prosper_render import score_color as _scol
+            styled = styled.map(lambda v: f"color: {_scol(v)}; font-weight: 600" if str(v).strip() else "", subset=score_cols)
 
         label = f"📈 Stocks — {len(stocks_df)}" if has_type_info else f"Holdings — {len(stocks_df)}"
         # No caption here: position_rows prints the same count as its group
