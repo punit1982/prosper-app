@@ -10,9 +10,9 @@ a batch run down with it on the first name.
 
 Everything the batch path actually needs is already covered without yfinance: prices come
 from the Yahoo `chart` endpoint and the price cache, fundamentals from Finnhub/FMP, and
-GROW's standard/full tiers retrieve the real figures from filings via web search anyway.
-The only thing lost is the aggregator financial-statement block in the Tier-5 snapshot,
-which GROW treats as confirmation-only under §6.2 and never as a price-setting number.
+PROSPER's web tiers retrieve the real figures from filings via web search anyway.
+The only thing lost is the aggregator financial-statement block in the data snapshot,
+which PROSPER treats as confirmation only and never as a price-setting number.
 
 Do NOT put this on the path for the app itself.
 """

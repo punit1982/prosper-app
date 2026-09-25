@@ -14,7 +14,7 @@ provenance.
 
 This replaces that for US filers. Every figure below arrives as a number, tagged with the form
 (10-K / 10-Q), the fiscal period, the filing date and the accession number — which is exactly the
-Class A, primary-source evidence GROW §6 asks for and an HTML fetch can never provide. Searches
+primary-document evidence the analysis framework asks for and an HTML fetch can never provide. Searches
 are then free to be spent on what XBRL genuinely cannot give: guidance, competitive position,
 management credibility.
 
@@ -202,7 +202,7 @@ _METRICS: Dict[str, Tuple[str, List[str]]] = {
         "LongTermDebtAndCapitalLeaseObligations"]),
     "short_term_debt": ("us-gaap", [
         "LongTermDebtCurrent", "ShortTermBorrowings", "DebtCurrent"]),
-    # The cover-page share count GROW asks for by name. dei is authoritative; some filers
+    # The cover-page share count PROSPER asks for by name (P4: filing cover pages). dei is authoritative; some filers
     # (HIMS) omit it, so fall through to the balance-sheet count.
     "shares_outstanding": ("dei", ["EntityCommonStockSharesOutstanding"]),
     "shares_outstanding_alt": ("us-gaap", [
@@ -267,7 +267,7 @@ def _series(facts: dict, taxonomy: str, concepts: List[str], *, annual_only: boo
 
 
 def extract_financials(facts: dict, *, years: int = 4) -> dict:
-    """Every GROW Class A metric this filer reports, with provenance."""
+    """Every primary-filing metric this filer reports, with provenance."""
     out: Dict[str, dict] = {}
     for name, (tax, concepts) in _METRICS.items():
         rows, used = _series(facts, tax, concepts,
@@ -325,14 +325,14 @@ def filing_snapshot(ticker: str, *, years: int = 4) -> Optional[dict]:
             return None
 
         lines = [
-            f"SEC EDGAR XBRL — PRIMARY FILING DATA (Class A evidence, §6 source ladder)",
+            f"SEC EDGAR XBRL — PRIMARY FILING DATA (named primary documents — cite the accession number)",
             f"Entity: {facts.get('entityName') or ticker} · CIK {cik:010d}",
             "Every figure below is as-filed and carries the accession number of the filing it",
             "came from. These are NOT aggregator estimates — do not re-derive them from the web.",
             "",
         ]
 
-        # Cover-page share count first: GROW asks for it by name.
+        # Cover-page share count first: PROSPER P4 asks for it by name.
         sh = fin.get("shares_outstanding") or fin.get("shares_outstanding_alt")
         if sh and sh["observations"]:
             o = sh["observations"][0]

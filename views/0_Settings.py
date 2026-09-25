@@ -138,7 +138,7 @@ with st.expander("📊 Dashboard preferences — which columns show on Holdings"
     with col_d2:
         st.markdown("**Additional Columns**")
         show_broker     = st.checkbox("Broker Source", value=current.get("pref_dash_show_broker", False), key="s_broker")
-        show_prosper    = st.checkbox("GROW verdicts (Durability · Entry)", value=current.get("pref_dash_show_prosper", False), key="s_prosper")
+        show_prosper    = st.checkbox("PROSPER cards (Score · Call · Buy below)", value=current.get("pref_dash_show_prosper", False), key="s_prosper")
         auto_ext = st.checkbox("Auto-load Extended Metrics", value=current.get("pref_dash_auto_extended", False),
                                 help="Automatically fetch extended data when prices load", key="s_auto_ext")
 

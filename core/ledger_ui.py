@@ -562,11 +562,11 @@ def verdict(word: str) -> str:
     w = (word or "").strip().upper()
     if w in ("STRONG BUY", "STRONG_BUY", "ADD", "ACCUMULATE"):
         return VERDICT_RAMP["strong_positive"]
-    if w in ("BUY", "HOLD+", "OVERWEIGHT"):
+    if w in ("BUY", "HOLD+", "OVERWEIGHT", "ACCUMULATE ON DIPS"):
         return VERDICT_RAMP["positive"]
     if w in ("SELL", "TRIM", "REDUCE", "UNDERWEIGHT"):
         return VERDICT_RAMP["negative"]
-    if w in ("STRONG SELL", "STRONG_SELL", "EXIT"):
+    if w in ("STRONG SELL", "STRONG_SELL", "EXIT", "AVOID"):
         return VERDICT_RAMP["strong_negative"]
     return VERDICT_RAMP["neutral"]
 

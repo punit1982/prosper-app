@@ -17,7 +17,7 @@ from datetime import date, timedelta
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 # yfinance segfaults (SIGSEGV, exit 139) for every ticker in the local venv on Python 3.14, and
-# importing core.grow_engine pulls it in transitively. A segfault produces NO output and exit
+# importing core.prosper_engine pulls it in transitively. A segfault produces NO output and exit
 # 139, which looks exactly like a silent pass — this suite reported "nothing" for one run before
 # that was spotted. Load the inert stand-in first so the tests are self-contained.
 sys.path.insert(0, os.path.join(_ROOT, "scripts", "_stub"))
@@ -193,7 +193,7 @@ def test_r1_buy_rated_without_a_ladder_stands_aside():
                         grow={"entry_verdict": "STRONG BUY", "durability": 80,
                               "analysis_date": date.today().isoformat()})
     assert oe._covered_call_candidates(ctx) == []
-    assert any("fair-high" in r["reason"] for r in rejects)
+    assert any("take-profit" in r["reason"] for r in rejects)   # PROSPER names it take-profit
 
 
 def test_r1_put_ceiling_binds_even_for_universe_names():
@@ -445,14 +445,14 @@ def test_slice_chain_survives_a_missing_spot():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROW batch targeting — both bugs here shipped and cost real money
+# PROSPER batch targeting — both bugs here shipped (under GROW) and cost real money
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _grow_batch():
     import importlib.util as _u
     spec = _u.spec_from_file_location(
-        "grow_batch", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   "scripts", "grow_batch.py"))
+        "prosper_batch", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                      "scripts", "prosper_batch.py"))
     m = _u.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
@@ -473,7 +473,7 @@ def test_real_businesses_are_kept():
 
 
 def test_wrappers_are_skipped():
-    """GROW scores businesses. A durability memo on a Treasury ETF is $1.40 for nothing."""
+    """PROSPER scores businesses. A card on a Treasury ETF is money spent for nothing."""
     m = _grow_batch()
     for t, n in [("U03A.L", "iShares Treasury Bond ETF"), ("JEPG", "JPM GB EQ PR IN ACT"),
                  ("PDI", "Pimco Dynamic Inco"), ("QYLD", "GX NASDAQ 100 COV C"),
@@ -580,103 +580,44 @@ def test_snapshot_returns_none_for_non_filers():
     assert ec.filing_snapshot("") is None
 
 
-def test_grow_snapshot_separates_primary_from_aggregator():
-    """If the model is told as-filed XBRL is Tier-5 aggregator data it will re-fetch it, and the
+def test_prosper_snapshot_separates_primary_from_aggregator():
+    """If the model is told as-filed XBRL is aggregator data it will re-fetch it, and the
     entire saving evaporates."""
-    from core import grow_engine as ge
+    from core import prosper_engine as pe
     edgar = {"text": "SEC EDGAR XBRL — PRIMARY FILING DATA\nRevenue: 1000"}
-    text, _ = ge.build_data_snapshot("TEST", info={"longName": "T"}, edgar=edgar)
-    assert text.index("PRIMARY FILING DATA") < text.index("Tier-5 aggregator data")
+    text, _ = pe.build_data_snapshot("TEST", info={"longName": "T"}, edgar=edgar)
+    assert text.index("PRIMARY FILING DATA") < text.index("aggregator data")
     assert "confirmation only" in text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cowork import — the §8 resolver must override a hand-produced memo exactly as
-# it overrides an API one, or the two paths drift and Rule 1 reads a wrong ladder.
+# HARVEST reading a PROSPER card
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _cowork_reply(**over):
-    entry = {"verdict": "HOLD", "price": 259.40, "required_return": 0.109,
-             "base_cost_of_equity": 0.089, "cash_returned": 8.0, "central_value": 340.0,
-             # Deliberately absurd — the resolver must replace every one of these.
-             "ladder": {"strong_buy_below": 1.0, "buy_below": 2.0, "acceptable_below": 3.0,
-                        "fair_high": 4.0, "reduce_above": 4.0},
-             "caps": [], "ceilings": []}
-    entry.update(over.pop("entry", {}))
-    payload = {
-        "ticker": "CRM", "company": "Salesforce, Inc.",
-        "classification": {"archetype": "T2", "horizon_years": 4.0},
-        "durability": {"score": 71, "band": "Strong", "integrity_level": "0", "criteria": []},
-        "entry": entry,
-        "cases": {"base": {"price": 340.0}, "bull": {"price": 460.0}},
-        "confidence": "reasonably confident", "uncertainties": [],
-    }
-    payload.update(over)
-    return "# Memo\n\nSome prose.\n\n```json\n" + json.dumps(payload) + "\n```\n"
+def test_no_adds_card_never_gets_a_short_put():
+    """A short put is a conditional add. A card under the Conduct Treatment ("hold, no adds")
+    or a TRIM/SELL/AVOID call must never be offered one — even on an assignment-grade name
+    whose put would otherwise clear every gate."""
+    contracts = [_c("NKE261016P00035000", "P", 35.0, 39, bid=0.80, ask=0.84, delta=-0.23)]
+    base = {"q_score": 60, "buy_below": 36.0, "fair_high": 50.0,
+            "analysis_date": date.today().isoformat()}
+    ctx, _ = _ctx("NKE", 38.42, contracts, grow={**base, "entry_verdict": "HOLD"})
+    assert oe._cash_secured_put_candidates(ctx), "control: the put clears every gate"
+    for g in ({**base, "entry_verdict": "HOLD", "no_adds": 1.0},
+              {**base, "entry_verdict": "TRIM"},
+              {**base, "entry_verdict": "SELL"},
+              {**base, "entry_verdict": "AVOID"}):
+        ctx, rejects = _ctx("NKE", 38.42, contracts, grow=g)
+        assert oe._cash_secured_put_candidates(ctx) == [], g
+        assert any("no adds" in r["reason"] for r in rejects)
 
 
-def _assemble(text, ticker="CRM", price=259.40):
-    from core import grow_engine as ge
-    data = ge._extract_json_block(text)
-    return ge.assemble_result(ticker, data, ge._strip_json_block(text), tier="cowork",
-                              price_quote={"price": price, "source": "test"})
-
-
-def test_cowork_ladder_is_recomputed_not_trusted():
-    """The memo's ladder said 1.0 / 2.0 / 4.0. Python must replace all of it."""
-    res, err = _assemble(_cowork_reply())
-    assert res, err
-    assert res["fair_high"] == 348.0                       # central 340 + cash 8
-    assert abs(res["buy_below"] - 230.07) < 0.5            # 348 / 1.109^4
-    assert abs(res["strong_buy_below"] - 174.12) < 0.5     # 348 / 1.189^4
-    assert res["buy_below"] > 2.0 and res["fair_high"] > 4.0
-
-
-def test_cowork_verdict_is_recomputed_from_the_arithmetic():
-    """§8.1 is a table, not an opinion. A memo claiming STRONG BUY on numbers that do not
-    support it gets corrected, and the disagreement is recorded."""
-    res, _ = _assemble(_cowork_reply(entry={"verdict": "STRONG BUY"}))
-    assert res["entry_verdict"] == "HOLD"
-    assert res["model_entry_verdict"] == "STRONG BUY"
-    assert any("recomputed by arithmetic" in u for u in res["uncertainties"])
-
-
-def test_cowork_import_matches_the_api_path_exactly():
-    """Both paths go through assemble_result, so identical JSON must give identical numbers."""
-    from core import grow_engine as ge
-    text = _cowork_reply()
-    data = ge._extract_json_block(text)
-    a, _ = ge.assemble_result("CRM", data, "", tier="cowork",
-                              price_quote={"price": 259.40, "source": "t"})
-    b, _ = ge.assemble_result("CRM", data, "", tier="full_lean",
-                              price_quote={"price": 259.40, "source": "t"})
-    for k in ("entry_verdict", "durability", "buy_below", "strong_buy_below",
-              "fair_high", "acceptable_below", "cagr_spot"):
-        assert a[k] == b[k], k
-
-
-def test_cowork_rejects_a_missing_durability_score():
-    """Rule 20: a run without a Durability score is rejected, not filed with a blank."""
-    res, err = _assemble(_cowork_reply(durability={"band": "Strong"}))
-    assert res is None and "Durability" in err
-
-
-def test_cowork_needs_a_price_to_solve_against():
-    from core import grow_engine as ge
-    text = _cowork_reply(entry={"price": None})
-    data = ge._extract_json_block(text)
-    res, _ = ge.assemble_result("CRM", data, "", tier="cowork", price_quote=None)
-    # No price means no ladder — the resolver returns nothing rather than inventing one.
-    assert res is None or res.get("buy_below") in (None, 2.0)
-
-
-def test_brief_carries_the_primary_data_divider():
-    """The brief must tell Cowork which half of the snapshot is Class A, or it re-fetches it."""
-    from core import grow_engine as ge
-    text, _ = ge.build_data_snapshot(
-        "TEST", info={"longName": "T"},
-        edgar={"text": "SEC EDGAR XBRL — PRIMARY FILING DATA\nRevenue: 1000"})
-    assert "PRIMARY FILING DATA" in text and "Tier-5 aggregator data" in text
+def test_accumulate_on_dips_can_write_puts_below_buy_below():
+    """ACCUMULATE ON DIPS is a buy held back only by price; buy_below is the release price."""
+    g = oe._grow_for("ZZZZ", {"ZZZZ": {"entry_verdict": "ACCUMULATE ON DIPS", "q_score": 70,
+                                       "buy_below": 95.0, "analysis_date": TODAY.isoformat()}})
+    assert g["has_verdict"] and not g["no_adds"] and g["verdict"] in oe.PUT_WRITABLE_CALLS
+    assert g["durability"] == 70                       # the score travels in the old slot
 
 
 if __name__ == "__main__":

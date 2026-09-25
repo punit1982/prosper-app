@@ -1,4 +1,13 @@
-# Prosper — Handoff (9 Sep 2026, current at v7.38)
+# Prosper — Handoff (9 Sep 2026, current at v7.38; framework swap 25 Sep 2026)
+
+> **25 Sep 2026 — GROW v5.1 is retired. The analysis framework is PROSPER v5.13.1**
+> (`prosper_framework/PROSPER v5.13.1 MODEL-AGNOSTIC.md`, engine `core/prosper_engine.py`, card
+> view `core/prosper_render.py`). GROW is archived in `docs/archive/grow_v5_1/`. Every GROW
+> verdict in the database is **superseded, never mapped** (P9): pages read only
+> `get_current_analyses()`, so every name is unrated until it is re-run under PROSPER — including
+> for the Options Desk's Rule 1. Anything below that still says "GROW" describes history.
+> After ANY edit to the framework file run `python3 prosper_framework/prosper_verify.py` and
+> expect `RESULT: ALL CHECKS PASS`.
 
 Paste this whole file into a new chat to continue. Everything below is verified unless marked
 otherwise. Version-by-version history lives in `docs/HANDOFF_ARCHIVE.md` — read that only when you
@@ -71,7 +80,7 @@ code. He reads on a phone a lot; mobile is a first-class surface, not an afterth
 - **`yfinance` segfaults locally for ANY ticker** in this venv (Python 3.14). Pre-existing, unrelated
   to app code, production 3.12 is fine. Stub it (see below) rather than fighting it.
 - Old folder `~/Documents/Prosper with Claude March 2026/` is legacy — don't use.
-- Sibling folders: `New GROW Prompts/` (source of GROW framework revisions), `Portfolio Info/`
+- Sibling folders: `New GROW Prompts/` (source of framework revisions — GROW then PROSPER), `Portfolio Info/`
   (real broker exports, Sep 2026).
 
 ### The preview harness — how to actually SEE the signed-in app
@@ -140,13 +149,16 @@ credentials, no repo changes:
   IDs at runtime across both market paths; the static `ADX_CHART_IDS` map is an optimisation, not the
   supported-ticker list. Day change uses the previous **session** close from the daily history CSV.
 - `core/ibkr_client.py` / `core/ibkr_sync.py` / `core/ibkr_prices.py` — Flex Query web service.
-- `core/grow_engine.py` — **GROW v5.1** (PROSPER v3.0 retired). Framework text in `grow/` sent as a
-  cached system block. Tiers: screen (Sonnet 5), standard (Sonnet 5 + web search), full (Opus 5).
-  The deterministic §8 resolver `resolve_entry()` recomputes Entry verdict + 5-rung ladder from the
-  model's own JSON and **overrides the model's arithmetic** — by design, but it must be kept in exact
-  sync with CORE.md or it silently replaces correct numbers with stale ones. After ANY change to
-  `grow/*.md` run `venv/bin/python3 grow/grow_verify.py "grow/GROW v5 1 CORE 04Sep2026.md"` and
-  expect `RESULT: ALL CHECKS PASS`.
+- `core/prosper_engine.py` — **PROSPER v5.13.1** (GROW v5.1 retired 25-Sep-2026; PROSPER v3.0 before
+  it). Framework text in `prosper_framework/` sent as a cached system block. Tiers: screen (Sonnet 5,
+  no web), delta (≤6 searches, needs a prior PROSPER card), standard (≤12), full (Opus 5 + memo).
+  Batch runs cap at ≤6 searches a name and reuse the first result's regime (§A). The deterministic
+  resolver `resolve_card()` recomputes Q, the call, the P3 ratio, D5, every hard cap, the re-entry
+  line and the probability-weighted return from the model's own JSON and **overrides the model's
+  arithmetic** — so it must be kept in exact sync with the .md. After ANY change to the framework
+  run `python3 prosper_framework/prosper_verify.py` and expect `RESULT: ALL CHECKS PASS`.
+  `assemble_result()` is the single path for API and chat-window (`scripts/prosper_import.py`) runs.
+  Card view: `core/prosper_render.py`. Version filter: `core/framework_version.py`.
 - `core/edgar_client.py` — SEC EDGAR XBRL: primary filing data for US names, free, with
   accession numbers. See §8.
 - `core/options_data.py` + `core/vol_metrics.py` + `core/options_engine.py` + `harvest/` —
@@ -230,7 +242,7 @@ every page — including ones never individually converted — gets 44px tap tar
 
 `st.metric` was mostly replaced by `stat_grid` / `hero_metric` (was 78) — but **23 `.metric()`
 calls remain**, all written as `colN.metric(...)` on `st.columns` objects, in `8_Sentiment.py`,
-`7_Analyst_Consensus.py`, `5_Performance.py` and `core/grow_render.py`. They still depend on the
+`7_Analyst_Consensus.py` and `5_Performance.py` (the `core/grow_render.py` ones went with GROW). They still depend on the
 `[data-testid="stMetric*"]` CSS in `app.py`. Finishing the conversion is P3-11 (§12).
 
 Measured on a real 375×812 viewport against the real portfolio: Command Center went from 4.5 screens
@@ -376,10 +388,11 @@ are *measured leads, not facts*; re-verify each against the current code before 
 
 ### Standing items that belong to no phase
 
-1. **Run GROW across the book and the universe — through Cowork, not the API.** Still the critical
-   path. Rule 1 of the options doctrine cannot be evaluated without a Durability score and a price
-   ladder, so **every assignment-grade name currently produces a PROVISIONAL ticket**. See §9; it
-   costs nothing per token. Two names are done: NKE (screen) and ADBE (full_lean).
+1. **Run PROSPER v5.13.1 across the book and the universe.** The critical path, and reset to zero
+   by the framework swap: GROW's NKE and ADBE runs no longer count. Rule 1 of the options doctrine
+   reads the card's `buy_below` and first take-profit (`fair_high`), so **every name produces a
+   PROVISIONAL ticket until it has a PROSPER card**. Cheapest: `scripts/prosper_prompt.py` +
+   `prosper_import.py` in a chat window (§9), or `scripts/prosper_batch.py --universe --tier screen`.
 2. **Paper-trade HARVEST before placing a real order.** Log the slate daily without acting, then
    measure what fraction would have expired worthless and whether the doctrine's rejections were
    right. An options engine that has never been measured is a confident-sounding random number
@@ -395,21 +408,20 @@ are *measured leads, not facts*; re-verify each against the current code before 
 5. **`PROSPER_COOKIE_SECRET` is only 18 bytes** on production — JWT logs an
    `InsecureKeyLengthWarning` (non-fatal, HS256 works). Regenerate as 32 bytes
    (`python -c "import secrets;print(secrets.token_hex(32))"`); existing sessions need one re-login.
-6. **GROW Annex E calibration** — the archetype premium/required-return table
-   (`grow/GROW v5 1 ANNEX E ARCHETYPE LOOKUPS.md`) is a **mechanical linear rescale of
-   pre-compression values, explicitly labelled a placeholder**, chosen by Punit as a stopgap.
-   Replace with real per-archetype judgment when he is ready. Do not treat the numbers as final.
+6. **~~GROW Annex E calibration~~** — moot: GROW is retired. PROSPER v5.13.1's own open calibration
+   item is the first M11 read on **16-Mar-2027** (the verdict log now records Q, ratio and re-entry).
 7. **Exhicon (`543895.BO`)** — Yahoo shows ₹258.55 against Trendlyne's ₹469.85 and a 52-week range
    of 220–440. That looks like a corporate action; **the share count needs confirming before the
    position value is trusted.**
 8. **`PRYM.MI` should be `PRY.MI`.** IBKR writes Prysmian with a trailing lowercase share-class
    marker, and the parser keeps it. The pipeline prices it anyway via Boerse Frankfurt by ISIN — a
    fair demonstration of why capturing the ISIN mattered — but the ticker is still wrong.
-9. **A/B `full_lean` against `full` on two or three names.** `full_lean` (Sonnet, 25 searches, 18k
-   fetch content) is measured at $1.27 and produces a complete result. Whether the memo is as *good*
-   as Opus at 40k content is unmeasured. Cost can be modelled; quality has to be compared.
-10. **Never map old PROSPER-era verdicts onto GROW.** Every GROW verdict shown must carry Durability
-    + Entry arithmetic. Positions are never sent to the engine.
+9. **Measure a live PROSPER run.** The engine was verified offline (resolver, DB, pages, a fake-API
+   end-to-end test) but no live API run existed when it shipped. Tier costs in `PROSPER_TIERS` are
+   estimates until measured; compare Standard (Sonnet) against Full (Opus) on two names.
+10. **Never map a retired framework's verdicts onto PROSPER.** GROW Durability is not a PROSPER score;
+    pages read `get_current_analyses()`. Every call shown carries its score and the printed ratio.
+    Positions are never sent to the engine (P1).
 
 **Closed since the last handoff:** the whole of Phase 2 (§11 ledger — 7 findings shipped across
 `7d7108d`…`e575e69`, 2 dropped as non-bugs, 1 reverted); the whole of Phase 1 (§6);
@@ -522,7 +534,9 @@ suite reported nothing for one run before that was noticed.
 against seeded verdicts, not production ones; and the engine has never been paper-traded — see
 open item 10.
 
-## 9. Running GROW on the Pro subscription instead of the API (v7.20)
+## 9. Running the framework on the subscription instead of the API (v7.20; PROSPER since 25 Sep)
+
+**Now:** `scripts/prosper_prompt.py` → paste into a conversation with `prosper_framework/PROSPER v5.13.1 MODEL-AGNOSTIC.md` attached → `scripts/prosper_import.py`. Same guarantee as below, via `core.prosper_engine.assemble_result()`. The rest of this section is the GROW-era record.
 
 The API is the expensive path: **$1.27 a name measured** at `full_lean`, ~$25 for twenty
 holdings. Punit's decision is to run GROW in **Claude Cowork** on his existing Pro limits

@@ -1,7 +1,7 @@
 # HARVEST v1.0 — Options Doctrine
 
 The rules the Prosper Options Desk trades by. This file is sent to Claude as a **cached system
-block**, exactly as the GROW framework is, so a day's run pays for it once at the cache-read rate.
+block**, exactly as the PROSPER framework is, so a day's run pays for it once at the cache-read rate.
 
 Harvest writes tickets. It never places an order. Every number on a ticket is computed in Python by
 `core/options_engine.resolve_order()` and **overrides** anything the model writes — the model's job
@@ -34,20 +34,27 @@ are real, not illustrative.
 
 ## 1. The strike must be a price you would sell at anyway
 
-The keystone rule, and where GROW earns its keep.
+The keystone rule, and where PROSPER v5.13.1 earns its keep.
 
 A covered call is a contract to sell shares at the strike. So the strike must sit **at or above
-GROW's `fair_high` / `reduce_above` rung** for that name. If GROW says fair value tops out near
-$180, writing the $180 call is sound whichever way it resolves: keep the premium, or sell at a
-price already judged full — plus the premium on top.
+the PROSPER card's first take-profit price** (`fair_high`; the base case when the card names no
+take-profit) for that name. If the card says take the first quarter off at $180, writing the $180
+call is sound whichever way it resolves: keep the premium, or sell at a price already judged
+worth selling at — plus the premium on top.
 
-Conversely, if GROW rates the name **BUY or STRONG BUY with material room to `fair_high`**, do not
-write a call on it at any premium. Capping the upside on the best ideas to earn 3% is how income
-strategies quietly destroy portfolios.
+Conversely, if PROSPER rates the name **BUY or STRONG BUY with material room to that price**, do
+not write a call on it at any premium. Capping the upside on the best ideas to earn 3% is how
+income strategies quietly destroy portfolios.
 
-- No GROW verdict on file → the rule cannot be evaluated. The ticket is marked **PROVISIONAL** and
-  ranked below any idea that passes cleanly. It is never silently treated as a pass.
-- A GROW verdict older than 90 days is stale: usable, but flagged.
+The put side reads the card's **`buy_below`**: the lower of the card's buy-zone top and the price
+at which its printed reward:risk reaches 2×, `(bull + 2 × bear) ÷ 3`. A short-put strike never
+sits above it — you only agree to buy at a price PROSPER already calls buy-worthy.
+
+- No PROSPER card on file → the rule cannot be evaluated. The ticket is marked **PROVISIONAL** and
+  ranked below any idea that passes cleanly. It is never silently treated as a pass. A verdict
+  from the retired GROW framework does not count — it is context, not a card.
+- A PROSPER card older than 90 days is stale (the framework's own validity window): usable, but
+  flagged.
 
 ## 2. Never sell cheap volatility
 
@@ -78,8 +85,11 @@ Permitted, because the collateral is real. Bounded, because assignment is not hy
 
 - Total collateral committed to open short puts must not exceed **60%** of the liquid collateral
   ledger. The remainder is the buffer that keeps the carry trade safe.
-- Only names in the assignment-grade universe (`harvest/universe.py`) or already-held names GROW
-  rates BUY or better.
+- Only names in the assignment-grade universe (`harvest/universe.py`) or already-held names
+  PROSPER rates BUY, STRONG BUY or ACCUMULATE ON DIPS (a buy held back only by price — and
+  `buy_below` is exactly the price that releases it).
+- **Never** on a name whose card says TRIM, SELL or AVOID, or blocks adding (the Conduct
+  Treatment's "no adds until resolved"). A short put is a conditional add.
 - Tier A (<$15k/contract): normal sizing. Tier B ($15–40k): one position at a time. Tier C
   (>$40k/contract): **never** a naked short put; spreads and covered calls only.
 - Every put ticket states the **dollar cost of assignment** as prominently as the credit.
@@ -87,7 +97,7 @@ Permitted, because the collateral is real. Bounded, because assignment is not hy
 
 ## 5. Never write against the whole position
 
-Cap short calls at **50%** of a lot; **33%** on anything GROW rates BUY or better. Upside is kept on
+Cap short calls at **50%** of a lot; **33%** on anything PROSPER rates BUY or better. Upside is kept on
 the part not written.
 
 ## 6. Earnings are a blackout

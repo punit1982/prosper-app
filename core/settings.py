@@ -264,7 +264,7 @@ CLAUDE_MODEL_PRIORITY = [
 # outage was silently switching every call (chat, briefings, screenshot
 # parsing) to Opus, which has extended thinking on and costs several times as
 # much per call. A caller that genuinely wants Opus still passes
-# preferred_model="claude-opus-5" explicitly (GROW's full tier does) — that
+# preferred_model="claude-opus-5" explicitly (PROSPER's full tier does) — that
 # always wins as the first model tried.
 CLAUDE_AUTO_FALLBACK = [CLAUDE_DEFAULT_MODEL, CLAUDE_FAST_MODEL]
 
@@ -272,7 +272,7 @@ CLAUDE_AUTO_FALLBACK = [CLAUDE_DEFAULT_MODEL, CLAUDE_FAST_MODEL]
 # straight to the user (rate limit / overloaded / gateway).
 _CLAUDE_RETRY_STATUS = (429, 500, 502, 503, 529)
 _CLAUDE_MAX_RETRIES = 2
-_CLAUDE_DEFAULT_TIMEOUT = 120  # seconds; callers override (GROW passes more)
+_CLAUDE_DEFAULT_TIMEOUT = 120  # seconds; callers override (PROSPER passes more)
 
 
 def cached_system(text: str) -> list:
@@ -343,9 +343,9 @@ def call_claude(client, messages, max_tokens=1024, preferred_model=None, system=
     block empty. Every caller here that doesn't explicitly pass `thinking`
     (chat, mini-chat, CIO briefing, screenshot parsing) can silently fall
     back from Sonnet to Opus on a transient error and hit exactly this — a
-    successful, non-empty API response whose visible text is empty. GROW's
+    successful, non-empty API response whose visible text is empty. PROSPER's
     engine already opts in to thinking deliberately per tier (see
-    core/grow_engine.py) by passing `thinking` itself; setdefault here only
+    core/prosper_engine.py) by passing `thinking` itself; setdefault here only
     fills the gap for callers that never think about it at all.
     """
     import time as _t

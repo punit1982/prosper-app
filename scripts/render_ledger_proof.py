@@ -66,17 +66,18 @@ BOOK = {
         {"name": "Healthcare",     "pct":  8.0, "meta": "$184,000 · 14 names", "right": day(120)},
         {"name": "Unclassified",   "pct":  4.3, "meta": "$98,900 · 6 unpriced", "right": UNPRICED},
     ],
-    # GROW v5.1. resolve_entry() recomputes these in Python from the memo's
-    # own inputs and overrides whatever the model wrote.
+    # PROSPER v5.13.1. resolve_card() recomputes these in Python from the card's
+    # own inputs and overrides whatever the model wrote. Illustrative numbers.
     "grow": {
-        "ALDAR": {"durability": 72, "verdict": "ACCUMULATE", "last": 7.81, "ccy": "AED",
-                  "ladder": [("Strong buy below", 5.60), ("Buy below", 7.95),
-                             ("Fair high", 9.10), ("Trim above", 11.40),
-                             ("Sell above", 13.70)]},
-        "ADBE":  {"durability": 78, "verdict": "HOLD", "last": 331.40, "ccy": "$",
-                  "ladder": [("Strong buy below", 174.12), ("Buy below", 230.07),
-                             ("Fair high", 348.00), ("Trim above", 435.00),
-                             ("Sell above", 522.00)]},
+        "ALDAR": {"durability": 71.5, "verdict": "BUY", "last": 7.81, "ccy": "AED", "ratio": 2.4,
+                  "ladder": [("Bear case", 5.60), ("Buy below (2× line)", 7.95),
+                             ("Base case", 9.10), ("Take profit ¼", 11.40),
+                             ("Bull case", 13.70)]},
+        "ADBE":  {"durability": 66.0, "verdict": "ACCUMULATE ON DIPS", "last": 331.40, "ccy": "$",
+                  "ratio": 1.6,
+                  "ladder": [("Bear case", 250.00), ("Buy below (2× line)", 312.00),
+                             ("Base case", 400.00), ("Take profit ¼", 420.00),
+                             ("Bull case", 460.00)]},
     },
     "rated": 3,          # ADBE, NKE, ALDAR — matches what Security can show
 }
@@ -127,10 +128,11 @@ def screen_today():
              "why": f'−${abs(b["cash"]):,} against ${b["collateral"]:,} of liquid collateral. '
                     f'Rule R4 caps short-put collateral at 60% — ${int(b["collateral"]*0.6):,}.',
              "source": "HARVEST rule 4 · recomputed 09:12"},
-            {"level": "warn", "title": f'Adobe is {gap:.1f}% below fair value',
-             "why": f'GROW puts fair at ${adbe["ladder"][2][1]:,.2f} and the buy rung at '
-                    f'${adbe["ladder"][1][1]:,.2f}. Last ${adbe["last"]:,.2f} — fair, not cheap.',
-             "source": "GROW v5.1 · durability 78 · verdict HOLD"},
+            {"level": "warn", "title": f'Adobe is {gap:.1f}% below its base case',
+             "why": f'PROSPER puts the base case at ${adbe["ladder"][2][1]:,.2f} and the buy-below at '
+                    f'${adbe["ladder"][1][1]:,.2f}. Last ${adbe["last"]:,.2f} — reward:risk '
+                    f'{adbe["ratio"]}×, under the 2× a buy needs.',
+             "source": "PROSPER v5.13.1 · score 66.0 · accumulate on dips"},
             {"level": "info", "title": "Three earnings inside 7 days",
              "why": "Nike Thursday, Adobe Friday, Salesforce next Tuesday. "
                     "You hold $278K across the three.",
@@ -160,8 +162,8 @@ def screen_today_quiet():
         ui.provenance({"live": 62, "delayed": 117, "none": 6}, age="refreshed 14.8s ago"),
         ui.section("Needs a decision", "0"),
         ui.empty("Nothing needs you today",
-                 "Every guardrail is inside its limit, no holding is outside its GROW "
-                 "band, and the next earnings date is 9 days out. The last time "
+                 "Every guardrail is inside its limit, no holding is outside its PROSPER "
+                 "card, and the next earnings date is 9 days out. The last time "
                  "something needed a decision was 4 September.",
                  ui.button("Review guardrails anyway")),
         ui.section("Today's moves", "all 182"),
@@ -238,16 +240,16 @@ def screen_security():
         ui.kv("Quantity · average cost", "11,280 @ AED 6.94"),
         ui.kv("Market value", "$88,140 · 3.8% of book"),
         ui.kv("Unrealized", ui.money(9_812, 12.5, "AED", compact=False)),
-        ui.section("GROW entry ladder", f'durability {g["durability"]}'),
+        ui.section("PROSPER card", f'score {g["durability"]}'),
         rungs,
-        ui.read(f'Verdict <b>{g["verdict"]}</b>. The ladder is recomputed in Python from '
-                f'the memo’s own inputs and overrides whatever the model wrote. '
-                f'Stability band ±25% holds.'),
+        ui.read(f'Call <b>{g["verdict"]}</b> · reward:risk {g["ratio"]}× = (bull − spot) ÷ '
+                f'(spot − bear). Every number is recomputed in Python from the card’s own '
+                f'inputs and overrides whatever the model wrote.'),
         ui.section("Street view", "confirmation only"),
         ui.kv("Ratings", "4 buy · 2 hold · 0 sell"),
         ui.kv("Mean target", "AED 8.90"),
-        ui.read('GROW §6.2 puts aggregator data at Tier 5 — it may confirm a thesis, '
-                'never set a price. This block never appears above the ladder.'),
+        ui.read('PROSPER treats aggregator data as confirmation only — it may confirm a '
+                'thesis, never set a price. This block never appears above the card.'),
     )
 
 
@@ -285,7 +287,7 @@ def screen_more():
                     '<span class="watch">72 / 100</span>'),
         ui.list_row("Income", "Dividends, coupons, premium", "$41,280 / yr"),
         ui.list_row("Options", "HARVEST v1.0 · paper mode", "3 tickets"),
-        ui.list_row("Evaluate", "GROW v5.1 durability and entry",
+        ui.list_row("Evaluate", "PROSPER v5.13.1 score, call and buy-below",
                     f'<span class="watch">{BOOK["rated"]} of 182 rated</span>'),
         ui.section("Data"),
         ui.list_row("Add holdings", "Statement, screenshot or manual", "last 8 Sep"),

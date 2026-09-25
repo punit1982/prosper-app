@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from core.database import (
-    get_all_holdings, get_all_prosper_analyses, get_prosper_analysis, get_all_cash_positions,
+    get_all_holdings, get_current_analyses, get_prosper_analysis, get_all_cash_positions,
     save_fortress_state, get_fortress_state, get_all_fortress_state,
 )
 from core.settings import SETTINGS, enriched_cache_key
@@ -103,7 +103,9 @@ if _t_col != "ticker":
             info_map[orig] = info_map[resolved]
 
 # ── PROSPER analyses ──
-prosper_df = get_all_prosper_analyses()
+# Current framework only: a superseded GROW Durability score is not a PROSPER score (P9), and
+# FORTRESS sizes on `score`, so mixing the two would size positions on the wrong scale.
+prosper_df = get_current_analyses()
 prosper_map = prosper_df.set_index("ticker").to_dict("index") if not prosper_df.empty else {}
 
 # ── Portfolio metrics ──
@@ -488,7 +490,18 @@ if tab_health:
             except (ValueError, TypeError):
                 pass
 
-            if is_recent:
+            if is_recent and pa.get("do_this"):
+                # The card already says what to do, at what price, portfolio-blind (P1). A
+                # drawdown carries no information about the business (P9) — so the card's own
+                # line is shown, not a drawdown heuristic that could contradict it.
+                st.warning(
+                    f"**{ticker}** down {drawdown:.1f}% | "
+                    f"PROSPER: **{pa.get('entry_verdict') or pa.get('rating')}** "
+                    f"({float(pa.get('q_score') or pa.get('score') or 0):.1f}/100) | "
+                    f"→ {pa.get('do_this')}"
+                    + (f" · walk away if {pa.get('walk_away')}" if pa.get("walk_away") else "")
+                )
+            elif is_recent:
                 rating = pa.get("rating", "N/A")
                 p_score = pa.get("score", 0)
                 conviction = pa.get("conviction", "N/A")

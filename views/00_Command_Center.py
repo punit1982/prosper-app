@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from core.database import (
-    get_all_holdings, get_nav_history, get_all_prosper_analyses,
+    get_all_holdings, get_nav_history, get_current_analyses,
     get_total_realized_pnl, get_all_cash_positions, get_price_cache_age,
 )
 try:
@@ -342,13 +342,14 @@ def generate_briefing():
         # Recent AI analyses
         analysis_context = ""
         try:
-            analyses = get_all_prosper_analyses()
+            analyses = get_current_analyses()
             if not analyses.empty:
                 recent = analyses.sort_values("analysis_date", ascending=False).head(10)
                 analysis_lines = []
                 for _, a in recent.iterrows():
                     analysis_lines.append(
-                        f"{a['ticker']}: {a.get('rating','?')} score={a.get('score','?')}"
+                        f"{a['ticker']}: {a.get('entry_verdict') or a.get('rating','?')} "
+                        f"score={a.get('q_score', a.get('score','?'))}"
                     )
                 analysis_context = ", ".join(analysis_lines)
         except Exception:
@@ -363,7 +364,7 @@ REGIME: {regime_name} | CASH: {base_currency} {total_cash:,.0f}
 TOP HOLDINGS:
 {chr(10).join(portfolio_summary)}
 
-{f'AI RATINGS: {analysis_context}' if analysis_context else ''}
+{f'PROSPER CALLS (portfolio-blind ratings): {analysis_context}' if analysis_context else ''}
 
 FORMAT (use markdown):
 **Portfolio Pulse:** [1 sentence — overall health today vs trend]
@@ -726,7 +727,7 @@ for tk, days in _earnings_cache:
 
 # AI analysis coverage
 try:
-    analyses = get_all_prosper_analyses()
+    analyses = get_current_analyses()
     if not analyses.empty:
         cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         recent = analyses[analyses["analysis_date"] >= cutoff]
